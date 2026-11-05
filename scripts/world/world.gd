@@ -3,6 +3,7 @@ extends Node3D
 
 var player: Player
 var lathe: Lathe
+var office_pc: OfficePC
 var hud: HUD
 var pause_menu: PauseMenu
 var env: Environment
@@ -28,6 +29,10 @@ func _ready() -> void:
 	lathe.position = Vector3(0, 0, -2.0)
 	add_child(lathe)
 
+	office_pc = OfficePC.new()
+	office_pc.position = Vector3(10.5, 1.05, 7.54)
+	add_child(office_pc)
+
 	player = Player.new()
 	player.position = Vector3(0.5, 0.05, 2.5)
 	add_child(player)
@@ -45,6 +50,7 @@ func _ready() -> void:
 	lathe.operating_changed.connect(hud.set_operating)
 	lathe.submit_requested.connect(_on_submit)
 	lathe.new_part_requested.connect(_on_new_part)
+	office_pc.using_changed.connect(func(on: bool): hud.visible = not on)
 	Settings.changed.connect(_apply_quality)
 
 	_apply_pending(GameState.pending)
