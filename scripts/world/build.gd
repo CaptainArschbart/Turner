@@ -1,0 +1,131 @@
+class_name Build
+extends RefCounted
+## Hilfsfunktionen, um Geometrie prozedural zu erzeugen.
+
+enum { AXIS_X, AXIS_Y, AXIS_Z }
+
+
+static func mat(c: Color, rough := 0.8, metal := 0.0) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.roughness = rough
+	m.metallic = metal
+	return m
+
+
+static func emissive(c: Color, energy := 2.0) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.emission_enabled = true
+	m.emission = c
+	m.emission_energy_multiplier = energy
+	return m
+
+
+static func glass(c := Color(0.75, 0.85, 0.9, 0.18)) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.roughness = 0.05
+	m.metallic = 0.3
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return m
+
+
+static func box(parent: Node3D, size: Vector3, pos: Vector3, m: Material, collide := false, rot := Vector3.ZERO) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	mi.material_override = m
+	if collide:
+		var body := StaticBody3D.new()
+		body.position = pos
+		body.rotation = rot
+		parent.add_child(body)
+		body.add_child(mi)
+		var cs := CollisionShape3D.new()
+		var sh := BoxShape3D.new()
+		sh.size = size
+		cs.shape = sh
+		body.add_child(cs)
+	else:
+		mi.position = pos
+		mi.rotation = rot
+		parent.add_child(mi)
+	return mi
+
+
+static func cyl(parent: Node3D, r: float, h: float, pos: Vector3, m: Material, axis := AXIS_Y,
+		collide := false, segments := 24, r_top := -1.0) -> MeshInstance3D:
+	var cm := CylinderMesh.new()
+	cm.bottom_radius = r
+	cm.top_radius = r if r_top < 0.0 else r_top
+	cm.height = h
+	cm.radial_segments = segments
+	cm.rings = 1
+	var rot := Vector3.ZERO
+	if axis == AXIS_X:
+		rot = Vector3(0, 0, PI / 2)
+	elif axis == AXIS_Z:
+		rot = Vector3(PI / 2, 0, 0)
+	var mi := MeshInstance3D.new()
+	mi.mesh = cm
+	mi.material_override = m
+	if collide:
+		var body := StaticBody3D.new()
+		body.position = pos
+		body.rotation = rot
+		parent.add_child(body)
+		body.add_child(mi)
+		var cs := CollisionShape3D.new()
+		var sh := CylinderShape3D.new()
+		sh.radius = maxf(r, cm.top_radius)
+		sh.height = h
+		cs.shape = sh
+		body.add_child(cs)
+	else:
+		mi.position = pos
+		mi.rotation = rot
+		parent.add_child(mi)
+	return mi
+
+
+static func sphere(parent: Node3D, r: float, pos: Vector3, m: Material) -> MeshInstance3D:
+	var sm := SphereMesh.new()
+	sm.radius = r
+	sm.height = r * 2.0
+	var mi := MeshInstance3D.new()
+	mi.mesh = sm
+	mi.material_override = m
+	mi.position = pos
+	parent.add_child(mi)
+	return mi
+
+
+static func label(parent: Node3D, text: String, pos: Vector3, px := 0.004, color := Color.WHITE,
+		font_size := 64, rot_y := 0.0) -> Label3D:
+	var l := Label3D.new()
+	l.text = text
+	l.position = pos
+	l.rotation.y = rot_y
+	l.pixel_size = px
+	l.font_size = font_size
+	l.modulate = color
+	l.outline_size = 0
+	l.shaded = true
+	l.double_sided = false
+	parent.add_child(l)
+	return l
+
+
+static func collider(parent: Node3D, size: Vector3, pos: Vector3) -> StaticBody3D:
+	var body := StaticBody3D.new()
+	body.position = pos
+	parent.add_child(body)
+	var cs := CollisionShape3D.new()
+	var sh := BoxShape3D.new()
+	sh.size = size
+	cs.shape = sh
+	body.add_child(cs)
+	return body
