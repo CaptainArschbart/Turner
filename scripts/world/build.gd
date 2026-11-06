@@ -129,3 +129,18 @@ static func collider(parent: Node3D, size: Vector3, pos: Vector3) -> StaticBody3
 	cs.shape = sh
 	body.add_child(cs)
 	return body
+
+
+## Hüllquader aller Meshes unter root in Weltkoordinaten (root muss im Baum hängen).
+static func bounds(root: Node) -> AABB:
+	var box := AABB()
+	var first := true
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		stack.append_array(n.get_children())
+		if n is MeshInstance3D and n.mesh:
+			var b: AABB = n.global_transform * n.get_aabb()
+			box = b if first else box.merge(b)
+			first = false
+	return box

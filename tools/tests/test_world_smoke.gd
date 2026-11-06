@@ -33,7 +33,7 @@ func _initialize() -> void:
 	# E auf das Bedienpult: direkt in die Pultansicht, Dreh-Anzeigen aus
 	var pt: Node = null
 	for ch in w.lathe.get_children():
-		if ch.has_method("interact") and ch.has_method("get_prompt"):
+		if ch.has_method("interact") and ch.has_method("get_prompt") and not ch.has_method("click"):
 			pt = ch
 	ok(pt != null, "Bedienpult hat ein eigenes Interaktionsziel")
 	pt.interact(w.player)

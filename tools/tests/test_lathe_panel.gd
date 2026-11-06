@@ -275,11 +275,13 @@ func _initialize() -> void:
 	ok(not l2.css, "G96-Schalter aus")
 	panel._css_btn.button_pressed = true
 	ok(l2.css, "G96-Schalter an")
-	panel._on_mount(1, LatheTools.index_of("T5") + 1)
-	ok(l2.holder[1] == "T5", "Auswahlliste spannt T5 in Platz 2")
-	panel._slot_btns[1].pressed.emit()
+	ok(panel.find_children("*", "OptionButton", true, false).is_empty(), "Keine Werkzeug-Auswahl im Pult")
+	for b in panel.find_children("*", "Button", true, false):
+		ok(b.text != "Einschwenken" and b.text != "AKTIV", "Kein Einschwenk-Knopf im Pult")
+	ok(l2.mount_tool(1, "T5"), "T5 in Platz 2")
+	ok(l2.index_slot(1), "Platz 2 einschwenken")
 	l2._step_index_anim(5.0)
-	ok(l2.active_slot == 1, "Knopf schwenkt Platz 2 ein")
+	ok(l2.active_slot == 1, "Platz 2 eingeschwenkt")
 	panel._spindle_btn.pressed.emit()
 	ok(l2.spindle_on, "Knopf startet Spindel")
 	var btn_dir := func(d: Vector2i) -> Button:
@@ -328,7 +330,8 @@ func _initialize() -> void:
 	ok(l2.auto_feed and l2.tool_z < z0 - 0.01, "Auto-Vorschub läuft nach dem Verlassen weiter (Z %.2f -> %.2f)" % [z0, l2.tool_z])
 	l2.set_auto_dir(-1, 0)
 	await process_frame
-	ok(panel._slot_btns[1].text == "AKTIV", "Pult zeigt aktiven Platz")
+	panel._sync_holder()
+	ok(panel._slot_names[1].text.begins_with("»") and panel._slot_names[1].text.contains("T5"), "Pult zeigt aktiven Platz: %s" % panel._slot_names[1].text)
 	ok(panel.size.x <= 450.0, "HUD-Menü schmaler (%.0f px)" % panel.size.x)
 
 	# --- Bildschirm am Bedienpult der Maschine

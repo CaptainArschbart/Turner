@@ -6,6 +6,7 @@ var lathe: Lathe
 var _root: Control
 var _cross: Control
 var _prompt: Label
+var _held: Label
 var _msg: Label
 var _msg_t := 0.0
 var _dro_panel: PanelContainer
@@ -55,6 +56,17 @@ func _ready() -> void:
 	_prompt.offset_bottom = -130
 	_prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_root.add_child(_prompt)
+
+	_held = _label(18)
+	_held.anchor_left = 0
+	_held.anchor_right = 1
+	_held.anchor_top = 1
+	_held.anchor_bottom = 1
+	_held.offset_top = -130
+	_held.offset_bottom = -100
+	_held.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_held.add_theme_color_override("font_color", Color(0.95, 0.85, 0.55))
+	_root.add_child(_held)
 
 	_msg = _label(24)
 	_msg.anchor_left = 0.25
@@ -177,6 +189,10 @@ func set_prompt(t: String) -> void:
 	_prompt.text = t
 
 
+func set_held(t: String) -> void:
+	_held.text = t
+
+
 func show_message(t: String, c := Color.WHITE) -> void:
 	_msg.text = t
 	_msg.add_theme_color_override("font_color", c)
@@ -214,6 +230,13 @@ func set_operating(on: bool) -> void:
 	_refresh_help()
 
 
+## An einer anderen Maschine (eigene Oberfläche): nur Hinweise und Ergebnisse bleiben sichtbar.
+func set_other_machine(on: bool) -> void:
+	_cross.visible = not on
+	_job_panel.visible = not on
+	_help_panel.visible = not on
+
+
 func _refresh_help() -> void:
 	var b := func(a: String) -> String: return Settings.binding_text(a)
 	if _operating and _pult_help:
@@ -229,6 +252,7 @@ func _refresh_help() -> void:
 			"PULT        Maus: Fenster rechts unten oder Bildschirm am Maschinenpult (%s) - dort Zyklen / NC-Programme" % b.call("cam_panel"),
 			"TÜR         Schwarzen Griff mit linker Maus ziehen oder %s   (Zyklusstart nur bei geschlossener Tür)" % b.call("door_toggle"),
 			"KAMERA      Rechte Maus  Drehen (+ Rad = Zoom)   |   Mittlere Maus  Verschieben   |   %s/%s/%s  Ansichten" % [b.call("cam_top"), b.call("cam_front"), b.call("cam_reset")],
+			"WERKZEUGE   Werkbank: Linksklick nimmt, am Halterkopf Linksklick setzt ein (vorher %s verlassen)" % b.call("interact"),
 			"SONST       1-4  Halterplatz einschwenken   |   %s  Not-Halt   |   %s  Rohteil   |   %s  Abgeben   |   %s  Verlassen" % [b.call("emergency_stop"), b.call("new_workpiece"), b.call("submit_part"), b.call("interact")],
 		])
 	else:

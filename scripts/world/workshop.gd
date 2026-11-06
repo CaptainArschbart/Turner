@@ -59,8 +59,10 @@ static func build(root: Node3D) -> Dictionary:
 	for z in [1.6, 5.2]:
 		Build.box(root, Vector3(W - 2.0, 0.004, 0.08), Vector3(0, mark_y, z), yellow)
 	# Maschinenbereich um die Drehmaschine
-	_rect_marking(root, Vector2(-1.7, -3.4), Vector2(3.0, -0.2), yellow)
+	_rect_marking(root, Vector2(-1.7, -3.4), Vector2(2.7, 1.0), yellow)
 	_rect_marking(root, Vector2(-8.3, -6.9), Vector2(-4.7, -3.3), yellow)
+	# Maschinenbereich um die Fräsmaschine
+	_rect_marking(root, Vector2(5.2, -4.5), Vector2(8.5, -0.3), yellow)
 
 	# ---------------- Wände
 	Build.box(root, Vector3(W, H, 0.3), Vector3(0, H / 2, -D / 2 - 0.15), wall_mat, true)

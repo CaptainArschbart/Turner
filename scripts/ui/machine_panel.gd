@@ -1,6 +1,7 @@
 extends PanelContainer
 ## Interaktives Bedienpult der Drehmaschine (Maus): Spindel, Drehzahl / konstante
-## Schnittgeschwindigkeit, Vorschub, Auto-Vorschub und Bestückung des Vierfach-Werkzeughalters.
+## Schnittgeschwindigkeit, Vorschub, Auto-Vorschub. Die Bestückung des Vierfach-Werkzeughalters wird
+## nur angezeigt: Werkzeuge kommen von Hand von der Werkbank.
 ## Alle Bedienelemente nehmen keinen Tastaturfokus, damit WASD, Leertaste usw. weiter die
 ## Maschine steuern. Wird zweimal benutzt: im HUD (rechts unten) und als Bildschirm am
 ## Bedienpult der Maschine (SubViewport, siehe Lathe._build_screen).
@@ -25,8 +26,7 @@ var _feed_btns: Array[Button] = []    # Kreuzschalter Auto-Vorschub (meta "dir" 
 var _hw_step_btns: Array[Button] = []
 var _hw_axis_btns: Array[Button] = []
 var _actual: Label
-var _slot_opts: Array[OptionButton] = []
-var _slot_btns: Array[Button] = []
+var _slot_names: Array[Label] = []
 var _slot_state: Array[Label] = []
 var _tool_desc: Label
 var _offset_tbl: Label            # Werkzeugkorrekturen der bestückten Plätze
@@ -46,7 +46,7 @@ func _ready() -> void:
 	tabs.add_child(_build_spindle_tab())
 	tabs.add_child(_build_holder_tab())
 	tabs.set_tab_title(0, "Spindel / Vorschub")
-	tabs.set_tab_title(1, "Werkzeuge")
+	tabs.set_tab_title(1, "Werkzeughalter")
 
 
 # ------------------------------------------------------------ Aufbau
@@ -162,34 +162,18 @@ func _build_spindle_tab() -> Control:
 func _build_holder_tab() -> Control:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 4)
-	var hint := _small_label("Umspannen nur bei stehender Spindel. Gegenüber (180°) meist frei, "
-		+ "der Platz daneben ragt oft über das Werkstück.")
+	var hint := _small_label("Werkzeuge liegen auf der Werkbank und werden von Hand eingespannt (Spindel aus). "
+		+ "Einschwenken mit den Tasten 1-4. Gegenüber (180°) meist frei, der Platz daneben ragt oft über das Werkstück.")
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size.x = panel_w - 24.0
 	hint.add_theme_color_override("font_color", UITheme.MUTED)
 	v.add_child(hint)
 	for s in Lathe.SLOTS:
-		var slot := s
 		var row := HBoxContainer.new()
-		var l := _small_label("Platz %d" % (s + 1))
-		l.custom_minimum_size.x = _u(52)
+		var l := _small_label("")
+		l.custom_minimum_size.x = _u(210)
 		row.add_child(l)
-		var opt := OptionButton.new()
-		opt.focus_mode = Control.FOCUS_NONE
-		opt.custom_minimum_size = Vector2(_u(150), row_h)
-		opt.add_theme_font_size_override("font_size", font_size)
-		opt.get_popup().add_theme_font_size_override("font_size", font_size)
-		opt.add_item("- leer -")
-		for i in LatheTools.count():
-			var t := LatheTools.get_tool(i)
-			opt.add_item("%s %s" % [t["id"], t["short"]])
-		opt.item_selected.connect(func(idx): _on_mount(slot, idx))
-		row.add_child(opt)
-		_slot_opts.append(opt)
-		var b := _button("Einschwenken", func(): lathe.index_slot(slot))
-		b.custom_minimum_size.x = _u(100)
-		row.add_child(b)
-		_slot_btns.append(b)
+		_slot_names.append(l)
 		var st := _small_label("")
 		st.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		st.clip_text = true
@@ -205,13 +189,6 @@ func _build_holder_tab() -> Control:
 	_offset_tbl.add_theme_color_override("font_color", Color(0.55, 0.9, 1.0))
 	v.add_child(_offset_tbl)
 	return v
-
-
-func _on_mount(slot: int, idx: int) -> void:
-	var id := "" if idx == 0 else str(LatheTools.get_tool(idx - 1)["id"])
-	lathe.mount_tool(slot, id)
-	_status_t = 0.0
-	_sync_holder()
 
 
 func _slider_row(title: String, lo: float, hi: float, step: float, exp_edit: bool,
@@ -306,11 +283,9 @@ func _process(delta: float) -> void:
 func _sync_holder() -> void:
 	for s in Lathe.SLOTS:
 		var id := str(lathe.holder[s])
-		_slot_opts[s].select(LatheTools.index_of(id) + 1 if id != "" else 0)
 		var active := s == lathe.active_slot
-		_slot_btns[s].text = "AKTIV" if active else "Einschwenken"
-		_slot_btns[s].disabled = id == ""
-		_mark(_slot_btns[s], active)
+		_slot_names[s].text = "%s Platz %d: %s" % ["»" if active else " ", s + 1,
+			lathe.tool_name(id) if id != "" else "- leer -"]
 		var st := lathe.slot_status(s)
 		_slot_state[s].text = str(st["text"])
 		_slot_state[s].tooltip_text = str(st["text"])
