@@ -4,6 +4,11 @@ extends RefCounted
 
 enum { AXIS_X, AXIS_Y, AXIS_Z }
 
+## Jeder Quader bekommt ein winziges eigenes Übermaß. Liegen zwei Flächen genau aufeinander, flimmern sie
+## sonst, weil die Grafikkarte nicht entscheiden kann, welche vorne ist.
+const OVERSIZE := [0.0002, 0.0005, 0.0008, 0.0011, 0.0014]
+static var _next_oversize := 0
+
 
 static func mat(c: Color, rough := 0.8, metal := 0.0) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
@@ -35,7 +40,8 @@ static func glass(c := Color(0.75, 0.85, 0.9, 0.18)) -> StandardMaterial3D:
 static func box(parent: Node3D, size: Vector3, pos: Vector3, m: Material, collide := false, rot := Vector3.ZERO) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
-	bm.size = size
+	_next_oversize = (_next_oversize + 1) % OVERSIZE.size()
+	bm.size = size + Vector3.ONE * float(OVERSIZE[_next_oversize])
 	mi.mesh = bm
 	mi.material_override = m
 	if collide:
@@ -88,6 +94,25 @@ static func cyl(parent: Node3D, r: float, h: float, pos: Vector3, m: Material, a
 		mi.position = pos
 		mi.rotation = rot
 		parent.add_child(mi)
+	return mi
+
+
+## Offene Wanne mit schrägen Wänden: unten bottom, oben top (Länge x, Breite z), Höhe h, Boden bei pos.
+static func tub(parent: Node3D, bottom: Vector2, top: Vector2, h: float, pos: Vector3, m: Material) -> MeshInstance3D:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var c := [Vector3(-bottom.x, 0, -bottom.y) * 0.5, Vector3(bottom.x, 0, -bottom.y) * 0.5, Vector3(bottom.x, 0, bottom.y) * 0.5, Vector3(-bottom.x, 0, bottom.y) * 0.5]
+	var d := [Vector3(-top.x * 0.5, h, -top.y * 0.5), Vector3(top.x * 0.5, h, -top.y * 0.5), Vector3(top.x * 0.5, h, top.y * 0.5), Vector3(-top.x * 0.5, h, top.y * 0.5)]
+	for i in 4:
+		var k := (i + 1) % 4
+		for v in [c[i], d[i], c[k], c[k], d[i], d[k]]:
+			st.add_vertex(v)
+	st.generate_normals()
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = m
+	mi.position = pos
+	parent.add_child(mi)
 	return mi
 
 

@@ -45,7 +45,7 @@ func _draw() -> void:
 		x += 16.0
 	# Spannbacken
 	var jr := lathe.stock_d * 0.5
-	draw_rect(Rect2(P.call(-10.0, jr + 10.0), Vector2(10.0 * sc, 10.0 * sc)), JAW)
+	draw_rect(Rect2(P.call(lathe.clamp_depth - 10.0, jr + 10.0), Vector2(10.0 * sc, 10.0 * sc)), JAW)
 
 	# Rohteil-Umriss
 	draw_rect(Rect2(P.call(0.0, lathe.stock_d * 0.5), Vector2(lathe.stock_len * sc, lathe.stock_d * 0.5 * sc)), RAW, false, 1.0)

@@ -5,12 +5,16 @@ const WORLD := "res://scenes/world.tscn"
 const MENU := "res://scenes/main_menu.tscn"
 
 var current_slot := 0
+## Ein neues Spiel startet mit Drehmaschine, Bandsäge, Werkbank, Grundwerkzeugen und einem Regal mit einer
+## Stange. Solange das Geld für Material nicht reicht, stellt der Kunde das Rohteil.
+const START_MONEY := 250
+
 var pending: Dictionary = {}
 
 
 func new_game(slot: int, save_name: String) -> void:
 	current_slot = slot
-	pending = {"name": save_name, "money": 0, "job": 0, "parts": 0, "play_time": 0.0}
+	pending = {"name": save_name, "money": START_MONEY, "job": 0, "parts": 0, "play_time": 0.0, "starter": true}
 	SaveManager.write_slot(slot, pending.duplicate())
 	_go(WORLD)
 

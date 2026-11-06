@@ -1,6 +1,7 @@
 class_name Lathe
 extends Node3D
-## Zyklengesteuerte Drehmaschine nach Vorbild einer Weiler E50 HD.
+## Zyklengesteuerte Drehmaschine nach Vorbild einer Weiler E50 HD. Mit conventional = true entfallen Kabine,
+## Tür und Pult, Drehzahl und Vorschub kommen dann vom Bedienfeld mit Drehknöpfen wie an der Fräsmaschine.
 ## Das Werkstück ist ein Radiusprofil (mm, Auflösung SEG). Das aktive Werkzeug ist ein
 ## Plattenpolygon (siehe LatheTools); alles Material oberhalb seiner unteren Hüllkurve wird
 ## abgetragen. Dadurch schneiden auch schräge Schneiden (Fasen, Kopierdrehen, Radien).
@@ -11,9 +12,10 @@ signal message(text: String, color: Color)
 signal operating_changed(on: bool)
 signal submit_requested
 signal new_part_requested
+signal tool_lost(price: int, tool_name: String)
 signal tool_changed(index: int)
+signal levers_changed(on: bool)
 
-const MACHINE_ID := "lathe"
 const TOOL_UPRIGHT := false   # Werkzeugmodelle liegen schon waagerecht (Schaft in Z)
 const MOUNT_REACH := 0.13     # so nah muss der Blick am Halterkopf vorbeigehen (m)
 const AXIS_H := 1.17          # Spitzenhöhe über Boden (m)
@@ -27,6 +29,7 @@ const RPM_STEPS := [40, 63, 100, 160, 250, 315, 400, 500, 630, 800, 1000, 1250, 
 const FEED_STEPS := [0.03, 0.05, 0.08, 0.1, 0.12, 0.15, 0.2, 0.25, 0.3, 0.4]
 const RPM_MIN := 40.0
 const RPM_MAX := 3000.0
+const INSERT_PRICE := 15        # Ersatz in EUR für eine ausgeglühte Wendeplatte
 const FEED_MIN := 0.01
 const FEED_MAX := 0.5
 const VC_MIN := 20.0
@@ -43,10 +46,26 @@ const RING := 48
 const PIECE_LAYER := 1 << 3   # Physik-Ebene für abgestochene Teile
 
 var demo := false             # nur Deko (Hauptmenü)
+var MACHINE_ID := "lathe"
+var tool_family := "lathe"    # Skilltree der Werkzeuge
+var conventional := false     # vor dem Einhängen setzen
+var use_glb := true           # Futter und Halter aus dem Blender-Modell
+var grinder_type := ""        # Schleifmaschinen: "round", sie spannen nur vorbearbeitete Teile
+var semi_key := ""            # Auftrag des eingespannten, vorbearbeiteten Teils
+var ceramic_part := false     # Kundenteil mit Keramikschicht
+var panel_open := false       # Station am Bedienfeld (konventionell)
+var _lever_view := false
+var _dial_panel: DialPanel
+const PANEL_POS := Vector3(-0.62, 1.31, 0.363)   # Bedienfeld am Spindelkasten
+const PANEL_STAND := Vector3(-0.62, 0.0, 1.0)
+const RPM_DIAL := [[40, 63, 100, 160, 250, 400, 630, 1000], [80, 125, 200, 315, 500, 800, 1250, 2000]]
+const FEED_DIAL := [[0.03, 0.05, 0.08, 0.1, 0.12, 0.15, 0.2, 0.25], [0.06, 0.1, 0.14, 0.18, 0.22, 0.28, 0.35, 0.5]]
 
 var stock_d := 60.0
 var stock_len := 160.0
 var profile := PackedFloat32Array()
+var clamp_depth := 0.0            # so viele mm des Teils stecken im Futter, Z = 0 ist das linke Ende des Teils
+var flipped := false              # andersherum eingespannt, Aufträge prüfen immer in der Ausgangslage
 var machined := PackedByteArray()
 var rz := PackedFloat32Array()   # Rautiefe je Segment in µm
 var tool_z := 200.0
@@ -67,6 +86,15 @@ var auto_sign_z := -1         # Richtung Längsvorschub: -1 = zum Futter (Z-), +
 var auto_sign_x := -1         # Richtung Planvorschub: -1 = zur Mitte (X-), +1 = X+
 var hw_axis := 0              # Handrad-Achse: 0 = X (Plan), 1 = Z (Längs)
 var coolant := false
+var tray := ChipTray.new()         # Spänewanne, muss von Hand geleert werden
+var _chip_heap: MeshInstance3D
+## Bedienpult mit Zyklen und NC-Programmen, kommt mit dem Skill CNC-Drehmaschine
+var cnc_unlocked := true
+## Wirkung von Schneidstoff und Veredelung aus dem Skilltree, siehe Skills.tool_mods
+var tool_mods := {"heat": 1.0, "wear": 1.0, "tough": 1.0, "finish": 1.0}
+var tool_stock: ToolStore = null   # gekaufte Werkzeuge, null = alle da und ohne Verschleiß (Tests, Vorschau)
+var skills: Skills = null
+var _wear_rate := 0.0
 var estop := false
 var operating := false
 var player: Node = null
@@ -177,9 +205,14 @@ var _ph2 := 0.0
 var _ph3 := 0.0
 var _lp := 0.0
 
-var _raw_col := Color(0.42, 0.42, 0.44)
-var _cut_col := Color(0.88, 0.89, 0.92)
-var _rough_col := Color(0.58, 0.58, 0.6)
+var material := Materials.DEFAULT
+var has_part := true
+var tool_heat := 0.0              # Hitze an der Schneide, 1 = ausgeglüht
+var _heat_over := 0.0
+var _harden_t := 0.0
+var _raw_col := Materials.raw_color(Materials.DEFAULT)
+var _cut_col := Materials.cut_color(Materials.DEFAULT)
+var _rough_col := _cut_col.lerp(_raw_col, 0.5)
 var _led_on: StandardMaterial3D
 var _led_off: StandardMaterial3D
 var _wp_mat: StandardMaterial3D
@@ -196,8 +229,11 @@ func _ready() -> void:
 		programs = NcCam.examples()
 		prog_sel = str(programs[0]["name"])
 	_build()
+	_build_extra()
 	new_workpiece(stock_d, stock_len)
 	_apply_holder()
+	if _dial_panel:
+		_dial_panel.sync()
 	if demo:
 		spindle_on = true
 		rpm_set = 630.0
@@ -211,15 +247,187 @@ func tool() -> Dictionary:
 	return LatheTools.get_tool(tool_idx)
 
 
+func _rpm_dial() -> Array:
+	return RPM_DIAL
+
+
+func _feed_dial() -> Array:
+	return FEED_DIAL
+
+
+func machine_title() -> String:
+	return "Konventionelle Drehmaschine" if conventional else "Weiler E50 HD"
+
+
+## Bedienfeld am Spindelkasten (nur konventionell).
+func _build_extra() -> void:
+	if not conventional:
+		return
+	var dark := Build.mat(Color(0.12, 0.13, 0.15), 0.55, 0.2)
+	var light := Build.mat(Color(0.9, 0.9, 0.88), 0.5)
+	var black := Build.mat(Color(0.05, 0.05, 0.06), 0.6)
+	var steel := Build.mat(Color(0.62, 0.64, 0.67), 0.3, 0.9)
+	var p := MillModel.add_panel(self, PANEL_POS, 0.0, _rpm_dial(), _feed_dial(), "Vorschub mm/U", dark, light, black, steel)
+	_dial_panel = DialPanel.new(self, p["panel"], p["dials"], _rpm_dial(), _feed_dial(), "mm/U")
+	var station := LeverTarget.new()
+	station.lathe = self
+	add_child(station)
+	var hit := Build.collider(self, Vector3(MillModel.PANEL_W, MillModel.PANEL_H, 0.04), PANEL_POS + Vector3(0, 0, 0.02))
+	hit.set_meta("interact", station)
+
+
+## Ziel für [E] auf dem Bedienfeld.
+class LeverTarget extends Node:
+	var lathe: Lathe
+
+	func get_prompt() -> String:
+		return "[%s] Bedienfeld benutzen" % Settings.binding_text("interact")
+
+	func interact(p: Node) -> void:
+		lathe.open_levers(p)
+
+
+## Station am Bedienfeld: eigene Ansicht, nur Drehknöpfe und Stufentasten sind bedienbar.
+func open_levers(p: Node) -> void:
+	if operating or panel_open or _dial_panel == null:
+		return
+	player = p
+	panel_open = true
+	p.start_operating(self, to_global(PANEL_STAND), global_rotation.y)
+	_lever_view = true
+	_yaw_t = 0.0
+	_pitch_t = -0.08
+	_dist_t = 0.58
+	cam_yaw = _yaw_t
+	cam_pitch = _pitch_t
+	cam_dist = _dist_t
+	cam_target = PANEL_POS
+	op_cam.fov = float(Settings.graphics["fov"]) * 0.75
+	_update_camera(1.0)
+	op_cam.make_current()
+	levers_changed.emit(true)
+
+
+func close_levers() -> void:
+	if not panel_open:
+		return
+	panel_open = false
+	_lever_view = false
+	_dial_panel.drag = -1
+	_dial_panel.set_hover(false)
+	set_view("reset")
+	if player:
+		player.stop_operating()
+	levers_changed.emit(false)
+
+
+func dial_index(k: int) -> int:
+	return _dial_panel.index(k)
+
+
+func dial_stage(k: int) -> int:
+	return _dial_panel.stage(k)
+
+
+func dial_set(k: int, i: int) -> void:
+	_dial_panel.set_position(k, i)
+
+
+func stage_set(k: int, st: int) -> void:
+	_dial_panel.set_stage(k, st)
+
+
+func panel_hit(origin: Vector3, dir: Vector3) -> Dictionary:
+	return _dial_panel.hit(origin, dir)
+
+
+## Teil zum Weitertragen: Rohmaß, Werkstoff und Kontur.
+func part_state() -> Dictionary:
+	var mach: Array = []
+	for m in machined:
+		mach.append(m)
+	return {"stock_d": stock_d, "stock_len": stock_len, "material": material, "ceramic": ceramic_part, "profile": Array(profile), "machined": mach, "rz": Array(rz)}
+
+
+## Teil aus part_state einspannen.
+func load_part(d: Dictionary) -> void:
+	set_material(str(d["material"]))
+	new_workpiece(float(d["stock_d"]), float(d["stock_len"]))
+	ceramic_part = bool(d.get("ceramic", false))
+	# Kundenteile kommen ohne Kontur: noch ganz roh
+	if d.has("profile"):
+		var p: Array = d["profile"]
+		var m: Array = d["machined"]
+		var r: Array = d["rz"]
+		for i in mini(profile.size(), p.size()):
+			profile[i] = float(p[i])
+			machined[i] = int(m[i])
+			rz[i] = float(r[i])
+	_dirty = true
+
+
 func z_min() -> float:
-	return maxf(1.0, -float(tool()["zmin"]) + 0.5)
+	return clamp_depth + maxf(1.0, -float(tool()["zmin"]) + 0.5)
+
+
+## Teil lösen und neu spannen: mit anderer Spanntiefe, flip = umgedreht. Fehlertext, leer = gespannt.
+func reclamp(depth: float, flip: bool) -> String:
+	if not has_part:
+		return "Es ist kein Teil eingespannt."
+	if spindle_speed > 5.0:
+		return "Erst die Spindel stoppen, dann umspannen."
+	if flip:
+		_reverse_part()
+		flipped = not flipped
+	clamp_depth = clampf(depth, 0.0, maxf(stock_len - 10.0, 0.0))
+	auto_feed = false
+	auto_feed_x = false
+	tool_x = maxf(tool_x, stock_d * 0.5 + 10.0)
+	tool_z = minf(maxf(tool_z, part_length() + 15.0), Z_MAX)
+	wcs_z = part_length()          # Werkstücknullpunkt wieder an die (neue) Stirnfläche
+	_show_clamp()
+	return ""
+
+
+## Teil an seine Lage im Futter setzen.
+func _show_clamp() -> void:
+	if workpiece_mi:
+		workpiece_mi.position.x = -clamp_depth * 0.001
+		workpiece_mi.mesh = _make_mesh(0, profile.size() - 1, true)
+	_dirty = true
+	_sync_slides()
+
+
+## Teil umdrehen. Was am rechten Ende schon abgedreht ist, wird zum neuen linken Ende.
+func _reverse_part() -> void:
+	var n := profile.size()
+	var first := n - 1
+	while first > 0 and profile[first] <= 0.05:
+		first -= 1
+	var p := PackedFloat32Array()
+	p.resize(n)
+	var m := PackedByteArray()
+	m.resize(n)
+	var r := PackedFloat32Array()
+	r.resize(n)
+	for i in first + 1:
+		p[i] = profile[first - i]
+		m[i] = machined[first - i]
+		r[i] = rz[first - i]
+	profile = p
+	machined = m
+	rz = r
 
 
 # ======================================================================= Aufbau
 
 func _build() -> void:
 	# Farbgebung der E50 HD: weiße Verkleidung, Weiler-Blau, lichtgraues Bett, dunkelgrauer Unterbau
-	var w := Build.mat(Color(0.90, 0.91, 0.91), 0.42)          # Verkleidung weiß
+	# Konventionell: klassisches Maschinengrün, Schleifmaschine blaugrau
+	var w_col := Color(0.90, 0.91, 0.91)
+	if conventional:
+		w_col = Color(0.2, 0.32, 0.46) if grinder_type != "" else Color(0.32, 0.45, 0.4)
+	var w := Build.mat(w_col, 0.42)
 	var g := Build.mat(Color(0.74, 0.76, 0.77), 0.5)           # Bett / Schlitten lichtgrau
 	var a := Build.mat(Color(0.25, 0.27, 0.29), 0.55)          # Unterbau dunkelgrau
 	var blue := Build.mat(Color(0.06, 0.18, 0.58), 0.38)       # Weiler-Blau
@@ -249,6 +457,9 @@ func _build() -> void:
 	Build.box(self, Vector3(1.34, 0.06, 0.95), Vector3(0.75, 0.2, 0.06), stainless)
 	Build.box(self, Vector3(1.34, 0.25, 0.03), Vector3(0.75, 0.33, 0.52), a)
 	Build.box(self, Vector3(1.34, 0.02, 0.07), Vector3(0.75, 0.455, 0.5), g)          # Wannenkante
+	# Späne in der Wanne, der Haufen wächst mit dem Füllstand
+	_chip_heap = Build.sphere(self, 0.5, Vector3(0.75, 0.23, 0.06), Build.mat(Color(0.8, 0.82, 0.85), 0.6))
+	_chip_heap.visible = false
 	Build.box(self, Vector3(1.34, 0.4, 0.03), Vector3(0.75, 0.42, -0.41), a)
 
 	# Bett (Grauguss) mit geschliffenen Führungen: vorne Prisma, hinten Flachbahn. Die E50 HD hat
@@ -321,8 +532,8 @@ func _build() -> void:
 	add_child(carriage)
 	cross_slide = Node3D.new()
 	carriage.add_child(cross_slide)
-	model = LatheModel.new()
-	if not model.build(spindle_pivot, cross_slide, ts, AXIS_H, 1.07):
+	model = LatheModel.new() if use_glb else null
+	if model == null or not model.build(spindle_pivot, cross_slide, ts, AXIS_H, 1.07):
 		model = null
 		Build.cyl(spindle_pivot, 0.16, 0.11, Vector3(-0.085, 0, 0), chuck_m, Build.AXIS_X, false, 48)
 		Build.cyl(spindle_pivot, 0.12, 0.012, Vector3(-0.024, 0, 0), dark, Build.AXIS_X, false, 48)
@@ -346,27 +557,29 @@ func _build() -> void:
 	# Aufgeschoben steht sie über dem Spindelkasten, zugeschoben (door_t = 1) deckt sie den
 	# Arbeitsraum ab. Fest vor dem Spindelkasten: das weiße Feld mit WEILER-Schriftzug und oben die
 	# Laufschiene. Am linken Pfosten hängt das Bedienpult und fährt mit.
-	var guard := Build.glass(Color(0.8, 0.85, 0.9, 0.22))
-	Build.box(self, Vector3(DOOR_X1 - DOOR_X0, 0.46, 0.18), Vector3(DOOR_CX, 0.85, 0.47), w)
-	Build.box(self, Vector3(DOOR_X1 - DOOR_X0, 0.014, 0.19), Vector3(DOOR_CX, 1.087, 0.47), g)
-	_logo(self, Vector3(DOOR_X0 + 0.12, 0.86, 0.561), 0.06, blue)
-	Build.label(self, "WEILER", Vector3(DOOR_CX + 0.07, 0.86, 0.561), 0.0017, Color(0.06, 0.18, 0.58), 64)
-	# Laufschiene (Alu-Profil mit schwarzer Abdeckleiste) über die ganze Maschinenlänge
-	Build.box(self, Vector3(3.16, 0.03, 0.04), Vector3(0.51, 1.735, 0.45), Build.mat(Color(0.78, 0.79, 0.8), 0.3, 0.8))
-	Build.box(self, Vector3(3.16, 0.012, 0.03), Vector3(0.51, 1.756, 0.45), seam)
 	_door = Node3D.new()
 	add_child(_door)
-	var door_parts: Array[GeometryInstance3D] = []
-	for x in [DOOR_X0 + 0.03, DOOR_X1 - 0.03]:
-		door_parts.append(Build.box(_door, Vector3(0.06, 0.56, 0.07), Vector3(x, 1.37, 0.525), blue))
-	door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0 - 0.12, 0.54, 0.008), Vector3(DOOR_CX, 1.37, 0.535), guard))
-	door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0 - 0.12, 0.025, 0.03), Vector3(DOOR_CX, 1.105, 0.54), w))
-	door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0, 0.07, 0.24), Vector3(DOOR_CX, 1.685, 0.44), w))
-	door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0, 0.004, 0.004), Vector3(DOOR_CX, 1.648, 0.561), seam))
-	# Türgriff: bleibt auch sichtbar, wenn die Kamera die Tür ausblendet - an ihm zieht man die Tür
-	Build.box(_door, Vector3(0.018, 0.42, 0.02), HANDLE_POS, dark)
-	for n in door_parts:
-		n.layers = DOOR_LAYER
+	if not conventional:
+		var guard := Build.glass(Color(0.8, 0.85, 0.9, 0.22))
+		Build.box(self, Vector3(DOOR_X1 - DOOR_X0, 0.46, 0.18), Vector3(DOOR_CX, 0.85, 0.47), w)
+		Build.box(self, Vector3(DOOR_X1 - DOOR_X0, 0.014, 0.19), Vector3(DOOR_CX, 1.087, 0.47), g)
+		_logo(self, Vector3(DOOR_X0 + 0.12, 0.86, 0.561), 0.06, blue)
+		Build.label(self, "WEILER", Vector3(DOOR_CX + 0.07, 0.86, 0.561), 0.0017, Color(0.06, 0.18, 0.58), 64)
+		# Laufschiene (Alu-Profil mit schwarzer Abdeckleiste) über die ganze Maschinenlänge - die Tür
+		# fährt eingerastet mit dem Bettschlitten bis ans rechte Ende
+		Build.box(self, Vector3(3.16, 0.03, 0.04), Vector3(0.51, 1.735, 0.45), Build.mat(Color(0.78, 0.79, 0.8), 0.3, 0.8))
+		Build.box(self, Vector3(3.16, 0.012, 0.03), Vector3(0.51, 1.756, 0.45), seam)
+		var door_parts: Array[GeometryInstance3D] = []
+		for x in [DOOR_X0 + 0.03, DOOR_X1 - 0.03]:
+			door_parts.append(Build.box(_door, Vector3(0.06, 0.56, 0.07), Vector3(x, 1.37, 0.525), blue))
+		door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0 - 0.12, 0.54, 0.008), Vector3(DOOR_CX, 1.37, 0.535), guard))
+		door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0 - 0.12, 0.025, 0.03), Vector3(DOOR_CX, 1.105, 0.54), w))
+		door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0, 0.07, 0.24), Vector3(DOOR_CX, 1.685, 0.44), w))
+		door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0, 0.004, 0.004), Vector3(DOOR_CX, 1.648, 0.561), seam))
+		# Türgriff: bleibt auch sichtbar, wenn die Kamera die Tür ausblendet - an ihm zieht man die Tür
+		Build.box(_door, Vector3(0.018, 0.42, 0.02), HANDLE_POS, dark)
+		for n in door_parts:
+			n.layers = DOOR_LAYER
 
 	# Reitstock wie an der E50 HD: grauer Fuß auf den Bettbahnen mit schwarzen Klemmleisten, darauf
 	# ein gebrochen weißes, kantiges Oberteil mit gefasten Längskanten. Vorne die verchromte Pinole,
@@ -464,7 +677,7 @@ func _build() -> void:
 
 	# Planschlitten mit Schnellwechsel-Werkzeughalter
 	Build.box(cross_slide, Vector3(0.22, 0.05, 0.36), Vector3(0.07, 1.045, 0.15), Build.mat(Color(0.56, 0.58, 0.6), 0.4, 0.3))
-	if model == null:
+	if model == null and grinder_type == "":
 		Build.box(cross_slide, Vector3(0.14, 0.035, 0.16), Vector3(0.03, 1.088, 0.14), g)
 		# Schnellwechsel-Stahlhalter (Multifix-Art)
 		var post_m := Build.mat(Color(0.45, 0.47, 0.5), 0.35, 0.8)
@@ -524,6 +737,9 @@ func _build() -> void:
 	coolant_fx.mesh = drop
 	cross_slide.add_child(coolant_fx)
 
+	if conventional:
+		_build_open_top(w, g, dark)
+		return
 	# Verkleidung: Rückwand, rechte Stirnwand, Dach mit LED-Leuchten
 	Build.box(self, Vector3(2.24, 0.74, 0.02), Vector3(0.94, 1.29, -0.40), beige)
 	Build.box(self, Vector3(2.24, 0.004, 0.004), Vector3(0.94, 1.2, -0.388), Build.mat(Color(0.7, 0.66, 0.53), 0.8))
@@ -812,6 +1028,38 @@ func _layout_bed_covers() -> void:
 		lk.rotation.z = ang
 
 
+## Konventionell: keine Kabine. Niedrige Spritzwand hinten, Arbeitsleuchte am Arm, Kollision und Kamera.
+func _build_open_top(w: Material, g: Material, dark: Material) -> void:
+	Build.box(self, Vector3(2.24, 0.34, 0.02), Vector3(0.94, 1.09, -0.32), g)
+	Build.cyl(self, 0.012, 0.62, Vector3(-0.2, 1.72, -0.2), dark)
+	Build.cyl(self, 0.012, 0.4, Vector3(-0.05, 2.02, -0.1), dark, Build.AXIS_Z)
+	Build.cyl(self, 0.05, 0.1, Vector3(-0.05, 1.97, 0.08), dark, Build.AXIS_Y, false, 16, 0.03)
+	lamp = SpotLight3D.new()
+	lamp.position = Vector3(-0.05, 1.92, 0.08)
+	lamp.light_energy = 2.0
+	lamp.spot_range = 1.6
+	lamp.spot_angle = 30
+	lamp.light_color = Color(1.0, 0.97, 0.93)
+	lamp.shadow_enabled = true
+	add_child(lamp)
+	lamp.look_at(to_global(Vector3(0.15, AXIS_H, 0.05)))
+	# Schaltkasten mit Lampe und Anzeige hinter dem Spindelkasten
+	Build.box(self, Vector3(0.75, 1.4, 0.3), Vector3(-0.65, 0.7, -0.58), w)
+	Build.collider(self, Vector3(0.75, 1.4, 0.3), Vector3(-0.65, 0.7, -0.58))
+	_led_on = Build.emissive(Color(0.1, 1.0, 0.2), 3.0)
+	_led_off = Build.mat(Color(0.05, 0.2, 0.05), 0.5)
+	spindle_led = Build.cyl(self, 0.012, 0.01, Vector3(-0.28, 1.6, 0.364), _led_off, Build.AXIS_Z)
+	# Kollision: Spindelkasten und Arbeitsraum getrennt, davor hängt das Bedienfeld
+	var box := Build.collider(self, Vector3(0.87, 1.72, 0.78), Vector3(-0.62, 0.86, -0.02))
+	box.set_meta("interact", self)
+	var work := Build.collider(self, Vector3(2.2, 1.45, 1.0), Vector3(0.92, 0.725, 0.08))
+	work.set_meta("interact", self)
+	op_cam = Camera3D.new()
+	op_cam.fov = 55
+	op_cam.near = 0.002
+	add_child(op_cam)
+
+
 ## Bildschirm am Bedienpult: Bedienoberfläche der Zyklensteuerung (CncScreen), in einem
 ## SubViewport gerendert und auf eine Fläche im Pult gelegt. Mausklicks auf die Fläche leitet
 ## _screen_input weiter, Tastatureingaben in Eingabefelder _input.
@@ -1066,7 +1314,7 @@ func mount_tool(slot: int, id: String) -> bool:
 		return false
 	if str(holder[slot]) == id:
 		return true
-	if id == "" and slot == active_slot:
+	if id == "" and slot == active_slot and tool_stock == null:
 		_warn("Das eingeschwenkte Werkzeug kann nicht ausgebaut werden - erst anderen Platz einschwenken.")
 		return false
 	var other := holder.find(id) if id != "" else -1
@@ -1113,7 +1361,8 @@ func select_tool(i: int, silent := false) -> void:
 ## Neustart) bleiben die Schneidenkoordinaten und der Schlitten wird passend gesetzt.
 func _apply_holder(announce := false, animate := false, keep_post := false) -> void:
 	var old_off := tool_offset(tool())
-	if str(holder[active_slot]) == "":
+	# Mit Werkzeugbestand kann der Halter auch ganz leer sein
+	if str(holder[active_slot]) == "" and tool_stock == null:
 		for k in LatheTools.count():
 			var free_id := str(LatheTools.get_tool(k)["id"])
 			if holder.find(free_id) < 0:
@@ -1158,7 +1407,72 @@ func _apply_holder(announce := false, animate := false, keep_post := false) -> v
 		var o := tool_offset(t)
 		_info("Platz %d: %s D1 %s eingeschwenkt - Korrektur L1 %.3f  L2 %.3f%s" % [active_slot + 1, t["id"],
 			t["name"], o.y, o.x, " - in X freigefahren" if moved else ""])
+	refresh_tool_mods()
 	tool_changed.emit(tool_idx)
+
+
+## Halter ganz leeren.
+func clear_tools() -> void:
+	for s in SLOTS:
+		holder[s] = ""
+	active_slot = 0
+	_apply_holder()
+
+
+## Grundbestückung für Spielstände von vor dem Werkzeugkauf.
+func reset_tools() -> void:
+	holder = ["T1", "", "T3", ""]
+	active_slot = 0
+	_apply_holder()
+
+
+func has_cutter() -> bool:
+	return str(holder[active_slot]) != ""
+
+
+func owns_tool(id: String) -> bool:
+	return tool_stock == null or tool_stock.has(id)
+
+
+## Wirkung von Schneidstoff und Beschichtung des eingeschwenkten Werkzeugs übernehmen.
+func refresh_tool_mods() -> void:
+	if skills != null and tool_stock != null:
+		tool_mods = skills.tool_mods(tool_family, tool_stock.grade(str(holder[active_slot])))
+
+
+## Verschleiß des eingeschwenkten Werkzeugs, 0..1.
+func tool_wear() -> float:
+	return tool_stock.wear(str(holder[active_slot])) if tool_stock != null else 0.0
+
+
+## Name mit Schneidstoff und Verschleiß.
+func tool_label(id: String) -> String:
+	var info := tool_stock.info(id) if tool_stock != null else ""
+	return tool_name(id) if info == "" else "%s (%s)" % [tool_name(id), info]
+
+
+## Das eingeschwenkte Werkzeug ist hin und muss neu gekauft werden.
+func _lose_tool() -> void:
+	if tool_stock == null:
+		return
+	tool_stock.remove(str(holder[active_slot]))
+	holder[active_slot] = ""
+	_apply_holder()
+
+
+## Schneiden nutzt das Werkzeug ab, je schlechter die Werte, desto schneller.
+func _add_wear(delta: float) -> void:
+	if tool_stock == null or not has_cutter():
+		return
+	var id := str(holder[active_slot])
+	var w := tool_stock.add_wear(id, _wear_rate * float(tool_mods["wear"]) * delta)
+	if w >= 1.0:
+		var title := tool_name(id)
+		_crash("WERKZEUG VERSCHLISSEN! %s ist stumpf und muss neu gekauft werden." % title)
+		tool_lost.emit(INSERT_PRICE, title)
+		_lose_tool()
+	elif w >= 0.8:
+		_warn("%s ist fast verschlissen (%d %%)." % [tool_name(id), int(w * 100.0)])
 
 
 ## Werkzeugkorrektur (SINUMERIK-Art, Schneide D1) in mm: Vektor vom Werkzeugträger-Bezugspunkt F
@@ -1194,7 +1508,7 @@ func _sync_slides() -> void:
 	if carriage == null:
 		return
 	var tip := _head_pos() - _post_pos(tool())   # Schneide im Planschlitten (m)
-	carriage.position.x = tool_z * 0.001 - tip.x
+	carriage.position.x = (tool_z - clamp_depth) * 0.001 - tip.x
 	cross_slide.position.z = tool_x * 0.001 - tip.z
 	if chips:
 		chips.position.x = tip.x
@@ -1324,7 +1638,7 @@ func holder_clash(slots: Array, active: int, z: float, x: float, with_slot := fa
 
 func _slot_hit(id: String, s: int, active: int, z: float, x: float, active_id := "") -> String:
 	var rc := slot_rect(id, s, active, z, x, active_id)
-	if rc.position.x < 0.0 and rc.end.x > -CHUCK_DEPTH and rc.position.y < CHUCK_R and rc.end.y > -CHUCK_R:
+	if rc.position.x < clamp_depth and rc.end.x > clamp_depth - CHUCK_DEPTH and rc.position.y < CHUCK_R and rc.end.y > -CHUCK_R:
 		return "trifft das Futter"
 	var rr := max_radius(rc.position.x, rc.end.x)
 	if rr > 0.05 and rc.position.y < rr and rc.end.y > -rr:
@@ -1398,6 +1712,11 @@ func _post_center() -> Vector3:
 
 
 ## Zeigt der Blick auf den Halterkopf?
+## Ziel für Material in den Händen.
+func get_machine() -> Node:
+	return self
+
+
 func focus_for(origin: Vector3, dir: Vector3) -> Node:
 	if tool_mount == null:
 		return self
@@ -1405,7 +1724,7 @@ func focus_for(origin: Vector3, dir: Vector3) -> Node:
 
 
 func _free_slot() -> int:
-	return holder.find("")
+	return active_slot if str(holder[active_slot]) == "" else holder.find("")
 
 
 ## Platz, aus dem eine freie Hand ein Werkzeug nimmt: der nächste belegte nach dem eingeschwenkten.
@@ -1414,7 +1733,8 @@ func _removable_slot() -> int:
 		var s := posmod(active_slot + k, SLOTS)
 		if str(holder[s]) != "":
 			return s
-	return -1
+	# Mit Werkzeugbestand lässt sich auch das letzte herausnehmen
+	return active_slot if tool_stock != null and has_cutter() else -1
 
 
 func hand_prompt(held: Dictionary) -> String:
@@ -1458,7 +1778,47 @@ func hand_click(p: Node) -> void:
 
 # ======================================================================= Werkstück
 
+## Werkstoff des eingespannten Rohteils: bestimmt Farbe, Späne und Schnittdaten.
+func set_material(id: String) -> void:
+	material = id if Materials.exists(id) else Materials.DEFAULT
+	_raw_col = Materials.raw_color(material)
+	_cut_col = Materials.cut_color(material)
+	_rough_col = _cut_col.lerp(_raw_col, 0.5)
+	if chips and chips.mesh:
+		(chips.mesh.material as StandardMaterial3D).albedo_color = _cut_col
+	tool_heat = 0.0
+	_dirty = true
+
+
+## Soll-vc an der aktuellen Stelle (x = von, y = bis).
+func vc_window() -> Vector2:
+	return Materials.turn_window(material, _vc_top(tool_x))
+
+
+func _vc_top(radius: float) -> float:
+	return PI * maxf(radius * 2.0, 1.0) * RPM_MAX / 1000.0
+
+
+## Futter leer: Es gibt nichts zu schneiden, bis Rohmaterial eingespannt wird.
+func clear_workpiece() -> void:
+	has_part = false
+	profile.fill(0.0)
+	machined.fill(0)
+	rz.fill(0.0)
+	auto_feed = false
+	auto_feed_x = false
+	if workpiece_mi:
+		workpiece_mi.visible = false
+
+
 func new_workpiece(d: float, length: float) -> void:
+	has_part = true
+	clamp_depth = 0.0
+	flipped = false
+	if workpiece_mi:
+		workpiece_mi.position.x = 0.0
+	if workpiece_mi:
+		workpiece_mi.visible = true
 	stock_d = d
 	stock_len = length
 	var n := int(ceil(length / SEG))
@@ -1617,6 +1977,8 @@ func _seg_range(z: float) -> Vector2i:
 
 ## Größte radiale Eingriffstiefe der Platte an Position (z, x). 0 = kein Kontakt.
 func _engagement(z: float, x: float) -> float:
+	if not has_cutter():
+		return 0.0
 	var t := tool()
 	var rg := _seg_range(z)
 	var m := 0.0
@@ -1668,6 +2030,11 @@ func _step_tool(sz: float, sx: float, rapid: bool, speed: float) -> bool:
 	var nz := clampf(tool_z + sz, z_min(), Z_MAX)
 	var nx := clampf(tool_x + sx, X_MIN, X_MAX)
 	var t := tool()
+	# Leerer Platz: Es gibt nichts, das schneiden oder anstoßen könnte
+	if not has_cutter():
+		tool_z = nz
+		tool_x = nx
+		return true
 	if _back_contact(nz, nx):
 		if spindle_speed < 30.0:
 			_warn("Werkzeug berührt das Werkstück hinter der Drehmitte.")
@@ -1690,7 +2057,7 @@ func _step_tool(sz: float, sx: float, rapid: bool, speed: float) -> bool:
 			_crash("Kollision im Eilgang! NOT-HALT ausgelöst.")
 			return false
 		var side := absf(sz) > absf(sx)
-		var limit: float = t["max_dz"] if side else t["max_dx"]
+		var limit: float = (t["max_dz"] if side else t["max_dx"]) * float(Materials.group_of(material)["ap"])
 		# Schlichtzug der Zyklensteuerung: fährt längs ins dünne Planaufmaß vor einer Schulter
 		# (Spanbreite = Schulterhöhe, Spandicke = Vorschub) - das schafft die Schlichtplatte
 		if depth > limit + 0.05 and not (nc_finish and side):
@@ -1718,7 +2085,10 @@ func _step_tool(sz: float, sx: float, rapid: bool, speed: float) -> bool:
 ## - zu kleiner Vorschub oder Span: Platte quetscht/schmiert statt zu schneiden
 ## - zu große Zustellung für die Platte: Rattern
 ## - ohne Kühlschmierstoff etwas schlechter, Handvorschub ungleichmäßig
-static func surface_rz(t: Dictionary, f: float, ap: float, vc: float, kss: bool, manual: bool) -> Dictionary:
+## mat = Materials.turn_params: Fenster vlow/vhigh, dry_ok, stick, finish. Leer = Werte für S235.
+static func surface_rz(t: Dictionary, f: float, ap: float, vc: float, kss: bool, manual: bool, mat := {}) -> Dictionary:
+	var vlow: float = mat.get("vlow", Materials.REF_VC.x)
+	var vhigh: float = mat.get("vhigh", Materials.REF_VC.y)
 	var r_eps: float = t["nose"]
 	var max_ap: float = t["max_dz"] if ap > 0.0 else 1.0
 	var rz := 1.6 * f * f / (8.0 * r_eps) * 1000.0
@@ -1728,16 +2098,22 @@ static func surface_rz(t: Dictionary, f: float, ap: float, vc: float, kss: bool,
 	var worst := 0.0
 	# Schnittgeschwindigkeit
 	var vf := 1.0
-	if vc < 120.0:
-		vf = lerpf(3.0, 1.0, clampf((vc - 30.0) / 90.0, 0.0, 1.0))
-	elif vc > 320.0:
-		vf = 1.0 + (vc - 320.0) / 160.0
+	if vc < vlow:
+		vf = lerpf(3.0, 1.0, clampf((vc - vlow * 0.25) / (vlow * 0.75), 0.0, 1.0))
+	elif vc > vhigh:
+		vf = 1.0 + (vc - vhigh) / (vhigh * 0.5)
 	rz *= vf
 	if vf > 1.3:
-		hint = "Aufbauschneide - vc zu niedrig" if vc < 120.0 else "Verschleiß - vc zu hoch"
+		hint = "Aufbauschneide - vc zu niedrig" if vc < vlow else "Verschleiß - vc zu hoch"
 		worst = vf
 	if not kss:
-		rz *= 1.25
+		if not mat.get("dry_ok", false):
+			rz *= 1.25
+		if mat.get("stick", false):
+			rz *= 1.3
+			if hint == "":
+				hint = "Werkstoff klebt ohne Kühlung an der Schneide"
+	rz *= float(mat.get("finish", 1.0))
 	# Mindestspandicke: zu kleiner Vorschub quetscht die Oberfläche
 	if f < 0.04:
 		var add := (0.04 - f) / 0.04 * 6.0
@@ -1768,6 +2144,11 @@ static func surface_rz(t: Dictionary, f: float, ap: float, vc: float, kss: bool,
 	return {"rz": clampf(rz, 0.3, 200.0), "hint": hint}
 
 
+## Rautiefe dieses Schnitts, die Schleifmaschine rechnet anders.
+func _rz_for(t: Dictionary, f: float, ap: float, vc: float, kss: bool, manual: bool, mat: Dictionary) -> Dictionary:
+	return surface_rz(t, f, ap, vc, kss, manual, mat)
+
+
 func _cut(z: float, x: float, speed: float, depth := 0.0, axial := true) -> void:
 	var t := tool()
 	var rg := _seg_range(z)
@@ -1779,7 +2160,10 @@ func _cut(z: float, x: float, speed: float, depth := 0.0, axial := true) -> void
 	elif _hw_speed > 0.0:
 		f = _hw_speed / maxf(spindle_speed / 60.0, 0.1)
 	var vc := PI * maxf(x * 2.0, 0.0) * spindle_speed / 1000.0
-	var sr := surface_rz(t, f, depth if axial else 0.0, vc, coolant, manual)
+	var mp := Materials.turn_params(material, _vc_top(x))
+	# Stumpfe Schneiden machen die Oberfläche schlechter
+	mp["finish"] = float(mp["finish"]) * float(tool_mods["finish"]) * (1.0 + tool_wear() * 0.5)
+	var sr := _rz_for(t, f, depth if axial else 0.0, vc, coolant, manual, mp)
 	var rz_val: float = sr["rz"]
 	var removed := 0.0
 	for i in range(rg.x, rg.y + 1):
@@ -1804,6 +2188,13 @@ func _cut(z: float, x: float, speed: float, depth := 0.0, axial := true) -> void
 	last_rz = rz_val
 	last_rz_hint = str(sr["hint"])
 	_cut_t = 0.15
+	_heat_over = vc / maxf(float(mp["vhigh"]), 0.1)
+	_wear_rate = Materials.wear_rate(material, vc, float(mp["vlow"]), float(mp["vhigh"]), f / 0.25, coolant)
+	# Zu kleiner Vorschub reibt nur: austenitischer Edelstahl verfestigt sich dabei
+	var grp := Materials.group_of(material)
+	if not manual and grp.get("harden", false) and f < 0.06:
+		_harden_t = 0.3
+		_warn("Kaltverfestigung! Vorschub zu klein für %s, die Schneide reibt." % grp["title"])
 	_cut_level = clampf(_cut_level + removed * 0.0015, 0.0, 1.0)
 	_dirty = true
 	# Abstechen: durchtrennte Verbindung -> Rest fällt in die Spänewanne
@@ -1850,6 +2241,46 @@ func _drop_piece(i0: int) -> void:
 	body.global_transform = spindle_pivot.global_transform
 	body.angular_velocity = spindle_pivot.global_basis.x * (spindle_speed / 60.0 * TAU) * 0.3
 	get_tree().create_timer(25.0).timeout.connect(body.queue_free)
+
+
+## Spänehaufen passend zum Füllstand der Wanne.
+func refresh_tray() -> void:
+	var f := tray.fraction()
+	_chip_heap.visible = f > 0.001
+	_chip_heap.scale = Vector3(1.2 * sqrt(f), 0.34 * f, 0.8 * sqrt(f))
+
+
+## Volle Wanne stoppt die Spindel.
+func _check_tray() -> void:
+	if tray.is_full() and spindle_on:
+		spindle_on = false
+		auto_feed = false
+		auto_feed_x = false
+		_warn("Spänewanne voll! Spindel gestoppt. Mit einem Spänebehälter leeren.")
+	elif _cut_t > 0.0 and tray.fraction() >= 0.9:
+		_warn("Spänewanne fast voll: bald mit einem Spänebehälter leeren.")
+
+
+## Zu hohes vc (und Reiben in Edelstahl) heizt die Platte auf, außerhalb des Schnitts kühlt sie ab.
+func _update_heat(delta: float) -> void:
+	_harden_t -= delta
+	var rate := 0.0
+	if _cut_t > 0.0:
+		# Wendeplatten aus Hartmetall: hohe Warmhärte
+		rate = Materials.heat_rate(material, _heat_over, coolant, 0.25 * float(tool_mods["heat"]))
+		if _harden_t > 0.0:
+			rate += 0.04 * float(Materials.group_of(material)["heat"])
+	if rate <= 0.0:
+		tool_heat = move_toward(tool_heat, 0.0, delta * 0.1)
+		return
+	tool_heat += rate * delta
+	if tool_heat >= 1.0:
+		tool_heat = 0.0
+		_crash("PLATTE AUSGEGLÜHT! Schneide zu heiß, vc zu hoch für %s. NOT-HALT!" % Materials.group_of(material)["title"])
+		tool_lost.emit(INSERT_PRICE, tool_name(str(holder[active_slot])))
+		_lose_tool()
+	elif tool_heat >= 0.5:
+		_warn("Schneide wird heiß! Drehzahl senken oder Kühlung an.")
 
 
 func _crash(text: String) -> void:
@@ -2128,6 +2559,8 @@ func door_hit(mouse_pos: Vector2) -> bool:
 ## Linke Maustaste: auf die Tür geklickt schiebt sie sich zum Schlitten und rastet ein, ein
 ## Klick auf den schwarzen Hebel löst sie wieder und schiebt sie auf.
 func _door_input(event: InputEvent) -> bool:
+	if conventional:
+		return false
 	if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
 		return false
 	if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
@@ -2234,7 +2667,13 @@ func _physics_process(delta: float) -> void:
 
 	_cut_t -= delta
 	_cut_level = move_toward(_cut_level, 0.0, delta * 2.5)
+	_update_heat(delta)
 	chips.emitting = _cut_t > 0.0
+	if _cut_t > 0.0:
+		_add_wear(delta)
+		tray.add(str(Materials.group_of(material)["id"]), ChipTray.RATE * delta)
+		refresh_tray()
+	_check_tray()
 	coolant_fx.emitting = coolant and spindle_speed > 10.0
 	spindle_led.material_override = _led_on if spindle_speed > 5.0 else _led_off
 
@@ -2247,7 +2686,7 @@ func _physics_process(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_step_index_anim(delta)
-	if operating:
+	if operating or panel_open:
 		_update_camera(delta)
 	_screen_t -= delta
 	if _screen_t <= 0.0:
@@ -2269,7 +2708,9 @@ func _update_camera(delta: float) -> void:
 	cam_yaw = lerpf(cam_yaw, _yaw_t, k)
 	cam_pitch = lerpf(cam_pitch, _pitch_t, k)
 	var want: Vector3
-	if _panel_view:
+	if _lever_view:
+		want = PANEL_POS
+	elif _panel_view:
 		want = screen_center()
 	else:
 		var tz := clampf(tool_z * 0.001, 0.0, 0.5)
@@ -2348,7 +2789,7 @@ func _update_screen() -> void:
 # ======================================================================= Bedienung
 
 func get_prompt() -> String:
-	return "[%s] Weiler E50 HD bedienen" % Settings.binding_text("interact")
+	return "[%s] %s bedienen    |    Spänewanne %d %%" % [Settings.binding_text("interact"), machine_title(), int(tray.fraction() * 100.0)]
 
 
 ## Ziel für [E] auf dem Bedienpult: Maschine bedienen und direkt auf den Pult-Bildschirm schauen.
@@ -2356,10 +2797,13 @@ class PultTarget extends Node:
 	var lathe: Lathe
 
 	func get_prompt() -> String:
+		if not lathe.cnc_unlocked:
+			return "Bedienpult gesperrt: CNC-Drehmaschine im Skilltree freischalten"
 		return "[%s] Bedienpult (Zyklensteuerung)" % Settings.binding_text("interact")
 
 	func interact(p: Node) -> void:
-		lathe.interact(p, true)
+		if lathe.cnc_unlocked:
+			lathe.interact(p, true)
 
 
 ## Ziel für das Fadenkreuz auf der Schutztür bzw. ihrem schwarzen Hebel: Linksklick auf die Tür
@@ -2392,7 +2836,7 @@ func in_panel_view() -> bool:
 
 
 func interact(p: Node, panel := false) -> void:
-	if demo or operating:
+	if demo or operating or panel_open:
 		return
 	player = p
 	operating = true
@@ -2455,6 +2899,13 @@ func _handwheel_turn(notches: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if panel_open:
+		if event.is_action_pressed("interact"):
+			close_levers()
+			get_viewport().set_input_as_handled()
+		elif _dial_panel.input(event, op_cam):
+			get_viewport().set_input_as_handled()
+		return
 	if not operating:
 		return
 	# Klicks auf den Bildschirm am Bedienpult bedienen dessen Menü
@@ -2465,7 +2916,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("cam_panel"):
-		toggle_panel_view()
+		if conventional:
+			_warn("Konventionelle Maschine: kein Pult. Drehzahl und Vorschub am Bedienfeld am Spindelkasten einstellen.")
+		elif cnc_unlocked:
+			toggle_panel_view()
+		else:
+			_warn("Bedienpult gesperrt: CNC-Drehmaschine im Skilltree freischalten.")
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventMouseButton and event.pressed:
@@ -2511,7 +2967,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("emergency_stop"):
 		toggle_estop()
 	elif event.is_action_pressed("door_toggle"):
-		toggle_door()
+		if not conventional:
+			toggle_door()
 	elif event.is_action_pressed("spindle_toggle"):
 		toggle_spindle()
 	elif event.is_action_pressed("hw_axis"):
@@ -2520,6 +2977,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("hw_step"):
 		Settings.cycle_handwheel_step()
 		_info("Handrad-Schritt: %s pro Raste" % Settings.handwheel_step_name())
+	elif conventional and (event.is_action_pressed("rpm_up") or event.is_action_pressed("rpm_down") or event.is_action_pressed("feed_up") or event.is_action_pressed("feed_down")):
+		_warn("Drehzahl und Vorschub am Bedienfeld am Spindelkasten einstellen.")
 	elif event.is_action_pressed("rpm_up"):
 		step_rpm(1)
 	elif event.is_action_pressed("rpm_down"):
@@ -2546,7 +3005,17 @@ func _unhandled_input(event: InputEvent) -> void:
 
 # ======================================================================= Prüfung
 
+## Prüfung immer in der Ausgangslage, auch wenn das Teil gerade umgedreht ist.
 func evaluate(job: Dictionary) -> Dictionary:
+	if not flipped:
+		return _evaluate_now(job)
+	_reverse_part()
+	var res := _evaluate_now(job)
+	_reverse_part()
+	return res
+
+
+func _evaluate_now(job: Dictionary) -> Dictionary:
 	var lines: Array[String] = []
 	var ok := 0
 	var total := 0
@@ -2619,11 +3088,12 @@ func get_state() -> Dictionary:
 		"machined": mach, "rz": Array(rz), "tool_z": tool_z, "tool_x": tool_x, "tool": tool_idx,
 		"holder": holder.duplicate(), "active_slot": active_slot,
 		"rpm": rpm_set, "feed": feed_set, "css": css, "vc": vc_set, "rpm_limit": rpm_limit,
-		"coolant": coolant, "door": door_latched, "programs": programs.duplicate(true), "prog_sel": prog_sel,
+		"material": material, "has_part": has_part, "semi_key": semi_key, "ceramic": ceramic_part, "tray": tray.to_state(), "coolant": coolant, "door": door_latched, "programs": programs.duplicate(true), "prog_sel": prog_sel, "clamp_depth": clamp_depth, "flipped": flipped,
 		"wcs_z": wcs_z}
 
 
 func set_state(d: Dictionary) -> void:
+	set_material(str(d.get("material", Materials.DEFAULT)))
 	new_workpiece(float(d.get("stock_d", 60.0)), float(d.get("stock_len", 160.0)))
 	var old_seg := float(d.get("seg", 0.5))
 	var p = d.get("profile", [])
@@ -2639,6 +3109,8 @@ func set_state(d: Dictionary) -> void:
 				rz[i] = float(r[j])
 			elif machined[i]:
 				rz[i] = 10.0
+	if not bool(d.get("has_part", true)):
+		clear_workpiece()
 	tool_z = float(d.get("tool_z", tool_z))
 	tool_x = float(d.get("tool_x", tool_x))
 	# ältere Spielstände speichern nur Stufen-Indizes
@@ -2654,6 +3126,16 @@ func set_state(d: Dictionary) -> void:
 	set_vc(float(d.get("vc", vc_set)))
 	set_rpm_limit(float(d.get("rpm_limit", rpm_limit)))
 	coolant = bool(d.get("coolant", false))
+	semi_key = str(d.get("semi_key", ""))
+	ceramic_part = bool(d.get("ceramic", false))
+	clamp_depth = float(d.get("clamp_depth", 0.0))
+	flipped = bool(d.get("flipped", false))
+	if workpiece_mi:
+		workpiece_mi.position.x = -clamp_depth * 0.001
+	if _dial_panel:
+		_dial_panel.sync()
+	tray.load_state(d.get("tray", {}))
+	refresh_tray()
 	set_door(bool(d.get("door", false)))
 	var pr = d.get("programs", null)
 	if pr is Array and not pr.is_empty():
