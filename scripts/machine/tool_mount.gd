@@ -12,6 +12,10 @@ func get_prompt() -> String:
 	return machine.get_prompt() if hand == "" else "%s    |    %s" % [machine.get_prompt(), hand]
 
 
+func get_machine() -> Node:
+	return machine
+
+
 func interact(p: Node) -> void:
 	machine.interact(p)
 

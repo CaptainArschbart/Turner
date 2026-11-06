@@ -46,7 +46,7 @@ const BINDINGS := [
 	["coolant", "Kühlschmierstoff an/aus", "Drehmaschine", "k", KEY_C],
 	["emergency_stop", "Not-Halt / quittieren", "Drehmaschine", "k", KEY_X],
 	["door_toggle", "Schutztür auf- / zuschieben", "Drehmaschine", "k", KEY_O],
-	["new_workpiece", "Neues Rohteil einspannen", "Drehmaschine", "k", KEY_N],
+	["new_workpiece", "Rohteil anfordern (Testmodus)", "Drehmaschine", "k", KEY_N],
 	["submit_part", "Teil prüfen & abgeben", "Drehmaschine", "k", KEY_ENTER],
 	["mill_z_up", "Fräskopf heben (Z+)", "Fräsmaschine", "k", KEY_Z],
 	["mill_z_down", "Fräskopf senken (Z-)", "Fräsmaschine", "k", KEY_H],
@@ -57,6 +57,9 @@ const BINDINGS := [
 	["cam_reset", "Standardansicht / Verschiebung zurück", "Kamera an der Maschine", "k", KEY_F3],
 	["cam_panel", "Blick auf das Bedienpult (an/aus)", "Kamera an der Maschine", "k", KEY_F4],
 	["pause", "Pause-Menü", "Allgemein", "k", KEY_ESCAPE],
+	["show_drawing", "Werkstückzeichnung ein / aus", "Allgemein", "k", KEY_P],
+	["job_menu", "Angenommene Aufträge (nicht an Maschinen)", "Allgemein", "k", KEY_TAB],
+	["build_menu", "Baumenü (nicht an Maschinen)", "Allgemein", "k", KEY_B],
 ]
 
 var graphics: Dictionary = {}

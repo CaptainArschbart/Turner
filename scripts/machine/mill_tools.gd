@@ -12,17 +12,48 @@ const COATING := Color(0.15, 0.15, 0.19)
 
 ## Werkzeuge an der Fräsmaschine. kind: end_mill, face_mill, drill. d = Schneidkreis, z = Schneidenzahl,
 ## ap_max = größte Schnitttiefe, fz_max = größter Vorschub je Schneide (mm).
+## price = Ersatz in EUR, wenn das Werkzeug bricht oder ausglüht (Messerkopf: Satz Wendeplatten).
+## Normreihen: Schaftfräser nach DIN 6527 L (d, total = l1, flute = l2), Spiralbohrer nach DIN 338
+## (d, total = l1, flute = l2), Ø25 als langer Bohrer nach DIN 345. Messerköpfe mit den Durchmessern nach
+## ISO 6462, dazu die kleinen Ø32 und Ø40, die es als Einschraub-Messerköpfe gibt.
+## Spielstände merken sich die Nummer in dieser Liste: Neue Werkzeuge kommen nur hinten dazu.
 const TOOLS := [
-	{"id": "F6", "name": "Schaftfräser Ø6", "kind": "end_mill", "d": 6.0, "total": 57.0, "flute": 13.0, "z": 4, "ap_max": 13.0, "fz_max": 0.04},
-	{"id": "F8", "name": "Schaftfräser Ø8", "kind": "end_mill", "d": 8.0, "total": 63.0, "flute": 19.0, "z": 4, "ap_max": 19.0, "fz_max": 0.05},
-	{"id": "F10", "name": "Schaftfräser Ø10", "kind": "end_mill", "d": 10.0, "total": 72.0, "flute": 22.0, "z": 4, "ap_max": 22.0, "fz_max": 0.06},
-	{"id": "F12", "name": "Schaftfräser Ø12", "kind": "end_mill", "d": 12.0, "total": 83.0, "flute": 26.0, "z": 4, "ap_max": 26.0, "fz_max": 0.08},
-	{"id": "F16", "name": "Schaftfräser Ø16", "kind": "end_mill", "d": 16.0, "total": 92.0, "flute": 32.0, "z": 4, "ap_max": 32.0, "fz_max": 0.1},
-	{"id": "MK63", "name": "Messerkopf Ø63", "kind": "face_mill", "d": 63.0, "z": 7, "ap_max": 6.0, "fz_max": 0.25},
-	{"id": "B10", "name": "Spiralbohrer Ø10", "kind": "drill", "d": 10.0, "z": 2, "ap_max": 87.0, "fz_max": 0.25},
+	{"id": "F6", "price": 15, "name": "Schaftfräser Ø6", "kind": "end_mill", "d": 6.0, "total": 57.0, "flute": 13.0, "z": 4, "ap_max": 13.0, "fz_max": 0.04},
+	{"id": "F8", "price": 20, "name": "Schaftfräser Ø8", "kind": "end_mill", "d": 8.0, "total": 63.0, "flute": 19.0, "z": 4, "ap_max": 19.0, "fz_max": 0.05},
+	{"id": "F10", "price": 28, "name": "Schaftfräser Ø10", "kind": "end_mill", "d": 10.0, "total": 72.0, "flute": 22.0, "z": 4, "ap_max": 22.0, "fz_max": 0.06},
+	{"id": "F12", "price": 35, "name": "Schaftfräser Ø12", "kind": "end_mill", "d": 12.0, "total": 83.0, "flute": 26.0, "z": 4, "ap_max": 26.0, "fz_max": 0.08},
+	{"id": "F16", "price": 50, "name": "Schaftfräser Ø16", "kind": "end_mill", "d": 16.0, "total": 92.0, "flute": 32.0, "z": 4, "ap_max": 32.0, "fz_max": 0.1},
+	{"id": "MK63", "price": 60, "name": "Messerkopf Ø63", "kind": "face_mill", "d": 63.0, "z": 7, "ap_max": 6.0, "fz_max": 0.25},
+	{"id": "B10", "price": 12, "name": "Spiralbohrer Ø10", "kind": "drill", "d": 10.0, "total": 133.0, "flute": 87.0, "z": 2, "ap_max": 87.0, "fz_max": 0.25},
+	{"id": "F3", "price": 8, "name": "Schaftfräser Ø3", "kind": "end_mill", "d": 3.0, "total": 57.0, "flute": 8.0, "z": 4, "ap_max": 8.0, "fz_max": 0.015},
+	{"id": "F4", "price": 10, "name": "Schaftfräser Ø4", "kind": "end_mill", "d": 4.0, "total": 57.0, "flute": 11.0, "z": 4, "ap_max": 11.0, "fz_max": 0.02},
+	{"id": "F5", "price": 12, "name": "Schaftfräser Ø5", "kind": "end_mill", "d": 5.0, "total": 57.0, "flute": 13.0, "z": 4, "ap_max": 13.0, "fz_max": 0.03},
+	{"id": "F14", "price": 42, "name": "Schaftfräser Ø14", "kind": "end_mill", "d": 14.0, "total": 83.0, "flute": 26.0, "z": 4, "ap_max": 26.0, "fz_max": 0.09},
+	{"id": "F18", "price": 60, "name": "Schaftfräser Ø18", "kind": "end_mill", "d": 18.0, "total": 92.0, "flute": 32.0, "z": 4, "ap_max": 32.0, "fz_max": 0.11},
+	{"id": "F20", "price": 70, "name": "Schaftfräser Ø20", "kind": "end_mill", "d": 20.0, "total": 104.0, "flute": 38.0, "z": 4, "ap_max": 38.0, "fz_max": 0.12},
+	{"id": "F25", "price": 95, "name": "Schaftfräser Ø25", "kind": "end_mill", "d": 25.0, "total": 121.0, "flute": 45.0, "z": 4, "ap_max": 45.0, "fz_max": 0.14},
+	{"id": "MK50", "price": 50, "name": "Messerkopf Ø50", "kind": "face_mill", "d": 50.0, "z": 5, "ap_max": 6.0, "fz_max": 0.25},
+	{"id": "MK80", "price": 75, "name": "Messerkopf Ø80", "kind": "face_mill", "d": 80.0, "z": 8, "ap_max": 6.0, "fz_max": 0.25},
+	{"id": "MK100", "price": 95, "name": "Messerkopf Ø100", "kind": "face_mill", "d": 100.0, "z": 10, "ap_max": 6.0, "fz_max": 0.25},
+	{"id": "MK125", "price": 110, "name": "Messerkopf Ø125", "kind": "face_mill", "d": 125.0, "z": 12, "ap_max": 6.0, "fz_max": 0.25},
+	{"id": "B3", "price": 3, "name": "Spiralbohrer Ø3", "kind": "drill", "d": 3.0, "total": 61.0, "flute": 33.0, "z": 2, "ap_max": 33.0, "fz_max": 0.075},
+	{"id": "B4", "price": 4, "name": "Spiralbohrer Ø4", "kind": "drill", "d": 4.0, "total": 75.0, "flute": 43.0, "z": 2, "ap_max": 43.0, "fz_max": 0.1},
+	{"id": "B5", "price": 5, "name": "Spiralbohrer Ø5", "kind": "drill", "d": 5.0, "total": 86.0, "flute": 52.0, "z": 2, "ap_max": 52.0, "fz_max": 0.125},
+	{"id": "B6", "price": 6, "name": "Spiralbohrer Ø6", "kind": "drill", "d": 6.0, "total": 93.0, "flute": 57.0, "z": 2, "ap_max": 57.0, "fz_max": 0.15},
+	{"id": "B8", "price": 9, "name": "Spiralbohrer Ø8", "kind": "drill", "d": 8.0, "total": 117.0, "flute": 75.0, "z": 2, "ap_max": 75.0, "fz_max": 0.2},
+	{"id": "B12", "price": 16, "name": "Spiralbohrer Ø12", "kind": "drill", "d": 12.0, "total": 151.0, "flute": 101.0, "z": 2, "ap_max": 101.0, "fz_max": 0.3},
+	{"id": "B14", "price": 22, "name": "Spiralbohrer Ø14", "kind": "drill", "d": 14.0, "total": 160.0, "flute": 108.0, "z": 2, "ap_max": 108.0, "fz_max": 0.35},
+	{"id": "B16", "price": 28, "name": "Spiralbohrer Ø16", "kind": "drill", "d": 16.0, "total": 178.0, "flute": 120.0, "z": 2, "ap_max": 120.0, "fz_max": 0.4},
+	{"id": "B18", "price": 36, "name": "Spiralbohrer Ø18", "kind": "drill", "d": 18.0, "total": 191.0, "flute": 130.0, "z": 2, "ap_max": 130.0, "fz_max": 0.45},
+	{"id": "B20", "price": 45, "name": "Spiralbohrer Ø20", "kind": "drill", "d": 20.0, "total": 205.0, "flute": 140.0, "z": 2, "ap_max": 140.0, "fz_max": 0.5},
+	{"id": "B25", "price": 65, "name": "Spiralbohrer Ø25", "kind": "drill", "d": 25.0, "total": 281.0, "flute": 160.0, "z": 2, "ap_max": 160.0, "fz_max": 0.625},
+	{"id": "MK32", "price": 35, "name": "Messerkopf Ø32", "kind": "face_mill", "d": 32.0, "z": 3, "ap_max": 6.0, "fz_max": 0.25},
+	{"id": "MK40", "price": 42, "name": "Messerkopf Ø40", "kind": "face_mill", "d": 40.0, "z": 4, "ap_max": 6.0, "fz_max": 0.25},
 ]
 
 static var _flute_cache: Dictionary = {}
+## Detailgrad der Rundungen. Auf der Werkbank liegen viele Werkzeuge, dort reicht weniger.
+static var _detail := 1.0
 
 
 static func build(id: String) -> Node3D:
@@ -49,13 +80,48 @@ static func build(id: String) -> Node3D:
 	return root
 
 
+static func by_id(id: String) -> Dictionary:
+	for t in TOOLS:
+		if t["id"] == id:
+			return t
+	return TOOLS[0]
+
+
+## Alle Werkzeuge einer Art, nach Durchmesser sortiert.
+static func of_kind(kind: String) -> Array:
+	var out := []
+	for t in TOOLS:
+		if t["kind"] == kind:
+			out.append(t)
+	out.sort_custom(func(a, b): return float(a["d"]) < float(b["d"]))
+	return out
+
+
+## Nur der Schneidkörper ohne Aufnahme, so liegt das Werkzeug auf der Werkbank.
+static func bench_model(t: Dictionary) -> Node3D:
+	_detail = 0.4
+	var root := Node3D.new()
+	root.scale = Vector3.ONE * 0.001
+	match str(t["kind"]):
+		"face_mill":
+			_face_mill(root, true, float(t["d"]), int(t["z"]))
+		"drill":
+			_drill(root, float(t["d"]), float(t["total"]), float(t["flute"]))
+		_:
+			end_mill(root, t["d"], t["total"], t["flute"])
+	_detail = 1.0
+	return root
+
+
 ## Abstand Schneide bis Spindelnase mit eingesetzter Aufnahme (mm).
 static func tool_length(t: Dictionary) -> float:
 	match str(t["kind"]):
 		"face_mill":
 			return 69.0
 		"drill":
-			return 209.0
+			return float(t["total"]) + 76.0
+		"wheel":
+			return 110.0
 	return float(t["total"]) - 15.0 + 47.0
 
 
@@ -65,15 +131,16 @@ static func assembly(t: Dictionary) -> Node3D:
 	root.scale = Vector3.ONE * 0.001
 	match str(t["kind"]):
 		"face_mill":
-			_face_mill(root, false)
+			_face_mill(root, false, float(t["d"]), int(t["z"]))
 			var arbor := Node3D.new()
 			arbor.position.y = 31.0
 			root.add_child(arbor)
 			_face_mill_arbor(arbor)
 		"drill":
-			_drill(root)
-			_drill_chuck(root, Vector3(0, 108.0, 0))
-			_steep_taper(root, 190.0)
+			# Der Bohrer steckt 25 mm tief im Bohrfutter
+			_drill(root, float(t["d"]), float(t["total"]), float(t["flute"]))
+			_drill_chuck(root, Vector3(0, float(t["total"]) - 25.0, 0))
+			_steep_taper(root, float(t["total"]) + 57.0)
 		_:
 			end_mill(root, t["d"], t["total"], t["flute"])
 			_collet_chuck(root, Vector3(0, float(t["total"]) - 15.0, 0))
@@ -95,23 +162,25 @@ static func end_mill(parent: Node3D, d: float, total: float, flute: float, x := 
 
 static func _end_mill_set(root: Node3D) -> void:
 	var x := 0.0
-	for s in [[6.0, 57.0, 13.0], [8.0, 63.0, 19.0], [10.0, 72.0, 22.0], [12.0, 83.0, 26.0], [16.0, 92.0, 32.0]]:
-		x += float(s[0]) * 0.5
-		end_mill(root, s[0], s[1], s[2], x)
-		x += float(s[0]) * 0.5 + 7.0
+	for t in of_kind("end_mill"):
+		x += float(t["d"]) * 0.5
+		end_mill(root, t["d"], t["total"], t["flute"], x)
+		x += float(t["d"]) * 0.5 + 7.0
 
 
 ## show_face: Schneidseite nach oben drehen (Vorschau), sonst nach unten wie in der Spindel.
-static func _face_mill(root: Node3D, show_face: bool) -> void:
+static func _face_mill(root: Node3D, show_face: bool, d := 63.0, teeth := 7) -> void:
 	var body := Node3D.new()
 	if show_face:
 		body.rotation.x = PI
+	# Das Modell ist für Ø63 gebaut, andere Größen wachsen in der Breite
+	body.scale = Vector3(d / 63.0, 1.0, d / 63.0)
 	root.add_child(body)
 	var c := Color(0.09, 0.09, 0.1)
 	var dark := Build.mat(c, 0.55, 0.35)
 	var r := 29.5
 	var bore := 19.5
-	_add(body, _flutes(r, 26.0, 7, 0.04, 0.78, 0.35, c, c, 0.0, bore / r), _vertex_mat(0.55, 0.35))
+	_add(body, _flutes(r, 26.0, teeth, 0.04, 0.78, 0.35, c, c, 0.0, bore / r), _vertex_mat(0.55, 0.35))
 	_add(body, _revolve(PackedVector2Array([Vector2(0, 18), Vector2(bore, 18), Vector2(bore, 0)])), dark)
 	_add(body, _revolve(PackedVector2Array([Vector2(r, 26), Vector2(r, 30), Vector2(24, 38), Vector2(24, 50), Vector2(0, 50)])), dark)
 	# Mitnehmernuten
@@ -120,8 +189,8 @@ static func _face_mill(root: Node3D, show_face: bool) -> void:
 	# Wendeplatten sitzen an der Spanlücke
 	var plate := _plate(10.0, 10.0, 3.5, 2.0)
 	var gold := _vertex_mat(0.35, 0.8)
-	for k in 7:
-		var a := TAU * k / 7.0
+	for k in teeth:
+		var a := TAU * k / teeth
 		var radial := Vector3(cos(a), 0, sin(a))
 		var mi := _add(body, plate, gold)
 		var basis := Basis(radial, Vector3.UP, radial.cross(Vector3.UP))
@@ -151,10 +220,7 @@ static func _insert_set(root: Node3D) -> void:
 		mi.position = Vector3((i % 3 - 1) * 23.0, 0, (i / 3 - 0.5) * 18.0)
 
 
-static func _drill(root: Node3D) -> void:
-	var d := 10.0
-	var total := 133.0
-	var flute := 87.0
+static func _drill(root: Node3D, d := 10.0, total := 133.0, flute := 87.0) -> void:
 	var black := Color(0.06, 0.06, 0.07)
 	var turns := flute * tan(deg_to_rad(30.0)) / (PI * d)
 	_add(root, _flutes(d * 0.5, flute, 2, turns, 0.42, 0.55, black, GOLD, d * 0.3), _vertex_mat(0.35, 0.8))
@@ -251,6 +317,7 @@ static func _ring(r: float, y: float, a: float) -> Vector3:
 ## Rotationskörper aus einem Profil (r, y). Außen von unten nach oben durchlaufen,
 ## damit die Flächen nach außen zeigen. Jedes Profilstück bekommt eine harte Kante.
 static func _revolve(profile: PackedVector2Array, segs := SEGS) -> ArrayMesh:
+	segs = int(segs * _detail)
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for s in profile.size() - 1:
@@ -278,15 +345,17 @@ static func _revolve(profile: PackedVector2Array, segs := SEGS) -> ArrayMesh:
 ## tip > 0 spitzt das untere Ende kegelig an, cap_r ist der Innenradius der Stirnfläche (Anteil von r).
 static func _flutes(r: float, length: float, flutes: int, turns: float, core: float, land: float,
 		c_land: Color, c_flute: Color, tip := 0.0, cap_r := 0.0) -> ArrayMesh:
-	var key := str([r, length, flutes, turns, core, land, c_land, c_flute, tip, cap_r])
+	var key := str([r, length, flutes, turns, core, land, c_land, c_flute, tip, cap_r, _detail])
 	if _flute_cache.has(key):
 		return _flute_cache[key]
+	var segs_n := int(SEGS * _detail)
+	var rings_n := int(RINGS * _detail)
 	var pos := PackedVector3Array()
 	var col := PackedColorArray()
-	for j in RINGS + 1:
-		var y := length * j / RINGS
-		for i in SEGS:
-			var a := TAU * i / SEGS
+	for j in rings_n + 1:
+		var y := length * j / rings_n
+		for i in segs_n:
+			var a := TAU * i / segs_n
 			var u := fposmod(flutes * (a / TAU - turns * y / length), 1.0)
 			var depth := 0.0
 			if u >= land:
@@ -301,23 +370,23 @@ static func _flutes(r: float, length: float, flutes: int, turns: float, core: fl
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_smooth_group(0)
-	for j in RINGS:
-		for i in SEGS:
-			var n := (i + 1) % SEGS
-			var a0 := j * SEGS + i
-			var b0 := j * SEGS + n
-			var b1 := (j + 1) * SEGS + n
-			var a1 := (j + 1) * SEGS + i
+	for j in rings_n:
+		for i in segs_n:
+			var n := (i + 1) % segs_n
+			var a0 := j * segs_n + i
+			var b0 := j * segs_n + n
+			var b1 := (j + 1) * segs_n + n
+			var a1 := (j + 1) * segs_n + i
 			for k in [a0, b0, b1, a0, b1, a1]:
 				st.set_color(col[k])
 				st.add_vertex(pos[k])
 	# Stirnfläche
 	st.set_smooth_group(1)
 	st.set_color(c_land)
-	for i in SEGS:
-		var n := (i + 1) % SEGS
-		var i0 := _ring(r * cap_r, 0.0, TAU * i / SEGS)
-		var i1 := _ring(r * cap_r, 0.0, TAU * n / SEGS)
+	for i in segs_n:
+		var n := (i + 1) % segs_n
+		var i0 := _ring(r * cap_r, 0.0, TAU * i / segs_n)
+		var i1 := _ring(r * cap_r, 0.0, TAU * n / segs_n)
 		for v in [i0, i1, pos[n], i0, pos[n], pos[i]]:
 			st.add_vertex(v)
 	st.generate_normals()

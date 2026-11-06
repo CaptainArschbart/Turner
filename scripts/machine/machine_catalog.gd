@@ -4,52 +4,45 @@ extends RefCounted
 ## Maschine:  title, desc und optional subs (Unterkategorien mit title, desc und optional owned).
 ## owned = Name der Maschine, die schon in der Werkstatt steht.
 ## model = 3D-Vorschau aus MillTools.
-## tools = Werkzeuge der Maschine (title, desc, model), tool_owner = Maschine, an der sie im Spiel sind.
-## lathe_tools = zeigt die Werkzeuge aus LatheTools, die schon an der Maschine im Spiel sind.
 
 const MILL_NAME := "Konventionelle Fräsmaschine 410 mm"
-
-const MILL_TOOLS := [
-	{"title": "Schaftfräser", "desc": "4 Schneiden, TiAlN-beschichtet, Ø 6 bis 16 mm. Für Stahl, Edelstahl und Guss.", "model": "end_mills"},
-	{"title": "Messerkopf", "desc": "Planfräser Ø 63 mm mit 7 Wendeplatten für große, ebene Flächen.", "model": "face_mill"},
-	{"title": "Messerkopf-Aufnahme", "desc": "Steilkegel-Aufnahme mit Mitnehmersteinen und Klemmschraube für den Messerkopf.", "model": "face_mill_arbor"},
-	{"title": "Wendeplatten", "desc": "Beschichtete Schneidplatten für den Messerkopf, bei Verschleiß wechselbar.", "model": "inserts"},
-	{"title": "Spiralbohrer", "desc": "Bohrer Ø 10 mm für Durchgangs- und Kernlochbohrungen.", "model": "drill"},
-	{"title": "Werkzeugaufnahmen", "desc": "Spannzangenfutter mit Spannzangen und Bohrfutter zum Spannen der Werkzeuge.", "model": "holders"},
-]
 
 const MACHINES := [
 	{
 		"title": "Drehmaschinen",
 		"desc": "Das Werkstück rotiert, der Drehmeißel trägt Material ab. Für Wellen, Bolzen und Buchsen.",
-		"lathe_tools": true,
-		"tool_owner": "Weiler E50 HD",
 		"subs": [
-			{"title": "CNC", "desc": "Programmgesteuert, für Serien und komplexe Konturen."},
-			{"title": "Konventionell", "desc": "Von Hand über Handräder und Vorschub bedient. Drehlänge 900 mm, Futter Ø 300 mm.", "owned": "Weiler E50 HD"},
+			{"title": "CNC", "desc": "Programmgesteuert, für Serien und komplexe Konturen. Bedienpult mit Zyklen und NC-Programmen.", "owned": "Weiler E50 HD"},
+			{"title": "Konventionell", "desc": "Von Hand über Handräder bedient, Drehzahl und Vorschub mit Drehknöpfen und Stufentasten. Drehlänge 900 mm.", "owned": "Konventionelle Drehmaschine"},
 		],
 	},
 	{
 		"title": "Fräsmaschinen",
 		"desc": "Das Werkzeug rotiert und trägt Material ab. Für Flächen, Nuten und Taschen.",
-		"tools": MILL_TOOLS,
-		"tool_owner": MILL_NAME,
 		"subs": [
 			{"title": "CNC", "desc": "Programmgesteuert, mehrere Achsen fahren gleichzeitig."},
 			{"title": "Konventionell", "desc": "Von Hand über Handräder und Stufenhebel bedient. Arbeitsfläche 410 x 210 mm.", "owned": MILL_NAME, "model": "mill_machine"},
 		],
 	},
 	{
+		"title": "Sägemaschinen",
+		"desc": "Trennen Stangen auf Länge. Die Rollbahn trägt die Stange, der Anschlag gibt das Maß vor.",
+		"owned": "Bandsäge mit Rollbahn",
+	},
+	{
 		"title": "Rundschleifmaschinen",
-		"desc": "Schleifen runde Außen- und Innenflächen auf enge Toleranzen und feine Oberflächen.",
+		"desc": "Schleifen runde Außenflächen auf enge Toleranzen und feine Oberflächen. Scheibe Ø300 mm, Teile vom Drehauftrag.",
+		"owned": "Konventionelle Rundschleifmaschine",
 	},
 	{
 		"title": "Flachschleifmaschinen",
-		"desc": "Schleifen ebene Flächen maßgenau und mit feiner Oberfläche.",
+		"desc": "Schleifen ebene Flächen maßgenau und mit feiner Oberfläche. Scheibe Ø200 mm, Magnetspannplatte, Teile vom Fräsauftrag.",
+		"owned": "Konventionelle Flachschleifmaschine",
 	},
 	{
 		"title": "Standbohrmaschinen",
-		"desc": "Bohren, Senken und Gewindeschneiden an fest aufgestellter Maschine.",
+		"desc": "Bohren an fest aufgestellter Maschine, mit Kreuztisch und Pinole. Bringt eigene Bohraufträge.",
+		"owned": "Konventionelle Standbohrmaschine",
 	},
 	{
 		"title": "Erodiermaschinen",

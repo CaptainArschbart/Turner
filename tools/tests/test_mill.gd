@@ -39,6 +39,7 @@ func reset(w) -> void:
 	w._mill_new_workpiece()
 func _initialize() -> void:
 	await process_frame
+	root.get_node("GameState").pending = {"unlock_all": true}
 	var w = load("res://scenes/world.tscn").instantiate()
 	root.add_child(w)
 	for i in 5:
@@ -52,12 +53,42 @@ func _initialize() -> void:
 	p.pitch = -0.2
 	for i in 10:
 		await physics_frame
-	ok(p._focus == m, "Fräsmaschine lässt sich anvisieren")
+	# Der Blick trifft die Maschine oder ihre Werkzeugaufnahme, beide bedienen sie
+	ok(p._focus == m or p._focus == m.tool_mount, "Fräsmaschine lässt sich anvisieren")
 	m.interact(p)
 	await process_frame
 	ok(m.operating and p.operating == m, "Bedienung startet")
 	ok(w.mill_hud.visible and not w.hud._cross.visible, "Fräs-HUD an, Fadenkreuz aus")
 	ok(not w.hud._job_panel.visible, "Drehauftrag ausgeblendet")
+	# Konventionell: nur Achsen, alles andere hinter den Alt-Tasten, nirgends die Kasse
+	var mh = w.mill_hud
+	ok(mh._dro_panel.visible and not mh._details.is_visible_in_tree(), "Fräs-HUD zeigt im Normalfall nur die Achsen")
+	ok(mh._top.is_visible_in_tree(), "Draufsicht bleibt sichtbar")
+	ok(mh._chip.visible and not mh._overlay.visible, "Unten rechts nur der Hinweis")
+	var alt := InputEventKey.new()
+	alt.keycode = KEY_ALT
+	alt.location = KEY_LOCATION_LEFT
+	alt.pressed = true
+	mh._input(alt)
+	await process_frame
+	ok(mh._details.is_visible_in_tree() and mh._job.text != "", "Links Alt zeigt Werte und Auftrag")
+	var mill_labels := []
+	for lb in mh.find_children("*", "Label", true, false):
+		mill_labels.append(lb.text)
+	ok(not " ".join(PackedStringArray(mill_labels)).contains("Werkstattkasse"), "Keine Kasse im Fräs-HUD")
+	alt.pressed = false
+	mh._input(alt)
+	ok(not mh._details.visible, "Links Alt loslassen klappt zu")
+	var ralt := InputEventKey.new()
+	ralt.keycode = KEY_ALT
+	ralt.location = KEY_LOCATION_RIGHT
+	ralt.pressed = true
+	mh._input(ralt)
+	ok(mh._overlay.visible and not mh._chip.visible, "Rechts Alt öffnet die Übersicht")
+	ok(mh._overlay.tabs.get_tab_count() == 6 and mh._overlay.tabs.get_tab_title(5) == "Bedienknöpfe", "Fünf Tastenlisten und die Bedienknöpfe")
+	ok(mh._overlay.tabs.get_tab_title(0) == "Verfahren", "Erster Tab Verfahren")
+	mh._input(ralt)
+	ok(not mh._overlay.visible and mh._chip.visible, "Rechts Alt schließt sie wieder")
 
 	# Alle Werkzeuge lassen sich einwechseln
 	for i in MillTools.TOOLS.size():
@@ -75,6 +106,8 @@ func _initialize() -> void:
 	await stop(m)
 
 	# Fräsauftrag 1: Planfräsen mit dem Messerkopf
+	# Neues Spiel startet leer, das Rohteil zu diesem Auftrag einspannen
+	w._mill_new_workpiece()
 	m.select_tool(5)
 	m.rpm_set = 630.0
 	go(m, -40.0, 15.0, -2.0, 50.0)
@@ -94,8 +127,12 @@ func _initialize() -> void:
 	await stop(m)
 	w._on_mill_submit()
 	ok(w.money == money0 + 150, "Vergütung gezahlt")
-	ok(w.mill_job_index == 1, "Nächster Fräsauftrag")
-	ok(m.untouched, "Neues Rohteil nach der Abgabe")
+	ok(not w.accepted.has("mill:0"), "Fräsauftrag erledigt")
+	ok(w.company.skills.xp == 150, "Erfahrung für den Auftrag")
+	ok(not m.has_part, "Schraubstock ist nach der Abgabe leer")
+	w.accept_job("mill:1")
+	w.select_job("mill:1")
+	ok(w.mill_job_index == 1, "Nächster Fräsauftrag nach dem Annehmen")
 
 	# Fräsauftrag 3: Nut mit Ø10
 	reset(w)
@@ -232,24 +269,71 @@ func _initialize() -> void:
 	m.tool_x = -11.0
 	ok(not m.tool_near_part(), "Marke weg, sobald die Mitte mehr als ein Ø neben dem Rohteil steht")
 
-	# Hebel: Sperre bei laufender Spindel, Tasten und HUD-Knöpfe verstellen nichts
+	# Drehknöpfe und Stufen: Rasten wie auf der Skala, Sperre bei laufender Spindel
 	reset(w)
 	m.rpm_set = 630.0
 	m.feed_set = 100.0
-	m.lever_step(0, 1)
-	ok(m.rpm_set == 1000.0, "Drehzahl-Hebel eine Stufe hoch")
-	m.lever_step(1, -1)
-	ok(m.feed_set == 63.0, "Vorschub-Hebel eine Stufe runter")
-	for i in 20:
-		m.lever_step(0, 1)
-	ok(m.rpm_set == 4000.0, "Hebel bleibt an der obersten Stufe")
+	m._sync_panel()
+	ok(m.dial_stage(0) == 0 and m.dial_stage(1) == 0, "Grundstellung ist Stufe I")
+	m.dial_step(0, 1)
+	ok(m.rpm_set == 1000.0, "Drehzahl-Knopf eine Raste hoch")
+	m.dial_step(1, -1)
+	ok(m.feed_set == 63.0, "Vorschub-Knopf eine Raste runter")
+	m.dial_step(0, 1)
+	ok(m.rpm_set == 40.0, "Knopf dreht ohne Anschlag von 1000 auf 40 /min weiter")
+	m.dial_step(0, -1)
+	ok(m.rpm_set == 1000.0, "Und rückwärts von 40 auf 1000 /min")
+	m.stage_set(0, 1)
+	ok(m.rpm_set == 2000.0 and m.dial_stage(0) == 1, "Taste II: 1000 wird 2000 /min")
+	m.stage_set(0, 0)
+	ok(m.rpm_set == 1000.0 and m.dial_stage(0) == 0, "Taste I: wieder 1000 /min")
+	m.stage_set(1, 1)
+	ok(m.feed_set == 125.0, "Taste II am Vorschub: 63 wird 125 mm/min")
+	ok(m.dial_index(1) == 4, "Die Stufe lässt die Raste stehen")
+	m.dial_step(1, 1)
+	ok(m.feed_set == 200.0 and m.dial_stage(1) == 1, "Drehen bleibt in Stufe II")
+	m.stage_set(1, 0)
+	for k in 2:
+		var vals: Array = MillModel.RPM_DIAL if k == 0 else MillModel.FEED_DIAL
+		ok(vals[0].size() == vals[1].size(), "Beide Stufen haben gleich viele Rasten")
+		for v in vals[0]:
+			ok(not vals[1].has(v), "Wert %d kommt nur in einer Stufe vor" % v)
+	var lab: Array = m._dials[0]["labels"]
+	ok(lab[0].size() == 8 and lab[1].size() == 8, "Jede Stufe hat acht eigene Werte")
+	var pairs := false
+	for st in 2:
+		for l in lab[st]:
+			pairs = pairs or not str(l.text).is_valid_int()
+	ok(not pairs, "Skala zeigt Einzelwerte statt Von-bis-Angaben")
+	ok(lab[0][7].text == "1000" and lab[1][7].text == "2000", "Blauer Ring Stufe I, schwarzer Ring Stufe II")
+	ok(absf(MillModel.dial_angle(8) - TAU) < 0.001, "Rasten verteilen sich auf die vollen 360°")
+	ok(MillModel.RPM_DIAL[0].has(250) and MillModel.RPM_DIAL[1].has(2000) and MillModel.FEED_DIAL[0].has(10) and MillModel.FEED_DIAL[1].has(500), "Werte wie auf dem Bild")
+	# Knopf zeigt auf die Raste, Taste der aktiven Stufe ist eingedrückt
+	m.rpm_set = 40.0
+	m._sync_panel()
+	ok(absf(m._dials[0]["knob"].rotation.z) < 0.001, "Kleinster Wert steht oben")
+	ok(lab[0][0].modulate == m.LABEL_PICKED and lab[1][0].modulate == m.LABEL_DIM, "Gewählter Wert hervorgehoben, andere Stufe gedimmt")
+	m.rpm_set = 2000.0
+	m._sync_panel()
+	ok(absf(m._dials[0]["knob"].rotation.z + MillModel.dial_angle(7)) < 0.001, "Größter Wert steht eine Raste vor dem kleinsten")
+	ok(lab[1][7].modulate == m.LABEL_PICKED and lab[0][7].modulate == m.LABEL_DIM, "Hervorhebung wechselt mit der Stufe")
+	ok(m._dials[0]["stages"][1].position.z < 0.0 and m._dials[0]["stages"][0].position.z == 0.0, "Aktive Taste ist eingedrückt")
+	# Griffhebel ist vorhanden und reicht über den Knopf hinaus
+	ok(Build.bounds(m._dials[0]["knob"]).size.length() > MillModel.HANDLE_R, "Griffhebel am Drehknopf")
+	# Alter Spielstand mit Wert außerhalb der Skala rastet ein
+	m.rpm_set = 4000.0
+	m.feed_set = 1000.0
+	m._sync_panel()
+	ok(m.rpm_set == 2000.0 and m.feed_set == 500.0, "Alte Werte rasten auf die Skala ein")
 	m.rpm_set = 630.0
 	m.feed_set = 100.0
-	m._sync_levers()
+	m._sync_panel()
 	await spin_up(m)
-	m.lever_step(0, 1)
-	m.lever_step(1, 1)
-	ok(m.rpm_set == 630.0 and m.feed_set == 100.0, "Hebel bei laufender Spindel gesperrt")
+	m.dial_step(0, 1)
+	m.dial_step(1, 1)
+	m.stage_set(0, 1)
+	m.stage_set(1, 1)
+	ok(m.rpm_set == 630.0 and m.feed_set == 100.0, "Knöpfe und Stufen bei laufender Spindel gesperrt")
 	for a in ["rpm_up", "rpm_down", "feed_up", "feed_down"]:
 		var e := InputEventAction.new()
 		e.action = a
@@ -276,15 +360,31 @@ func _initialize() -> void:
 	m._unhandled_input(sp)
 	ok(not m.spindle_on, "Spindel per Taste aus")
 	await stop(m)
-	# Klick auf die Platte: Strahl auf die Hebelkulisse
-	var plate: Node3D = m._lever_plate
-	var above: Vector3 = plate.to_global(Vector3(MillModel.LEVER_X[0], m._knobs[0].position.y + 0.03, 0.0))
-	var hit: Dictionary = m.lever_at(above + Vector3(0.5, 0, 0), Vector3(-1, 0, 0))
-	ok(hit.get("lever", -1) == 0 and hit.get("up", false), "Klick über dem Griff = Stufe hoch")
-	var below: Vector3 = plate.to_global(Vector3(MillModel.LEVER_X[1], m._knobs[1].position.y - 0.03, 0.0))
-	hit = m.lever_at(below + Vector3(0.5, 0, 0), Vector3(-1, 0, 0))
-	ok(hit.get("lever", -1) == 1 and not hit.get("up", true), "Klick unter dem Griff = Stufe runter")
-	ok(m.lever_at(above + Vector3(-0.5, 0, 0), Vector3(1, 0, 0)).is_empty(), "Von hinten kein Hebel")
+	# Sichtstrahl auf das Bedienfeld
+	var plate: Node3D = m._panel_plate
+	var ray_to := func(q: Vector2) -> Dictionary:
+		var at: Vector3 = plate.to_global(Vector3(q.x, q.y, 0.0))
+		return m.panel_hit(at + Vector3(0.5, 0, 0), Vector3(-1, 0, 0))
+	m.rpm_set = 630.0
+	m.feed_set = 100.0
+	m._sync_panel()
+	var cy0: float = MillModel.DIAL_Y[0]
+	var cy1: float = MillModel.DIAL_Y[1]
+	var hit: Dictionary = ray_to.call(Vector2(MillModel.STAGE_X[1], cy0 + MillModel.STAGE_DY))
+	ok(hit.get("dial", -1) == 0 and hit.get("stage", -1) == 1, "Taste II der Drehzahl getroffen")
+	hit = ray_to.call(Vector2(MillModel.STAGE_X[0], cy1 + MillModel.STAGE_DY))
+	ok(hit.get("dial", -1) == 1 and hit.get("stage", -1) == 0, "Taste I des Vorschubs getroffen")
+	var cur0: float = MillModel.dial_angle(m.dial_index(0))
+	var grip0: float = MillModel.handle_angle(m.dial_index(0))
+	hit = ray_to.call(Vector2(sin(grip0), cos(grip0)) * MillModel.HANDLE_R + Vector2(0, cy0))
+	ok(hit.get("dial", -1) == 0 and hit.get("grab", false), "Griffkugel lässt sich greifen")
+	hit = ray_to.call(Vector2(sin(cur0 + 0.7), cos(cur0 + 0.7)) * MillModel.DIAL_R_BLACK + Vector2(0, cy0))
+	ok(hit.get("dial", -1) == 0 and not hit.get("grab", true) and hit.get("dir", 0) == 1, "Klick im Uhrzeigersinn neben den Griff")
+	hit = ray_to.call(Vector2(sin(cur0 - 0.7), cos(cur0 - 0.7)) * MillModel.DIAL_R_BLACK + Vector2(0, cy0))
+	ok(hit.get("dir", 0) == -1, "Klick gegen den Uhrzeigersinn neben den Griff")
+	ok(ray_to.call(Vector2(0.115, 0.0)).is_empty(), "Daneben trifft nichts")
+	var back_at: Vector3 = plate.to_global(Vector3(0, cy0, 0))
+	ok(m.panel_hit(back_at + Vector3(-0.5, 0, 0), Vector3(1, 0, 0)).is_empty(), "Von hinten kein Treffer")
 	var hud_text := []
 	for b in w.mill_hud.find_children("*", "Button", true, false):
 		hud_text.append(b.text)
@@ -299,19 +399,19 @@ func _initialize() -> void:
 	var tool0: int = m.tool_idx
 	m._unhandled_input(kt)
 	ok(m.tool_idx == tool0, "Zifferntasten wechseln kein Werkzeug")
-	ok(m._knobs.size() == 2, "Nur noch Hebel für Drehzahl und Vorschub")
+	ok(m._dials.size() == 2, "Drehknöpfe für Drehzahl und Vorschub")
 	ok(not hud_text.has("Hebel"), "Kein Hebel-Knopf während der Bearbeitung")
 	ok(hud_text.has("Vorschub +") and hud_text.has("Vorschub -"), "Knöpfe Vorschub + und -")
 	var auto_btns := hud_text.filter(func(t): return str(t).begins_with("Auto "))
 	ok(auto_btns.is_empty(), "Keine einzelnen Auto-Knöpfe mehr")
-	# Klick auf die Hebel wirkt an der Maschine nicht
+	# Klick auf das Bedienfeld wirkt an der Maschine nicht
 	var rpm0: float = m.rpm_set
 	var cl := InputEventMouseButton.new()
 	cl.button_index = MOUSE_BUTTON_LEFT
 	cl.pressed = true
-	cl.position = m.op_cam.unproject_position(MillModel.LEVER_POS)
+	cl.position = m.op_cam.unproject_position(MillModel.PANEL_POS)
 	m._unhandled_input(cl)
-	ok(m.rpm_set == rpm0, "Hebel an der Maschine nicht bedienbar")
+	ok(m.rpm_set == rpm0, "Bedienfeld an der Maschine nicht bedienbar")
 
 	# Vorschub + und - gelten für die gewählte Achse
 	reset(w)
@@ -377,9 +477,7 @@ func _initialize() -> void:
 	if ts_nodes.size() == 1:
 		ok(mesh_bounds(l.carriage).end.x < mesh_bounds(ts_nodes[0]).position.x, "Schlitten erreicht bei voller Drehlänge den Reitstock nicht")
 	# ohne das seitlich angewinkelte Bedienpult, das über den Spindelkasten hinausragt
-	l._pult.visible = false
 	var lb := mesh_bounds(l)
-	l._pult.visible = true
 	ok(lb.size.x < 3.2, "Drehmaschine passt zur Drehlänge")
 
 	# Verlassen
@@ -388,80 +486,143 @@ func _initialize() -> void:
 	ok(not m.operating and p.operating == null, "Bedienung beendet")
 	ok(not w.mill_hud.visible and w.hud._cross.visible and w.hud._job_panel.visible, "HUD zurück")
 
-	# Hebelfeld als eigene Station
+	# Bedienfeld als eigene Station
 	for i in 3:
 		await physics_frame
-	p.global_position = m.to_global(m.LEVER_STAND) + Vector3(0, 0.05, 0)
+	p.global_position = m.to_global(m.PANEL_STAND) + Vector3(0, 0.05, 0)
 	p.yaw = PI / 2.0
 	p.pitch = -0.5
 	for i in 10:
 		await physics_frame
-	ok(p._focus != null and p._focus.get_prompt().contains("Hebelfeld"), "Hebelfeld lässt sich anvisieren")
+	ok(p._focus != null and p._focus.get_prompt().contains("Bedienfeld"), "Bedienfeld lässt sich anvisieren")
 	if p._focus:
 		p._focus.interact(p)
 	await process_frame
-	ok(m.panel_open and not m.operating, "Hebelfeld bedienen, ohne die Maschine zu bedienen")
-	ok(p.operating == m, "Spielfigur steht am Hebelfeld")
-	ok(w.mill_hud.visible and w.mill_hud._lever_box.visible and not w.mill_hud._op_nodes[0].visible, "Nur die Hebel-Anzeige ist sichtbar")
+	ok(m.panel_open and not m.operating, "Bedienfeld benutzen, ohne die Maschine zu bedienen")
+	ok(p.operating == m, "Spielfigur steht am Bedienfeld")
+	ok(w.mill_hud.visible and w.mill_hud._lever_box.visible and not w.mill_hud._op_nodes[0].visible, "Nur die Anzeige des Bedienfelds ist sichtbar")
 	await process_frame
+	var screen_of := func(q: Vector2) -> Vector2: return m.op_cam.unproject_position(m._panel_plate.to_global(Vector3(q.x, q.y, 0)))
+	var on_dial := func(k: int, a: float, r: float) -> Vector2: return screen_of.call(Vector2(sin(a), cos(a)) * r + Vector2(0, MillModel.DIAL_Y[k]))
 	var cl2 := InputEventMouseButton.new()
 	cl2.button_index = MOUSE_BUTTON_LEFT
 	cl2.pressed = true
 	m.rpm_set = 630.0
-	m._sync_levers()
-	cl2.position = m.op_cam.unproject_position(m._lever_plate.to_global(Vector3(MillModel.LEVER_X[0], m._knobs[0].position.y + 0.05, 0)))
+	m.feed_set = 100.0
+	m._sync_panel()
+	var ang: float = MillModel.dial_angle(m.dial_index(0))
+	cl2.position = on_dial.call(0, ang + 0.8, MillModel.DIAL_R_BLACK)
 	m._unhandled_input(cl2)
-	ok(m.rpm_set == 1000.0, "Klick im Hebelfeld stellt die Drehzahl eine Stufe hoch")
-	cl2.position = m.op_cam.unproject_position(m._lever_plate.to_global(Vector3(MillModel.LEVER_X[0], m._knobs[0].position.y - 0.05, 0)))
+	ok(m.rpm_set == 1000.0, "Klick auf die Skala dreht die Drehzahl eine Raste weiter")
+	ang = MillModel.dial_angle(m.dial_index(0))
+	cl2.position = on_dial.call(0, ang - 0.8, MillModel.DIAL_R_BLACK)
 	m._unhandled_input(cl2)
-	ok(m.rpm_set == 630.0, "Klick unter den Griff stellt sie eine Stufe zurück")
-	# Griff festhalten und über mehrere Stufen ziehen, er rastet auf der nächsten Stufe
-	var knob_pos := func(y: float) -> Vector2: return m.op_cam.unproject_position(m._lever_plate.to_global(Vector3(MillModel.LEVER_X[0], y, 0)))
+	ok(m.rpm_set == 630.0, "Klick gegen den Uhrzeigersinn dreht eine Raste zurück")
+	# Tasten I und II von beiden Knöpfen per Klick
+	cl2.position = screen_of.call(Vector2(MillModel.STAGE_X[1], MillModel.DIAL_Y[0] + MillModel.STAGE_DY))
+	m._unhandled_input(cl2)
+	ok(m.rpm_set == 1250.0, "Klick auf Taste II: 630 wird 1250 /min")
+	cl2.position = screen_of.call(Vector2(MillModel.STAGE_X[0], MillModel.DIAL_Y[0] + MillModel.STAGE_DY))
+	m._unhandled_input(cl2)
+	ok(m.rpm_set == 630.0, "Klick auf Taste I: wieder 630 /min")
+	cl2.position = screen_of.call(Vector2(MillModel.STAGE_X[1], MillModel.DIAL_Y[1] + MillModel.STAGE_DY))
+	m._unhandled_input(cl2)
+	ok(m.feed_set == 200.0 and m.rpm_set == 630.0, "Taste II des Vorschubs: 100 wird 200 mm/min, Drehzahl bleibt")
+	cl2.position = screen_of.call(Vector2(MillModel.STAGE_X[0], MillModel.DIAL_Y[1] + MillModel.STAGE_DY))
+	m._unhandled_input(cl2)
+	ok(m.feed_set == 100.0, "Taste I des Vorschubs")
+	# Griff festhalten und über mehrere Rasten ziehen
 	var grab := InputEventMouseButton.new()
 	grab.button_index = MOUSE_BUTTON_LEFT
 	grab.pressed = true
-	grab.position = knob_pos.call(m._knobs[0].position.y)
+	grab.position = on_dial.call(0, MillModel.handle_angle(m.dial_index(0)), MillModel.HANDLE_R)
 	m._unhandled_input(grab)
-	ok(m._drag_lever == 0 and m.rpm_set == 630.0, "Griff festgehalten, Klick allein verstellt nichts")
+	ok(m._drag_dial == 0 and m.rpm_set == 630.0, "Griff festgehalten, Klick allein verstellt nichts")
 	var mv := InputEventMouseMotion.new()
-	mv.position = knob_pos.call(MillModel.lever_y(8, MillModel.RPM_STEPS.size()) + 0.004)
+	mv.position = on_dial.call(0, MillModel.handle_angle(1) + 0.05, MillModel.HANDLE_R)
 	m._unhandled_input(mv)
-	ok(m.rpm_set == 2500.0, "Ziehen nach oben rastet auf 2500 /min")
-	ok(absf(m._knobs[0].position.y - MillModel.lever_y(8, MillModel.RPM_STEPS.size())) < 0.0001, "Griff steht auf der Stufe")
-	mv.position = knob_pos.call(-1.0)
+	ok(m.rpm_set == 63.0, "Ziehen gegen den Uhrzeigersinn rastet auf 63 /min")
+	ok(absf(m._dials[0]["knob"].rotation.z + MillModel.dial_angle(1)) < 0.001, "Griff steht auf der Raste")
+	mv.position = on_dial.call(0, MillModel.handle_angle(0), MillModel.HANDLE_R)
 	m._unhandled_input(mv)
-	ok(m.rpm_set == 63.0, "Ziehen über das Ende bleibt auf der untersten Stufe")
+	ok(m.rpm_set == 40.0, "Ziehen auf die erste Raste: 40 /min")
+	mv.position = on_dial.call(0, MillModel.handle_angle(7), MillModel.HANDLE_R)
+	m._unhandled_input(mv)
+	ok(m.rpm_set == 1000.0, "Griff zieht ohne Anschlag direkt über oben hinweg auf 1000 /min")
+	for pos in 8:
+		mv.position = on_dial.call(0, MillModel.handle_angle(pos), MillModel.HANDLE_R)
+		m._unhandled_input(mv)
+		ok(m.dial_index(0) == pos, "Griff erreicht Raste %d" % pos)
 	var rel := InputEventMouseButton.new()
 	rel.button_index = MOUSE_BUTTON_LEFT
 	rel.pressed = false
 	rel.position = mv.position
 	m._unhandled_input(rel)
-	ok(m._drag_lever == -1, "Loslassen beendet das Ziehen")
-	mv.position = knob_pos.call(0.1)
+	ok(m._drag_dial == -1, "Loslassen beendet das Ziehen")
+	mv.position = on_dial.call(0, MillModel.handle_angle(4), MillModel.HANDLE_R)
 	m._unhandled_input(mv)
-	ok(m.rpm_set == 63.0, "Ohne gehaltene Taste bewegt sich der Griff nicht")
+	ok(m.rpm_set == 1000.0, "Ohne gehaltene Taste bewegt sich der Griff nicht")
 	var feed0: float = m.feed_set
-	grab.position = m.op_cam.unproject_position(m._lever_plate.to_global(Vector3(MillModel.LEVER_X[1], m._knobs[1].position.y, 0)))
+	grab.position = on_dial.call(1, MillModel.handle_angle(m.dial_index(1)), MillModel.HANDLE_R)
 	m._unhandled_input(grab)
-	ok(m._drag_lever == 1, "Vorschub-Griff lässt sich festhalten")
-	mv.position = m.op_cam.unproject_position(m._lever_plate.to_global(Vector3(MillModel.LEVER_X[1], MillModel.lever_y(9, MillModel.FEED_STEPS.size()), 0)))
+	ok(m._drag_dial == 1, "Griff am Vorschub-Knopf lässt sich festhalten")
+	mv.position = on_dial.call(1, MillModel.handle_angle(7), MillModel.HANDLE_R)
 	m._unhandled_input(mv)
-	ok(m.feed_set == 630.0 and feed0 != 630.0, "Vorschub-Griff ziehen rastet auf 630 mm/min")
+	ok(m.feed_set == 250.0 and feed0 != 250.0, "Vorschub-Griff ziehen rastet auf 250 mm/min")
 	m._unhandled_input(rel)
 	# Beim Ziehen gesperrt, solange die Spindel läuft
 	m.spindle_speed = 500.0
-	m._drag_lever = 0
-	mv.position = knob_pos.call(0.1)
+	m._drag_dial = 0
+	mv.position = on_dial.call(0, MillModel.handle_angle(4), MillModel.HANDLE_R)
 	m._unhandled_input(mv)
-	ok(m.rpm_set == 63.0, "Ziehen bei laufender Spindel gesperrt")
-	m._drag_lever = -1
+	ok(m.rpm_set == 1000.0, "Ziehen bei laufender Spindel gesperrt")
+	m._drag_dial = -1
 	m.spindle_speed = 0.0
 	var ik := InputEventAction.new()
 	ik.action = "interact"
 	ik.pressed = true
 	m._unhandled_input(ik)
 	await process_frame
-	ok(not m.panel_open and p.operating == null, "Taste E verlässt das Hebelfeld")
-	ok(not w.mill_hud.visible and w.hud._cross.visible, "HUD nach dem Hebelfeld zurück")
+	ok(not m.panel_open and p.operating == null, "Taste E verlässt das Bedienfeld")
+	ok(not w.mill_hud.visible and w.hud._cross.visible, "HUD nach dem Bedienfeld zurück")
+	# Normreihen
+	var ds := {"end_mill": [3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 25], "drill": [3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 25], "face_mill": [32, 40, 50, 63, 80, 100, 125]}
+	for kind_n in ds:
+		var have := []
+		for t in MillTools.of_kind(kind_n):
+			have.append(int(t["d"]))
+		ok(have == ds[kind_n], "Normreihe %s: %s" % [kind_n, str(have)])
+	var seen := {}
+	for t in MillTools.TOOLS:
+		ok(not seen.has(t["id"]), "Werkzeug-id einmalig: " + str(t["id"]))
+		seen[t["id"]] = true
+		ok(int(t["price"]) > 0 and float(t["ap_max"]) > 0.0 and float(t["fz_max"]) > 0.0, "Werkzeugdaten vollständig: " + str(t["id"]))
+		ok(str(t["name"]).contains("Ø%d" % int(t["d"])), "Name nennt den Durchmesser: " + str(t["id"]))
+		var asm: Node3D = MillTools.assembly(t)
+		root.add_child(asm)
+		var box: AABB = Build.bounds(asm)
+		var cut_r: float = float(t["d"]) * 0.0005
+		ok(absf(box.position.y) < 0.002, "Schneide bei y = 0: " + str(t["id"]))
+		ok(box.size.x >= cut_r * 1.8, "Modell hat den Durchmesser: %s %.4f" % [t["id"], box.size.x])
+		asm.free()
+		var bm: Node3D = MillTools.bench_model(t)
+		root.add_child(bm)
+		var bb: AABB = Build.bounds(bm)
+		ok(bb.size.length() > 0.01, "Werkbank-Modell hat Geometrie: " + str(t["id"]))
+		bm.free()
+	# Alle Größen schneiden mit passendem Durchmesser
+	m.estop = false
+	m.spindle_on = false
+	m.spindle_speed = 0.0
+	m.tool_z = 200.0
+	for id in ["F25", "MK125", "B16", "F3"]:
+		m.select_tool(m.tool_index(id), true)
+		ok(m.tool()["id"] == id and absf(m.tool_radius() - float(MillTools.by_id(id)["d"]) * 0.5) < 0.001, "%s lässt sich einsetzen" % id)
+		ok(float(m.cut_data()["fz_max"]) > 0.0, "%s hat Schnittdaten" % id)
+	var dr3: Dictionary = Materials.mill_data("S235", MillTools.by_id("B3"), 1000.0)
+	var dr16: Dictionary = Materials.mill_data("S235", MillTools.by_id("B16"), 1000.0)
+	ok(float(dr3["fz_rec"]) < float(dr16["fz_rec"]), "Dünner Bohrer bekommt weniger Vorschub")
+	ok(is_equal_approx(float(Materials.mill_data("S235", MillTools.by_id("B10"), 1000.0)["fz_rec"]), 0.15), "Ø10 bleibt beim Tabellenwert")
+	m.select_tool(0, true)
 	print("CHECKS %d FAILS %d" % [checks, fails])
 	quit()

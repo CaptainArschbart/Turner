@@ -27,6 +27,7 @@ func click(p) -> void:
 	p.click_focus()
 func _initialize() -> void:
 	await process_frame
+	root.get_node("GameState").pending = {"unlock_all": true}
 	var w = load("res://scenes/world.tscn").instantiate()
 	root.add_child(w)
 	for i in 5:
@@ -34,6 +35,10 @@ func _initialize() -> void:
 	var p = w.player
 	var m = w.mill
 	var l = w.lathe
+	# Werkbänke werden sonst am PC gekauft und mit dem Baumenü aufgestellt
+	w.spawn_bench("lathe", Vector2(0.6, 0.35), 2)
+	w.spawn_bench("mill", Vector2(6.85, -0.95), 2)
+	await process_frame
 	var mb = w.mill_bench
 	var lb = w.lathe_bench
 
@@ -43,6 +48,15 @@ func _initialize() -> void:
 	ok(not slot_of(mb, "F6").model.visible, "F6 steckt in der Spindel und fehlt auf der Bank")
 	ok(slot_of(mb, "F10").model.visible, "F10 liegt auf der Bank")
 	ok(not slot_of(lb, "T1").model.visible and not slot_of(lb, "T3").model.visible, "T1 und T3 stecken im Halter")
+	# Drei Reihen, alles bleibt auf der Platte
+	for s in mb._slots:
+		var box: AABB = Build.bounds(s.model)
+		var c: Vector3 = mb.to_local(box.get_center())
+		ok(absf(c.x) < mb.width * 0.5 and absf(c.z) < mb.depth * 0.5, "%s liegt auf der Werkbank" % s.tool_id)
+		ok(box.position.y >= mb.TOP_Y - 0.01, "%s liegt auf der Platte" % s.tool_id)
+	for id in ["F25", "B25", "MK125", "MK32", "F3"]:
+		var mdl = slot_of(mb, id).model
+		ok(mdl.visible and mb.is_available(id), "%s liegt bereit" % id)
 	ok(slot_of(lb, "T5").model.visible, "T5 liegt auf der Bank")
 
 	# Fräsmaschine: Werkzeug nehmen
@@ -90,7 +104,9 @@ func _initialize() -> void:
 	await aim(p, from_op, tip)
 	ok(p._focus == m.tool_mount and p._prompt.contains("Fräsmaschine bedienen"), "Freie Hand: Maschine bedienen")
 	click(p)
-	ok(m.tool()["id"] == "F10" and p.held.is_empty(), "Freie Hand nimmt nichts aus der Spindel")
+	ok(m.spindle_empty and p.held.get("id", "") == "F10", "Freie Hand nimmt das Werkzeug aus der Spindel")
+	click(p)
+	ok(m.tool()["id"] == "F10" and not m.spindle_empty and p.held.is_empty(), "In die leere Spindel einsetzen, kein Tausch")
 
 	# Messerkopf: alle Werkzeuge lassen sich von Hand wechseln
 	await aim(p, stand, Build.bounds(slot_of(mb, "MK63").model).get_center())

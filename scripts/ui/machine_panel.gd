@@ -47,6 +47,11 @@ func _ready() -> void:
 	tabs.add_child(_build_holder_tab())
 	tabs.set_tab_title(0, "Spindel / Vorschub")
 	tabs.set_tab_title(1, "Werkzeughalter")
+	# Gleich richtig ausblenden, sonst zählen die G96-Zeilen beim ersten Öffnen zur Höhe
+	if lathe:
+		_rpm_row.visible = not lathe.css
+		for r in _css_rows:
+			r.visible = lathe.css
 
 
 # ------------------------------------------------------------ Aufbau

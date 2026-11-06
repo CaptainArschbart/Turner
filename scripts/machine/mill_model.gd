@@ -17,16 +17,27 @@ const TRAY_FLOOR := 0.56     # Oberkante Wannenboden
 const TRAY_TOP := 0.7        # Oberkante Wannenrand
 const PEDESTAL_X := 0.1      # halbe Breite der Führung, die den Kreuzschlitten trägt
 const GUARD_TOP := 1.05      # Oberkante der festen Schutzwand, 100 mm über dem Spanntisch
-# Hebelfeld, eingelassen in die rechte Säulenfläche
-const LEVER_POS := Vector3(0.182, 1.26, -0.43)
-const LEVER_H := 0.28        # Länge der Hebelkulisse
-const LEVER_X := [-0.058, 0.058]    # Lage der Kulissen auf dem Feld
-const RPM_STEPS := [63, 100, 160, 250, 400, 630, 1000, 1600, 2500, 4000]
-const FEED_STEPS := [10, 16, 25, 40, 63, 100, 160, 250, 400, 630, 1000]
+# Bedienfeld, eingelassen in die rechte Säulenfläche: je ein Drehknopf mit Tasten I und II
+const PANEL_POS := Vector3(0.182, 1.28, -0.43)
+const PANEL_W := 0.25
+const PANEL_H := 0.44
+const DIAL_Y := [0.09, -0.13] # Mitte der Drehknöpfe auf dem Feld: oben Drehzahl, unten Vorschub
+const DIAL_R := 0.08          # Außenradius der Skala
+const DIAL_R_BLACK := 0.068   # Schriftkreis des schwarzen Rings (Stufe II)
+const DIAL_R_BLUE := 0.046    # Schriftkreis des blauen Rings (Stufe I)
+const HANDLE_R := 0.09        # Griffkugel so weit von der Knopfmitte
+const HANDLE_OFFSET := PI / 8.0   # Griff steht zwischen zwei Werten und verdeckt so keinen
+const STAGE_X := [-0.07, 0.07]    # Tasten I und II
+const STAGE_DY := 0.1         # Tasten liegen so weit über der Knopfmitte
+const STAGE_R := 0.016
+# Rastwerte je Stufe. Blauer Ring = Stufe I, schwarzer Ring = Stufe II, beide über die vollen 360°.
+const RPM_DIAL := [[40, 63, 100, 160, 250, 400, 630, 1000], [80, 125, 200, 315, 500, 800, 1250, 2000]]
+const FEED_DIAL := [[10, 16, 25, 40, 63, 100, 160, 250], [20, 32, 50, 80, 125, 200, 315, 500]]
 
 
-## Gibt die beweglichen Teile zurück: saddle, table, vise, head, spindle, hw_x, hw_y, hw_z,
-## screen (Label3D), led, lamp, levers (Node3D des Hebelfelds, Bedienseite = lokal +Z) und knobs.
+## Gibt die beweglichen Teile zurück: saddle, table, vise, head, spindle, hw_x, hw_y, hw_z, screen
+## (Label3D), led, lamp, panel (Node3D des Bedienfelds, Bedienseite = lokal +Z) und dials
+## (je {"knob": Node3D, "stages": [Tasten I und II], "labels": [Werte Stufe I, Werte Stufe II]}).
 static func build(root: Node3D) -> Dictionary:
 	var grey := Build.mat(Color(0.8, 0.81, 0.8), 0.5, 0.1)
 	var light := Build.mat(Color(0.9, 0.9, 0.88), 0.5)
@@ -128,14 +139,10 @@ static func build(root: Node3D) -> Dictionary:
 	lamp.light_color = Color(1.0, 0.96, 0.9)
 	head.add_child(lamp)
 
-	# Hebelfeld: flach in der rechten Säulenfläche, so breit wie die Fläche es zulässt
-	var levers := Node3D.new()
-	levers.position = LEVER_POS
-	levers.rotation.y = PI / 2
-	root.add_child(levers)
-	Build.box(levers, Vector3(0.24, 0.37, 0.002), Vector3.ZERO, dark)
-	Build.box(levers, Vector3(0.23, 0.36, 0.004), Vector3.ZERO, light)
-	var knobs := [_lever(levers, 0, "Drehzahl 1/min", RPM_STEPS, black), _lever(levers, 1, "Vorschub mm/min", FEED_STEPS, black)]
+	# Bedienfeld: flach in der rechten Säulenfläche, so breit wie die Fläche es zulässt
+	var bedien := add_panel(root, PANEL_POS, PI / 2, RPM_DIAL, FEED_DIAL, "Vorschub mm/min", dark, light, black, steel)
+	var panel: Node3D = bedien["panel"]
+	var dials: Array = bedien["dials"]
 
 	# Rotes Bediengehäuse am Schwenkarm, schwarzer Kabelschlauch läuft außen an der Wanne vorbei
 	Build.box(root, Vector3(0.4, 0.05, 0.05), Vector3(0.38, 1.78, -0.42), dark)
@@ -166,28 +173,93 @@ static func build(root: Node3D) -> Dictionary:
 	Build.cyl(root, 0.025, 0.32, Vector3(0.43, 0.3, 0.1), hose, Build.AXIS_X)
 
 	return {"saddle": saddle, "table": table, "vise": vise, "head": head, "spindle": spindle,
-		"hw_x": hw_x, "hw_y": hw_y, "hw_z": hw_z, "screen": screen, "led": led, "lamp": lamp, "levers": levers, "knobs": knobs}
+		"hw_x": hw_x, "hw_y": hw_y, "hw_z": hw_z, "screen": screen, "led": led, "lamp": lamp, "panel": panel, "dials": dials}
 
 
-## Höhe einer Hebelstufe auf der Platte. Stufe 0 unten.
-static func lever_y(step: int, steps: int) -> float:
-	return -LEVER_H * 0.5 + LEVER_H * step / float(maxi(steps - 1, 1))
+## Bedienfeld mit je einem Drehknopf für Drehzahl und Vorschub. Bedienseite = lokal +Z. Auch für die
+## anderen konventionellen Maschinen. Gibt {"panel", "dials"} zurück.
+static func add_panel(root: Node3D, pos: Vector3, rot_y: float, rpm: Array, feed: Array, feed_title: String,
+		dark: Material, light: Material, black: Material, steel: Material) -> Dictionary:
+	var panel := Node3D.new()
+	panel.position = pos
+	panel.rotation.y = rot_y
+	root.add_child(panel)
+	Build.box(panel, Vector3(PANEL_W, PANEL_H, 0.002), Vector3.ZERO, dark)
+	Build.box(panel, Vector3(PANEL_W - 0.01, PANEL_H - 0.01, 0.004), Vector3.ZERO, light)
+	for sx in [-1.0, 1.0]:
+		for sy in [-1.0, 1.0]:
+			Build.cyl(panel, 0.005, 0.004, Vector3(sx * (PANEL_W * 0.5 - 0.016), sy * (PANEL_H * 0.5 - 0.016), 0.003), black, Build.AXIS_Z)
+	return {"panel": panel, "dials": [_dial(panel, 0, "Drehzahl 1/min", rpm, black, steel), _dial(panel, 1, feed_title, feed, black, steel)]}
 
 
-## Stufenhebel: senkrechte Kulisse mit Stufen-Beschriftung, der Griff wird von Mill verschoben.
-static func _lever(plate: Node3D, k: int, title: String, steps: Array, knob_m: Material) -> Node3D:
-	var x: float = LEVER_X[k]
-	Build.box(plate, Vector3(0.01, LEVER_H + 0.02, 0.002), Vector3(x - 0.024, 0, 0.003), Build.mat(Color(0.05, 0.05, 0.06), 0.7))
-	var dark := Color(0.08, 0.08, 0.09)
-	Build.label(plate, title, Vector3(x, LEVER_H * 0.5 + 0.022, 0.004), 0.00022, dark, 32)
-	for i in steps.size():
-		Build.label(plate, str(steps[i]), Vector3(x + 0.014, lever_y(i, steps.size()), 0.004), 0.0003, dark, 32)
+## Winkel einer Raste, im Uhrzeigersinn ab 12 Uhr. Die Rasten verteilen sich auf die vollen 360°.
+static func dial_angle(pos: int, positions := 8) -> float:
+	return TAU * pos / float(maxi(positions, 1))
+
+
+## Winkel des Griffhebels, wenn der Knopf auf Raste pos steht.
+static func handle_angle(pos: int, positions := 8) -> float:
+	return dial_angle(pos, positions) + HANDLE_OFFSET
+
+
+## Drehknopf mit zweifarbiger Skala, Griffhebel und den Tasten für Stufe I und II darüber.
+static func _dial(plate: Node3D, k: int, title: String, values: Array, black: Material, steel: Material) -> Dictionary:
+	var cy: float = DIAL_Y[k]
+	var blue := Build.mat(Color(0.05, 0.16, 0.55), 0.35, 0.3)
+	var white := Color(0.95, 0.95, 0.95)
+
+	# Skala: Chromrand, schwarzer Ring, blauer Ring, feststehender Kragen
+	Build.cyl(plate, DIAL_R, 0.004, Vector3(0, cy, 0.003), steel, Build.AXIS_Z, false, 48)
+	Build.cyl(plate, DIAL_R - 0.002, 0.006, Vector3(0, cy, 0.004), black, Build.AXIS_Z, false, 48)
+	Build.cyl(plate, 0.057, 0.008, Vector3(0, cy, 0.005), blue, Build.AXIS_Z, false, 48)
+	Build.cyl(plate, 0.033, 0.012, Vector3(0, cy, 0.007), black, Build.AXIS_Z, false, 32)
+	# Jede Stufe hat ihren eigenen Ring mit Einzelwerten. Untere Hälfte so gedreht, dass sie lesbar bleibt.
+	var labels := [[], []]
+	for st in 2:
+		var r: float = DIAL_R_BLUE if st == 0 else DIAL_R_BLACK
+		var z := 0.0095 if st == 0 else 0.0075
+		var px := 0.00028 if st == 0 else 0.0003
+		var n: int = values[st].size()
+		for i in n:
+			var a := dial_angle(i, n)
+			var l := Build.label(plate, str(values[st][i]), Vector3(sin(a) * r, cy + cos(a) * r, z), px, white, 32)
+			l.rotation.z = -a + (PI if cos(a) < -0.01 else 0.0)
+			labels[st].append(l)
+
+	# Drehknopf: gerändelter Griff, Chromkappe, Marke auf den Wert und seitlich versetzter Griffhebel mit Kugel
 	var knob := Node3D.new()
-	knob.position = Vector3(x - 0.024, 0, 0.004)
+	knob.position = Vector3(0, cy, 0.012)
 	plate.add_child(knob)
-	Build.cyl(knob, 0.005, 0.03, Vector3(0, 0, 0.015), Build.mat(Color(0.62, 0.64, 0.67), 0.3, 0.9), Build.AXIS_Z)
-	Build.sphere(knob, 0.013, Vector3(0, 0, 0.033), knob_m)
-	return knob
+	Build.cyl(knob, 0.029, 0.018, Vector3(0, 0, 0.009), black, Build.AXIS_Z, false, 32)
+	for i in 16:
+		var a := TAU * i / 16.0
+		Build.box(knob, Vector3(0.004, 0.004, 0.016), Vector3(sin(a) * 0.029, cos(a) * 0.029, 0.009), black, false, Vector3(0, 0, -a))
+	Build.cyl(knob, 0.021, 0.004, Vector3(0, 0, 0.02), Build.mat(Color(0.85, 0.86, 0.88), 0.35, 0.4), Build.AXIS_Z, false, 32)
+	Build.label(knob, "I  II", Vector3(0, 0, 0.0225), 0.00034, Color(0.05, 0.05, 0.06), 32)
+	Build.box(knob, Vector3(0.003, 0.009, 0.002), Vector3(0, 0.032, 0.006), Build.emissive(Color(0.95, 0.95, 0.95), 0.6))
+	var arm := Node3D.new()
+	arm.rotation.z = -HANDLE_OFFSET
+	knob.add_child(arm)
+	Build.box(arm, Vector3(0.004, HANDLE_R - 0.02, 0.005), Vector3(0, (HANDLE_R + 0.02) * 0.5, 0.012), steel)
+	Build.sphere(arm, 0.012, Vector3(0, HANDLE_R, 0.016), black)
+
+	# Tastenleiste über dem Knopf
+	var bar_y := cy + STAGE_DY
+	Build.box(plate, Vector3(0.21, 0.04, 0.004), Vector3(0, bar_y, 0.003), steel)
+	Build.box(plate, Vector3(0.204, 0.034, 0.006), Vector3(0, bar_y, 0.003), black)
+	Build.label(plate, title.replace(" ", "\n"), Vector3(0, bar_y, 0.0065), 0.00024, white, 32)
+	var stages := []
+	for s in 2:
+		var x: float = STAGE_X[s]
+		# Chromring bleibt flach, damit die eingedrückte Taste sichtbar herausschaut
+		Build.cyl(plate, STAGE_R + 0.002, 0.004, Vector3(x, bar_y, 0.004), steel, Build.AXIS_Z, false, 24)
+		var btn := Node3D.new()
+		btn.position = Vector3(x, bar_y, 0.0)
+		plate.add_child(btn)
+		Build.cyl(btn, STAGE_R - 0.002, 0.012, Vector3(0, 0, 0.006), black, Build.AXIS_Z, false, 24)
+		Build.label(btn, ["I", "II"][s], Vector3(0, 0, 0.0125), 0.0004, white, 32)
+		stages.append(btn)
+	return {"knob": knob, "stages": stages, "labels": labels}
 
 
 ## Handrad, dreht sich um die angegebene Achse des zurückgegebenen Knotens.

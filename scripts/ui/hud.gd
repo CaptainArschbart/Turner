@@ -1,6 +1,8 @@
 class_name HUD
 extends CanvasLayer
-## Spiel-Oberfläche: Fadenkreuz, Hinweise, Positionsanzeige (DRO), Auftrag, Steuerungshilfe.
+## Spiel-Oberfläche: Fadenkreuz, Hinweise, Auftrag. An der CNC-Drehmaschine knapp gehalten: Achsen und die
+## NC-Werte S, F, KSS, T. An der konventionellen wie an der Fräse nur die Achsen. Links Alt (halten) klappt
+## alles Weitere auf, rechts Alt öffnet die Tasten. Oben rechts stehen Konturansicht und Zielmaße.
 
 var lathe: Lathe
 var _root: Control
@@ -11,22 +13,34 @@ var _msg: Label
 var _msg_t := 0.0
 var _dro_panel: PanelContainer
 var _dro: Label
+var _main: Label
+var _alert: Label
+var _details: VBoxContainer
 var _hw: Label
 var _status: Label
+var _detail_job: Label
 var _job_panel: PanelContainer
 var _job: Label
 var _money: Label
-var _help_panel: PanelContainer
-var _help: Label
+var _xp: Label
+var _chip: PanelContainer
+var _free: Label
+var _overlay: ControlsOverlay
 var _result_panel: PanelContainer
 var _result: Label
 var _result_t := 0.0
 var _fps: Label
 const MachinePanel := preload("res://scripts/ui/machine_panel.gd")
 
-var _tool_box: VBoxContainer
 var _panel: PanelContainer
 var _profile: ProfileView
+var _lever_box: PanelContainer
+var _lever_info: Label
+var _lever_lathe: Lathe = null
+var _clock: Label
+var _machine_title: Label
+var _target_panel: PanelContainer
+var _targets: Label
 
 
 func _ready() -> void:
@@ -84,18 +98,32 @@ func _ready() -> void:
 	_root.add_child(_dro_panel)
 	var dv := VBoxContainer.new()
 	_dro_panel.add_child(dv)
-	var dt := _label(16)
-	dt.text = "WEILER E50 HD  -  Positionsanzeige"
-	dt.add_theme_color_override("font_color", UITheme.ACCENT)
-	dv.add_child(dt)
 	_dro = _label(26)
 	_dro.add_theme_color_override("font_color", Color(0.55, 0.95, 1.0))
 	dv.add_child(_dro)
-	_hw = _label(19)
+	_main = _label(18)
+	dv.add_child(_main)
+	_alert = _alert_label()
+	dv.add_child(_alert)
+	# Aufgeklappt, solange links Alt gehalten wird
+	_details = VBoxContainer.new()
+	_details.visible = false
+	dv.add_child(_details)
+	_details.add_child(HSeparator.new())
+	_machine_title = _label(16)
+	_machine_title.text = "DREHMASCHINE"
+	_machine_title.add_theme_color_override("font_color", UITheme.ACCENT)
+	_details.add_child(_machine_title)
+	_hw = _label(17)
 	_hw.add_theme_color_override("font_color", UITheme.ACCENT)
-	dv.add_child(_hw)
-	_status = _label(17)
-	dv.add_child(_status)
+	_details.add_child(_hw)
+	_status = _label(16)
+	_details.add_child(_status)
+	_details.add_child(HSeparator.new())
+	_detail_job = _label(15)
+	_detail_job.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_detail_job.custom_minimum_size.x = 460
+	_details.add_child(_detail_job)
 
 	# Auftrag
 	_job_panel = PanelContainer.new()
@@ -112,24 +140,17 @@ func _ready() -> void:
 	_money = _label(20)
 	_money.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
 	jv.add_child(_money)
+	_xp = _label(16)
+	_xp.add_theme_color_override("font_color", Color(0.65, 0.8, 1.0))
+	jv.add_child(_xp)
 	_job = _label(16)
 	_job.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_job.custom_minimum_size.x = 420
 	jv.add_child(_job)
 
-	# Steuerungshilfe
-	_help_panel = PanelContainer.new()
-	_help_panel.anchor_top = 1
-	_help_panel.anchor_bottom = 1
-	_help_panel.offset_left = 20
-	_help_panel.offset_top = -20
-	_help_panel.offset_bottom = -20
-	_help_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_help_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_root.add_child(_help_panel)
-	_help = _label(15)
-	_help.add_theme_color_override("font_color", Color(0.85, 0.87, 0.9))
-	_help_panel.add_child(_help)
+	# Unten rechts: nur ein Hinweis, die volle Übersicht öffnet rechts Alt
+	_chip = ControlsOverlay.make_chip()
+	_root.add_child(_chip)
 
 	# Ergebnis
 	_result_panel = PanelContainer.new()
@@ -142,25 +163,68 @@ func _ready() -> void:
 	_result = _label(19)
 	_result_panel.add_child(_result)
 
-	# Unten rechts: Bedienpult, Konturansicht (wächst nach oben)
-	_tool_box = VBoxContainer.new()
-	_tool_box.add_theme_constant_override("separation", 4)
-	_tool_box.anchor_left = 1
-	_tool_box.anchor_right = 1
-	_tool_box.anchor_top = 1
-	_tool_box.anchor_bottom = 1
-	_tool_box.offset_left = -480
-	_tool_box.offset_right = -20
-	_tool_box.offset_top = -20
-	_tool_box.offset_bottom = -20
-	_tool_box.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_tool_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_root.add_child(_tool_box)
+	# Oben rechts: Konturansicht, an derselben Stelle wie die Draufsicht der Fräsmaschine
+	_profile = ProfileView.new()
+	_profile.anchor_left = 1
+	_profile.anchor_right = 1
+	_profile.offset_left = -480
+	_profile.offset_right = -20
+	_profile.offset_top = 20
+	_profile.offset_bottom = 180
+	_root.add_child(_profile)
+	_target_panel = PanelContainer.new()
+	_target_panel.anchor_left = 1
+	_target_panel.anchor_right = 1
+	_target_panel.offset_left = -480
+	_target_panel.offset_right = -20
+	_target_panel.offset_top = 184
+	_target_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.add_child(_target_panel)
+	_targets = _label(15)
+	_targets.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_target_panel.add_child(_targets)
+
+	# Tastenübersicht mit dem Bedienpult als eigenem Tab
+	_overlay = ControlsOverlay.new()
+	_root.add_child(_overlay)
 	_panel = MachinePanel.new()
 	_panel.lathe = lathe
-	_tool_box.add_child(_panel)
-	_profile = ProfileView.new()
-	_tool_box.add_child(_profile)
+	_overlay.add_extra("Bedienpult", _panel)
+	_overlay.add_extra("Bedienknöpfe", _conv_buttons())
+
+	_free = _label(18)
+	_free.text = "TESTMODUS: alles gratis (^ schaltet aus)"
+	_free.add_theme_color_override("font_color", Color(1.0, 0.55, 0.3))
+	_free.anchor_left = 0
+	_free.anchor_right = 1
+	_free.offset_top = 28
+	_free.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_free.visible = false
+	_root.add_child(_free)
+
+	# Bedienfeld der konventionellen Drehmaschine: eigene kleine Anzeige, unten in der Mitte
+	_lever_box = PanelContainer.new()
+	_lever_box.anchor_left = 0.5
+	_lever_box.anchor_right = 0.5
+	_lever_box.anchor_top = 1
+	_lever_box.anchor_bottom = 1
+	_lever_box.offset_top = -20
+	_lever_box.offset_bottom = -20
+	_lever_box.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_lever_box.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_lever_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lever_box.visible = false
+	_root.add_child(_lever_box)
+	_lever_info = _label(16)
+	_lever_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_lever_box.add_child(_lever_info)
+
+	_clock = _label(17)
+	_clock.anchor_left = 0
+	_clock.anchor_right = 1
+	_clock.offset_top = 56
+	_clock.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_root.add_child(_clock)
 
 	_fps = _label(14)
 	_fps.anchor_left = 0.5
@@ -168,12 +232,72 @@ func _ready() -> void:
 	_fps.offset_top = 6
 	_fps.add_theme_color_override("font_color", Color(1, 1, 0.5))
 	_root.add_child(_fps)
-	Settings.changed.connect(_refresh_help)
+	Settings.changed.connect(_refresh_pages)
 	set_operating(false)
 
 
-func set_job_data(job: Dictionary) -> void:
+## Anzeigen gelten ab jetzt für diese Drehmaschine.
+func use_lathe(m: Lathe) -> void:
+	lathe = m
+	_panel.lathe = m
+
+
+## Station am Bedienfeld einer Drehmaschine.
+func set_levers(m: Lathe, on: bool) -> void:
+	_lever_lathe = m if on else null
+	_lever_box.visible = on
+	set_other_machine(on)
+
+
+## Knöpfe der konventionellen Drehmaschine, dieselben wie an der Fräse.
+func _conv_buttons() -> Control:
+	var controls := GridContainer.new()
+	controls.columns = 4
+	controls.add_theme_constant_override("h_separation", 6)
+	controls.add_theme_constant_override("v_separation", 6)
+	controls.add_child(_button("Spindel", func(): lathe.toggle_spindle()))
+	controls.add_child(_button("Not-Halt", func(): lathe.toggle_estop()))
+	controls.add_child(_button("Kühlung", func(): lathe.coolant = not lathe.coolant))
+	controls.add_child(_button("Achse", func(): lathe.hw_axis = 1 - lathe.hw_axis))
+	controls.add_child(_button("Auto-Vorschub", func():
+		if lathe.auto_feed or lathe.auto_feed_x:
+			lathe.set_auto_feed(-1)
+		else:
+			lathe.set_auto_feed(0 if lathe.hw_axis == 0 else 1)))
+	controls.add_child(_button("Rohteil", func(): lathe.request_new_part()))
+	controls.add_child(_button("Abgeben", func(): lathe.request_submit()))
+	return controls
+
+
+func _button(text: String, cb: Callable) -> Button:
+	var b := UITheme.button(text, cb, 96)
+	b.custom_minimum_size.y = 36
+	b.focus_mode = Control.FOCUS_NONE
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b.add_theme_font_size_override("font_size", 15)
+	return b
+
+
+## Auftrag der Maschine: Sollkontur und Zielmaße oben rechts. grind: auch die Schleiffläche nennen.
+func set_job_data(job: Dictionary, grind := false) -> void:
 	_profile.job = job
+	_targets.text = target_text(job, grind)
+
+
+## Text des Felds mit den Zielmaßen.
+static func target_text(job: Dictionary, grind := false) -> String:
+	var key: String = Settings.binding_text("show_drawing")
+	if job.is_empty():
+		return "Zielmaße: kein Auftrag"
+	return "Zielmaße    [%s] Zeichnung\n%s" % [key, "\n".join(PackedStringArray(JobBoard.target_lines(job, grind)))]
+
+
+func _alert_label() -> Label:
+	var l := _label(18)
+	l.text = "!!! NOT-HALT AKTIV !!!"
+	l.add_theme_color_override("font_color", Color(1.0, 0.35, 0.3))
+	l.visible = false
+	return l
 
 
 func _label(size: int) -> Label:
@@ -199,12 +323,29 @@ func show_message(t: String, c := Color.WHITE) -> void:
 	_msg_t = 3.0
 
 
-func set_job(text: String) -> void:
+## text = Auftrag oben rechts, detail = Auftrag der Drehmaschine für die aufgeklappten Details.
+func set_job(text: String, detail := "") -> void:
 	_job.text = text
+	_detail_job.text = detail if detail != "" else text
+
+
+func set_clock(text: String, closed: bool) -> void:
+	_clock.text = text
+	_clock.add_theme_color_override("font_color", Color(1.0, 0.6, 0.35) if closed else Color(0.9, 0.93, 0.96))
+
+
+func set_skill_info(text: String) -> void:
+	_xp.text = text
 
 
 func set_money(money: int, parts: int) -> void:
-	_money.text = "Kontostand: %d EUR    |    Gefertigte Teile: %d" % [money, parts]
+	_money.text = "Werkstattkasse: %d EUR    |    Gefertigte Teile: %d" % [money, parts]
+
+
+## Text an die laufende Meldung anhängen, damit beide zu lesen sind.
+func append_message(t: String) -> void:
+	_msg.text = t if _msg_t <= 0.0 else "%s\n%s" % [_msg.text, t]
+	_msg_t = 5.0
 
 
 func show_result(text: String) -> void:
@@ -217,51 +358,161 @@ func show_result(text: String) -> void:
 
 
 var _operating := false
+var _other := false
 var _pult_help := false
 
 
 func set_operating(on: bool) -> void:
 	_operating = on
 	_pult_help = false
+	_set_details(false)
+	_overlay.set_open(false)
 	_dro_panel.visible = on
-	_cross.visible = not on
-	_tool_box.visible = on
+	_profile.visible = on
+	_target_panel.visible = on
 	_profile.lathe = lathe
-	_refresh_help()
+	if lathe:
+		_machine_title.text = lathe.machine_title().to_upper() if lathe.conventional else "DREHMASCHINE"
+		_main.visible = not lathe.conventional
+		_hw.visible = not lathe.conventional
+	_apply_mode()
+	_refresh_pages()
 
 
 ## An einer anderen Maschine (eigene Oberfläche): nur Hinweise und Ergebnisse bleiben sichtbar.
 func set_other_machine(on: bool) -> void:
-	_cross.visible = not on
-	_job_panel.visible = not on
-	_help_panel.visible = not on
+	_other = on
+	_overlay.set_open(false)
+	_apply_mode()
 
 
-func _refresh_help() -> void:
+func set_free_mode(on: bool) -> void:
+	_free.visible = on
+
+
+func _apply_mode() -> void:
+	var busy := _operating or _other
+	_cross.visible = not busy
+	_job_panel.visible = not busy
+	_chip.visible = not _other and not _overlay.visible
+
+
+func _set_details(on: bool) -> void:
+	_details.visible = on
+
+
+func _input(event: InputEvent) -> void:
+	if not visible or _other:
+		return
+	var side := ControlsOverlay.alt_side(event)
+	if side == ControlsOverlay.LEFT:
+		_set_details(_operating and event.pressed)
+	elif side == ControlsOverlay.RIGHT and event.pressed:
+		_overlay.set_open(not _overlay.visible)
+		_apply_mode()
+
+
+func _notification(what: int) -> void:
+	# Alt-Tab: das Loslassen kommt nicht mehr an
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and _details:
+		_set_details(false)
+
+
+func _refresh_pages() -> void:
 	var b := func(a: String) -> String: return Settings.binding_text(a)
+	var pages: Array
 	if _operating and _pult_help:
-		_help.text = "PULT   Maus: Softkeys und Felder anklicken, Zahlen tippen (Enter übernimmt, Esc bricht ab)
-%s  zurück zur Maschine   |   %s  Schutztür   |   %s  Not-Halt   |   %s  Verlassen" % [
-			b.call("cam_panel"), b.call("door_toggle"), b.call("emergency_stop"), b.call("interact")]
+		pages = [{"title": "Pult", "rows": [
+			["Maus", "Softkeys und Felder anklicken"],
+			["Ziffern", "Werte tippen, Enter übernimmt, Esc bricht ab"],
+			[b.call("cam_panel"), "Zurück zur Maschine"],
+			[b.call("door_toggle"), "Schutztür auf / zu"],
+			[b.call("emergency_stop"), "Not-Halt / quittieren"],
+			[b.call("interact"), "Maschine verlassen"],
+		]}]
 	elif _operating:
-		_help.text = "\n".join([
-			"VERFAHREN   %s%s%s%s  Schlitten im eingestellten Vorschub  (%s = 10-fach)" % [b.call("lathe_x_in"), b.call("lathe_z_minus"), b.call("lathe_x_out"), b.call("lathe_z_plus"), b.call("lathe_rapid")],
-			"HANDRAD     Mausrad   |   %s  Achse X/Z   |   %s  Schritt 0,001/0,01/0,1" % [b.call("hw_axis"), b.call("hw_step")],
-			"SPINDEL     %s  Start/Stopp   |   %s/%s  Drehzahl   |   %s  Kühlung" % [b.call("spindle_toggle"), b.call("rpm_up"), b.call("rpm_down"), b.call("coolant")],
-			"VORSCHUB    %s  Auto an/aus (Handrad-Achse), Richtung am Pult   |   %s/%s  mm/U" % [b.call("auto_feed"), b.call("feed_up"), b.call("feed_down")],
-			"PULT        Maus: Fenster rechts unten oder Bildschirm am Maschinenpult (%s) - dort Zyklen / NC-Programme" % b.call("cam_panel"),
-			"TÜR         Schwarzen Griff mit linker Maus ziehen oder %s   (Zyklusstart nur bei geschlossener Tür)" % b.call("door_toggle"),
-			"KAMERA      Rechte Maus  Drehen (+ Rad = Zoom)   |   Mittlere Maus  Verschieben   |   %s/%s/%s  Ansichten" % [b.call("cam_top"), b.call("cam_front"), b.call("cam_reset")],
-			"WERKZEUGE   Werkbank: Linksklick nimmt, am Halterkopf Linksklick setzt ein (vorher %s verlassen)" % b.call("interact"),
-			"SONST       1-4  Halterplatz einschwenken   |   %s  Not-Halt   |   %s  Rohteil   |   %s  Abgeben   |   %s  Verlassen" % [b.call("emergency_stop"), b.call("new_workpiece"), b.call("submit_part"), b.call("interact")],
-		])
+		pages = [
+			{"title": "Verfahren", "rows": [
+				[b.call("lathe_x_in"), "Planschlitten zustellen (X-)"],
+				[b.call("lathe_x_out"), "Planschlitten zurück (X+)"],
+				[b.call("lathe_z_minus"), "Bettschlitten zum Futter (Z-)"],
+				[b.call("lathe_z_plus"), "Bettschlitten weg vom Futter (Z+)"],
+				[b.call("lathe_rapid"), "10-fach verfahren (halten)"],
+				["Mausrad", "Handrad drehen"],
+				[b.call("hw_axis"), "Handrad-Achse X / Z"],
+				[b.call("hw_step"), "Handrad-Schritt 0,001 / 0,01 / 0,1 mm"],
+			]},
+			{"title": "Spindel", "rows": [
+				[b.call("spindle_toggle"), "Spindel Start / Stopp"],
+				[b.call("rpm_up"), "Drehzahl erhöhen"],
+				[b.call("rpm_down"), "Drehzahl verringern"],
+				[b.call("auto_feed"), "Auto-Vorschub an / aus (Handrad-Achse)"],
+				[b.call("feed_up"), "Vorschub erhöhen"],
+				[b.call("feed_down"), "Vorschub verringern"],
+				[b.call("coolant"), "Kühlung an / aus"],
+			] if not _is_conv() else [
+				[b.call("spindle_toggle"), "Spindel Start / Stopp"],
+				[b.call("auto_feed"), "Auto-Vorschub an / aus (Handrad-Achse)"],
+				[b.call("coolant"), "Kühlung an / aus"],
+				[b.call("interact"), "Am Bedienfeld am Spindelkasten: Drehzahl, Vorschub und Stufen I / II einstellen"],
+			]},
+			{"title": "Werkzeug", "rows": [
+				["1 - 4", "Halterplatz einschwenken"],
+				["Linksklick", "An der Werkbank nehmen oder zurücklegen, am Halterkopf einsetzen"],
+				[b.call("interact"), "Maschine verlassen, um zur Werkbank zu gehen"],
+			]},
+			{"title": "Ansicht", "rows": [
+				["Rechte Maus", "Kamera drehen"],
+				["Rechte Maus + Rad", "Zoomen"],
+				["Mittlere Maus", "Kamera verschieben"],
+				[b.call("cam_top"), "Draufsicht"],
+				[b.call("cam_front"), "Vorderansicht"],
+				[b.call("cam_reset"), "Standardansicht"],
+				[b.call("cam_panel"), "Bedienpult mit Zyklen und NC-Programmen" if not _is_conv() else "Nur an der CNC-Drehmaschine: Bedienpult"],
+			]},
+			{"title": "Sonstiges", "rows": [
+				[b.call("door_toggle"), "Schutztür auf / zu, auch per Griff mit der linken Maus" if not _is_conv() else "Nur an der CNC-Drehmaschine: Schutztür"],
+				[b.call("emergency_stop"), "Not-Halt / quittieren"],
+				["Linksklick", "Material aus den Händen einspannen, von außerhalb der Maschine"],
+				[b.call("new_workpiece"), "Rohteil anfordern: Hinweis, im Testmodus gratis"],
+				[b.call("submit_part"), "Teil prüfen und abgeben"],
+				[b.call("show_drawing"), "Werkstückzeichnung ein / aus"],
+				[b.call("interact"), "Maschine verlassen"],
+				["Alt links", "Alle Werte und Auftrag anzeigen (halten)"],
+				["^", "Testmodus an / aus: alles gratis"],
+			]},
+		]
 	else:
-		_help.text = "%s%s%s%s  Bewegen    %s  Rennen    %s  Ducken    %s  Springen\n%s  Interagieren    %s  Kamera 1./3. Person    %s  Menü" % [
-			b.call("move_forward"), b.call("move_left"), b.call("move_back"), b.call("move_right"),
-			b.call("sprint"), b.call("crouch"), b.call("jump"), b.call("interact"), b.call("toggle_view"), b.call("pause")]
+		pages = [{"title": "Bewegung", "rows": [
+			[b.call("move_forward"), "Vorwärts"],
+			[b.call("move_back"), "Rückwärts"],
+			[b.call("move_left"), "Nach links"],
+			[b.call("move_right"), "Nach rechts"],
+			[b.call("sprint"), "Rennen"],
+			[b.call("crouch"), "Ducken"],
+			[b.call("jump"), "Springen"],
+			[b.call("interact"), "Interagieren"],
+			["Linksklick", "Werkzeug, Material oder Spänebehälter aufnehmen, ablegen, einsetzen; Lagerregal ansehen"],
+			[b.call("toggle_view"), "Kamera 1. / 3. Person"],
+			[b.call("job_menu"), "Angenommene Aufträge, einen oben rechts anzeigen"],
+			[b.call("show_drawing"), "Werkstückzeichnung des gewählten Auftrags"],
+			[b.call("build_menu"), "Baumodus: anvisieren und E nehmen, Linksklick abstellen"],
+			[b.call("pause"), "Menü"],
+			["^", "Testmodus an / aus: alles gratis"],
+		]}]
+	_overlay.set_pages(pages, _operating and not _pult_help, "Bedienknöpfe" if _is_conv() else "Bedienpult")
+	ControlsOverlay.set_chip_text(_chip, "Alt links  Details     Alt rechts  Tasten und Bedienung" if _operating and not _pult_help else ("Alt rechts  Tasten" if _operating else "Tab  Aufträge     B  Baumodus     Alt rechts  Tasten"))
+
+
+func _is_conv() -> bool:
+	return lathe != null and lathe.conventional
 
 
 func _process(delta: float) -> void:
+	if _lever_lathe:
+		var unit := ("%.2f" % _lever_lathe.feed_set).replace(".", ",")
+		_lever_info.text = "Drehzahl %d /min (Stufe %s)    |    Vorschub %s mm/U (Stufe %s)\nGriff mit linker Maustaste ziehen, auf die Skala klicken oder Taste I/II drücken (nur bei stehender Spindel)    |    %s  Verlassen" % [
+			int(_lever_lathe.rpm_set), ["I", "II"][_lever_lathe.dial_stage(0)], unit, ["I", "II"][_lever_lathe.dial_stage(1)], Settings.binding_text("interact")]
 	if _msg_t > 0.0:
 		_msg_t -= delta
 		_msg.modulate.a = clampf(_msg_t, 0.0, 1.0)
@@ -276,10 +527,13 @@ func _process(delta: float) -> void:
 	var pult := _operating and lathe != null and lathe.in_panel_view()
 	if _operating:
 		_dro_panel.visible = not pult
-		_tool_box.visible = not pult
+		_profile.visible = not pult
+		_target_panel.visible = not pult
 		if pult != _pult_help:
 			_pult_help = pult
-			_refresh_help()
+			_overlay.set_open(false)
+			_apply_mode()
+			_refresh_pages()
 	if _operating and lathe:
 		var mx := "»" if lathe.hw_axis == 0 else " "
 		var mz := "»" if lathe.hw_axis == 1 else " "
@@ -289,30 +543,62 @@ func _process(delta: float) -> void:
 		var spindle := "LÄUFT" if lathe.spindle_speed > 5.0 else "steht"
 		var parts: Array[String] = []
 		var t := lathe.tool()
+		_main.text = "S    %d /min\nF    %s mm/U\nKSS  %s\nT    Platz %d: %s" % [
+			int(round(lathe.rpm())), ("%.2f" % lathe.feed()).replace(".", ","), "EIN" if lathe.coolant else "aus",
+			lathe.active_slot + 1, "%s %s" % [t["id"], t["name"]] if lathe.has_cutter() else "leer"]
+		_alert.visible = lathe.estop
 		var feed_txt := "längs" if lathe.auto_feed else ("plan" if lathe.auto_feed_x else "aus")
-		parts.append("T  Platz %d: %s D1 %s" % [lathe.active_slot + 1, t["id"], t["name"]])
 		var td := lathe.tool_data(t)
 		var mk := lathe.machine_pos()
 		parts.append("Korr. L1 %.3f  L2 %.3f  R %.1f  SL %d   MKS (F): X Ø %.3f  Z %.3f" % [
 			td["l1"], td["l2"], td["r"], td["sl"], mk.y * 2.0, mk.x])
-		parts.append("S  %d /min  (Soll %d%s)   Spindel: %s" % [int(round(lathe.spindle_speed)), int(round(lathe.rpm())), ", G96" if lathe.css else "", spindle])
-		parts.append("F  %.2f mm/U   Auto-Vorschub: %s" % [lathe.feed(), feed_txt])
-		parts.append("vc %d m/min %s   KSS: %s" % [int(vc), _vc_hint(vc), "EIN" if lathe.coolant else "aus"])
+		parts.append("Ist %d /min%s   Spindel: %s" % [int(round(lathe.spindle_speed)), "  (G96)" if lathe.css else "", spindle])
+		parts.append("Auto-Vorschub: %s" % feed_txt)
+		var win := lathe.vc_window()
+		parts.append("vc %d m/min %s  Soll %d-%d" % [int(vc), _vc_hint(vc), int(win.x), int(win.y)])
+		parts.append("Werkstoff  %s  (%s)" % [Materials.label(lathe.material), Materials.group_of(lathe.material)["title"]])
+		parts.append("Schneide: %d %% Hitze, %d %% Verschleiß   Spänewanne: %d %%" % [int(lathe.tool_heat * 100.0), int(lathe.tool_wear() * 100.0), int(lathe.tray.fraction() * 100.0)])
 		parts.append("Rz letzter Schnitt: %.1f µm%s" % [lathe.last_rz, ("  - " + lathe.last_rz_hint) if lathe.last_rz_hint != "" else ""])
 		var nc_txt := "Hand"
 		if lathe.nc.state != "idle":
 			nc_txt = "AUTO %s: %s" % [lathe.nc.prog.get("name", ""), lathe.nc.state_text()]
-		parts.append("Tür: %s   Steuerung: %s" % ["ZU" if lathe.door_closed() else ("AUF" if lathe.door_t < 0.001 else "fährt"), nc_txt])
-		if lathe.estop:
-			parts.append("!!! NOT-HALT AKTIV !!!")
-		_status.text = "\n".join(parts)
+		if lathe.grinder_type != "" and lathe.tool_stock != null:
+			parts.append("Scheibe %d %% unrund    Abziehwerkzeug: Z %d, bis X Ø %d anfahren" % [
+				int(lathe.tool_stock.dull(str(t["id"])) * 100.0), int(lathe.DRESS_Z), int(lathe.DRESS_X * 2.0)])
+		elif lathe.conventional:
+			parts.append("Steuerung: von Hand")
+		else:
+			parts.append("Tür: %s   Steuerung: %s" % ["ZU" if lathe.door_closed() else ("AUF" if lathe.door_t < 0.001 else "fährt"), nc_txt])
+		_status.text = "\n".join(_conv_lines(t, vc) if lathe.conventional else parts)
+		_dro_panel.reset_size()
+
+
+## Details der konventionellen Maschine, aufgebaut wie an der Fräse.
+func _conv_lines(t: Dictionary, vc: float) -> Array[String]:
+	var win := lathe.vc_window()
+	var auto := "längs" if lathe.auto_feed else ("plan" if lathe.auto_feed_x else "aus")
+	var lines: Array[String] = [
+		"Werkstoff  %s  (%s)" % [Materials.label(lathe.material), Materials.group_of(lathe.material)["title"]],
+		"T  Platz %d: %s %s" % [lathe.active_slot + 1, t["id"], t["name"]] if lathe.has_cutter() else "T  Halter ist leer",
+		"S  %d /min  (Soll %d)   Spindel: %s" % [int(round(lathe.spindle_speed)), int(lathe.rpm_set), "LÄUFT" if lathe.spindle_speed > 5.0 else "steht"],
+		"F  %s mm/U   Auto: %s" % [("%.2f" % lathe.feed_set).replace(".", ","), auto],
+		"vc %d m/min %s  Soll %d-%d   KSS: %s" % [int(vc), _vc_hint(vc), int(win.x), int(win.y), "EIN" if lathe.coolant else "aus"],
+		"Schneide: %d %% Hitze, %d %% Verschleiß   Spänewanne: %d %%" % [int(lathe.tool_heat * 100.0), int(lathe.tool_wear() * 100.0), int(lathe.tray.fraction() * 100.0)],
+		"Handrad: %s   Schritt %s / Raste" % [lathe.hw_axis_name(), Settings.handwheel_step_name()],
+		"Rz letzter Schnitt: %.1f µm%s" % [lathe.last_rz, ("  - " + lathe.last_rz_hint) if lathe.last_rz_hint != "" else ""],
+	]
+	if lathe.grinder_type != "" and lathe.tool_stock != null:
+		lines.append("Scheibe %d %% unrund    Abziehwerkzeug: Z %d, bis X Ø %d anfahren" % [
+			int(lathe.tool_stock.dull(str(t["id"])) * 100.0), int(lathe.DRESS_Z), int(lathe.DRESS_X * 2.0)])
+	return lines
 
 
 func _vc_hint(vc: float) -> String:
 	if vc < 1.0:
 		return ""
-	if vc < 80.0:
+	var win := lathe.vc_window()
+	if vc < win.x:
 		return "(zu niedrig)"
-	if vc > 320.0:
+	if vc > win.y:
 		return "(zu hoch)"
 	return "(gut)"

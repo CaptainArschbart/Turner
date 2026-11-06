@@ -1,11 +1,12 @@
 class_name Workshop
 extends RefCounted
-## Baut die Werkstatthalle (ca. 24 x 16 m) mit Einrichtung prozedural auf.
+## Baut die leere Werkstatthalle (ca. 24 x 16 m) mit dem Meisterbüro prozedural auf.
 ## Gibt ein Dictionary mit Lichtern zurück, damit die Qualitätseinstellung Schatten steuern kann.
 
 const W := 24.0
 const D := 16.0
 const H := 6.5
+const DOOR_Z := -2.0     # Mitte des Rolltors in der Ostwand
 
 
 static func build(root: Node3D) -> Dictionary:
@@ -58,22 +59,23 @@ static func build(root: Node3D) -> Dictionary:
 	var mark_y := 0.003
 	for z in [1.6, 5.2]:
 		Build.box(root, Vector3(W - 2.0, 0.004, 0.08), Vector3(0, mark_y, z), yellow)
-	# Maschinenbereich um die Drehmaschine
-	_rect_marking(root, Vector2(-1.7, -3.4), Vector2(2.7, 1.0), yellow)
-	_rect_marking(root, Vector2(-8.3, -6.9), Vector2(-4.7, -3.3), yellow)
-	# Maschinenbereich um die Fräsmaschine
-	_rect_marking(root, Vector2(5.2, -4.5), Vector2(8.5, -0.3), yellow)
+	# Die Bereiche der Maschinen zeichnet das Gelände.
 
 	# ---------------- Wände
 	Build.box(root, Vector3(W, H, 0.3), Vector3(0, H / 2, -D / 2 - 0.15), wall_mat, true)
 	Build.box(root, Vector3(W, H, 0.3), Vector3(0, H / 2, D / 2 + 0.15), wall_mat, true)
-	Build.box(root, Vector3(0.3, H, D), Vector3(-W / 2 - 0.15, H / 2, 0), wall_mat, true)
-	Build.box(root, Vector3(0.3, H, D), Vector3(W / 2 + 0.15, H / 2, 0), wall_mat, true)
+	# Die Westseite baut das Gelände aus Kacheln
+	# Ostwand mit Öffnung für das Rolltor
+	var door_z0 := DOOR_Z - RollDoor.WIDTH / 2.0
+	var door_z1 := DOOR_Z + RollDoor.WIDTH / 2.0
+	Build.box(root, Vector3(0.3, H, door_z0 + D / 2), Vector3(W / 2 + 0.15, H / 2, (door_z0 - D / 2) / 2), wall_mat, true)
+	Build.box(root, Vector3(0.3, H, D / 2 - door_z1), Vector3(W / 2 + 0.15, H / 2, (door_z1 + D / 2) / 2), wall_mat, true)
+	Build.box(root, Vector3(0.3, H - RollDoor.HEIGHT, RollDoor.WIDTH), Vector3(W / 2 + 0.15, (H + RollDoor.HEIGHT) / 2, DOOR_Z), wall_mat, true)
 	# Sockelpaneele
 	Build.box(root, Vector3(W, 1.2, 0.04), Vector3(0, 0.6, -D / 2 + 0.02), wall_low)
 	Build.box(root, Vector3(W, 1.2, 0.04), Vector3(0, 0.6, D / 2 - 0.02), wall_low)
-	Build.box(root, Vector3(0.04, 1.2, D), Vector3(-W / 2 + 0.02, 0.6, 0), wall_low)
-	Build.box(root, Vector3(0.04, 1.2, D), Vector3(W / 2 - 0.02, 0.6, 0), wall_low)
+	Build.box(root, Vector3(0.04, 1.2, door_z0 + D / 2), Vector3(W / 2 - 0.02, 0.6, (door_z0 - D / 2) / 2), wall_low)
+	Build.box(root, Vector3(0.04, 1.2, D / 2 - door_z1), Vector3(W / 2 - 0.02, 0.6, (door_z1 + D / 2) / 2), wall_low)
 	# Stahlstützen an den Längswänden
 	for x in range(-12, 13, 6):
 		for z in [-D / 2 + 0.2, D / 2 - 0.2]:
@@ -131,24 +133,14 @@ static func build(root: Node3D) -> Dictionary:
 			if (x == 2.0 and z == 0.0) or (x == -3.0 and z == 0.0) or (x == 2.0 and z == -5.0):
 				shadow_lights.append(l)
 
-	# ---------------- Einrichtung
-	_workbench(root, Vector3(-6.0, 0, 7.45), 0.0)
-	_workbench(root, Vector3(-3.0, 0, 7.45), 0.0)
-	_workbench(root, Vector3(0.5, 0, 7.45), 0.0)
-	_tool_cabinet(root, Vector3(3.0, 0, -2.9))
-	_tool_cabinet(root, Vector3(3.8, 0, -2.9))
-	_pallet_rack(root, Vector3(-11.4, 0, -3.5))
-	_cnc_mill(root, Vector3(-6.5, 0, -5.1))
-	_drill_press(root, Vector3(6.5, 0, -6.6))
-	_bandsaw(root, Vector3(-6.5, 0, 3.4))
+	# ---------------- Einrichtung: Die Halle ist leer bis auf das Büro und was an den Wänden hängt
 	_office(root)
-	_roll_door(root)
-	_misc(root)
+	_wall_signs(root)
 
 	return {"lights": lights, "shadow_lights": shadow_lights}
 
 
-static func _rect_marking(root: Node3D, a: Vector2, b: Vector2, m: Material) -> void:
+static func rect_marking(root: Node3D, a: Vector2, b: Vector2, m: Material) -> void:
 	var y := 0.003
 	var w := b.x - a.x
 	var d := b.y - a.y
@@ -156,114 +148,6 @@ static func _rect_marking(root: Node3D, a: Vector2, b: Vector2, m: Material) -> 
 	Build.box(root, Vector3(w, 0.004, 0.08), Vector3(a.x + w / 2, y, b.y), m)
 	Build.box(root, Vector3(0.08, 0.004, d), Vector3(a.x, y, a.y + d / 2), m)
 	Build.box(root, Vector3(0.08, 0.004, d), Vector3(b.x, y, a.y + d / 2), m)
-
-
-static func _workbench(root: Node3D, pos: Vector3, rot_y: float) -> void:
-	var n := Node3D.new()
-	n.position = pos
-	n.rotation.y = rot_y
-	root.add_child(n)
-	var wood := Build.mat(Color(0.66, 0.52, 0.36), 0.7)
-	var frame := Build.mat(Color(0.2, 0.22, 0.25), 0.5, 0.3)
-	var blue := Build.mat(Color(0.12, 0.33, 0.58), 0.5)
-	var steel := Build.mat(Color(0.5, 0.52, 0.55), 0.35, 0.9)
-	Build.box(n, Vector3(2.0, 0.05, 0.8), Vector3(0, 0.9, -0.45), wood, true)
-	for x in [-0.95, 0.95]:
-		Build.box(n, Vector3(0.06, 0.88, 0.7), Vector3(x, 0.44, -0.45), frame)
-	Build.box(n, Vector3(1.9, 0.03, 0.7), Vector3(0, 0.2, -0.45), frame)
-	# Schubladenblock
-	Build.box(n, Vector3(0.55, 0.7, 0.65), Vector3(0.6, 0.5, -0.45), blue)
-	for i in 4:
-		Build.box(n, Vector3(0.4, 0.015, 0.02), Vector3(0.6, 0.3 + i * 0.16, -0.12), steel)
-	# Schraubstock
-	Build.box(n, Vector3(0.22, 0.08, 0.14), Vector3(-0.5, 0.965, -0.55), frame)
-	Build.box(n, Vector3(0.18, 0.1, 0.05), Vector3(-0.5, 1.05, -0.6), frame)
-	Build.box(n, Vector3(0.18, 0.1, 0.05), Vector3(-0.5, 1.05, -0.48), frame)
-	Build.cyl(n, 0.01, 0.25, Vector3(-0.5, 1.03, -0.36), steel, Build.AXIS_Z)
-	# Lochwand mit Werkzeug
-	Build.box(n, Vector3(1.9, 0.9, 0.02), Vector3(0, 1.65, -0.83), Build.mat(Color(0.85, 0.85, 0.82), 0.8))
-	var red := Build.mat(Color(0.75, 0.1, 0.08), 0.5)
-	for i in 7:
-		var x := -0.8 + i * 0.26
-		Build.box(n, Vector3(0.03, 0.28 + (i % 3) * 0.06, 0.02), Vector3(x, 1.65, -0.81), steel)
-		Build.box(n, Vector3(0.05, 0.1, 0.03), Vector3(x, 1.53, -0.8), red if i % 2 == 0 else blue)
-	# Messmittel auf der Werkbank
-	Build.box(n, Vector3(0.3, 0.03, 0.12), Vector3(0.0, 0.94, -0.35), Build.mat(Color(0.1, 0.1, 0.1), 0.5))
-	Build.box(n, Vector3(0.22, 0.01, 0.03), Vector3(0.0, 0.96, -0.35), steel)
-
-
-static func _tool_cabinet(root: Node3D, pos: Vector3) -> void:
-	var body := Build.mat(Color(0.2, 0.22, 0.24), 0.55)
-	var front := Build.mat(Color(0.13, 0.36, 0.62), 0.45)
-	var handle := Build.mat(Color(0.7, 0.72, 0.74), 0.3, 0.9)
-	Build.box(root, Vector3(0.72, 1.0, 0.6), pos + Vector3(0, 0.5, 0), body, true)
-	for i in 6:
-		var y := 0.12 + i * 0.15
-		Build.box(root, Vector3(0.66, 0.13, 0.01), pos + Vector3(0, y, 0.3), front)
-		Build.box(root, Vector3(0.4, 0.015, 0.02), pos + Vector3(0, y + 0.04, 0.315), handle)
-	Build.box(root, Vector3(0.74, 0.03, 0.62), pos + Vector3(0, 1.015, 0), Build.mat(Color(0.12, 0.12, 0.12), 0.8))
-
-
-static func _pallet_rack(root: Node3D, pos: Vector3) -> void:
-	var up := Build.mat(Color(0.14, 0.3, 0.55), 0.5)
-	var beam := Build.mat(Color(0.95, 0.45, 0.08), 0.5)
-	var steel := Build.mat(Color(0.62, 0.64, 0.66), 0.3, 1.0)
-	var alu := Build.mat(Color(0.8, 0.82, 0.84), 0.35, 1.0)
-	var klt := Build.mat(Color(0.1, 0.35, 0.7), 0.6)
-	var length := 6.0
-	for i in 4:
-		var z := pos.z - length / 2 + i * 2.0
-		Build.box(root, Vector3(0.08, 3.2, 0.08), Vector3(pos.x - 0.45, 1.6, z), up, true)
-		Build.box(root, Vector3(0.08, 3.2, 0.08), Vector3(pos.x + 0.45, 1.6, z), up, true)
-	for y in [0.2, 1.2, 2.2]:
-		Build.box(root, Vector3(0.08, 0.1, length), Vector3(pos.x - 0.45, y, pos.z), beam)
-		Build.box(root, Vector3(0.08, 0.1, length), Vector3(pos.x + 0.45, y, pos.z), beam)
-		Build.box(root, Vector3(0.9, 0.02, length), Vector3(pos.x, y + 0.06, pos.z), Build.mat(Color(0.5, 0.5, 0.5), 0.8))
-	# Rundmaterial-Stangen
-	for i in 9:
-		var r := 0.02 + (i % 3) * 0.008
-		Build.cyl(root, r, 2.9, Vector3(pos.x - 0.3 + i * 0.07, 1.3 + r, pos.z - 1.4), steel if i % 2 == 0 else alu, Build.AXIS_Z)
-	for i in 6:
-		Build.cyl(root, 0.03, 2.9, Vector3(pos.x - 0.25 + i * 0.09, 2.3 + 0.03, pos.z + 1.5), steel, Build.AXIS_Z)
-	# Kleinladungsträger
-	for i in 5:
-		Build.box(root, Vector3(0.6, 0.28, 0.4), Vector3(pos.x, 0.42, pos.z - 2.4 + i * 1.1), klt)
-		Build.box(root, Vector3(0.6, 0.22, 0.4), Vector3(pos.x, 2.41, pos.z - 2.6 + i * 0.6), klt)
-
-
-static func _cnc_mill(root: Node3D, pos: Vector3) -> void:
-	var grey := Build.mat(Color(0.82, 0.83, 0.82), 0.45)
-	var anth := Build.mat(Color(0.18, 0.2, 0.22), 0.5)
-	Build.box(root, Vector3(2.6, 2.3, 2.0), pos + Vector3(0, 1.15, 0), grey, true)
-	Build.box(root, Vector3(2.62, 0.3, 2.02), pos + Vector3(0, 0.15, 0), anth)
-	Build.box(root, Vector3(1.2, 0.8, 0.02), pos + Vector3(-0.2, 1.35, 1.01), Build.glass(Color(0.4, 0.55, 0.6, 0.6)))
-	Build.box(root, Vector3(0.03, 1.6, 0.03), pos + Vector3(0.45, 1.2, 1.02), anth)
-	# Bedienpult
-	Build.box(root, Vector3(0.45, 0.6, 0.12), pos + Vector3(1.05, 1.4, 1.08), anth)
-	Build.box(root, Vector3(0.34, 0.24, 0.01), pos + Vector3(1.05, 1.52, 1.145), Build.emissive(Color(0.15, 0.4, 0.7), 1.5))
-	# Signalsäule
-	var colors := [Color(0.1, 0.9, 0.2), Color(1.0, 0.75, 0.0), Color(0.9, 0.1, 0.1)]
-	for i in 3:
-		Build.cyl(root, 0.035, 0.07, pos + Vector3(1.1, 2.4 + i * 0.075, 0.8), Build.emissive(colors[i], 1.5 if i == 0 else 0.2))
-	Build.label(root, "CNC-FRÄSZENTRUM", pos + Vector3(-0.2, 2.0, 1.011), 0.004, Color(0.2, 0.2, 0.22), 48)
-
-
-static func _drill_press(root: Node3D, pos: Vector3) -> void:
-	var green := Build.mat(Color(0.25, 0.42, 0.35), 0.5)
-	var steel := Build.mat(Color(0.65, 0.66, 0.68), 0.3, 1.0)
-	Build.box(root, Vector3(0.6, 0.1, 0.8), pos + Vector3(0, 0.05, 0), green, true)
-	Build.cyl(root, 0.06, 1.8, pos + Vector3(0, 0.95, -0.25), steel, Build.AXIS_Y, true)
-	Build.box(root, Vector3(0.35, 0.35, 0.65), pos + Vector3(0, 1.75, -0.05), green)
-	Build.box(root, Vector3(0.45, 0.04, 0.45), pos + Vector3(0, 0.9, 0.1), steel)
-	Build.cyl(root, 0.025, 0.25, pos + Vector3(0, 1.45, 0.15), steel)
-
-
-static func _bandsaw(root: Node3D, pos: Vector3) -> void:
-	var orange := Build.mat(Color(0.88, 0.45, 0.1), 0.5)
-	var anth := Build.mat(Color(0.2, 0.2, 0.22), 0.5)
-	Build.box(root, Vector3(1.5, 0.7, 0.6), pos + Vector3(0, 0.35, 0), anth, true)
-	Build.box(root, Vector3(1.1, 0.35, 0.2), pos + Vector3(0, 0.95, 0), orange, true, Vector3(0, 0, 0.12))
-	Build.box(root, Vector3(1.6, 0.06, 0.3), pos + Vector3(0, 0.72, 0.35), Build.mat(Color(0.6, 0.6, 0.62), 0.4, 0.9))
 
 
 static func _office(root: Node3D) -> void:
@@ -291,24 +175,8 @@ static func _office(root: Node3D) -> void:
 	Build.label(root, "MEISTERBÜRO", Vector3(7.97, 2.5, 6.0), 0.005, Color(0.15, 0.15, 0.15), 48, -PI / 2)
 
 
-static func _roll_door(root: Node3D) -> void:
-	var door := Build.mat(Color(0.7, 0.72, 0.74), 0.5, 0.4)
-	var x := W / 2 - 0.05
-	Build.box(root, Vector3(0.06, 4.5, 4.5), Vector3(x, 2.25, -2.0), door)
-	for i in 22:
-		Build.box(root, Vector3(0.08, 0.02, 4.5), Vector3(x - 0.01, 0.1 + i * 0.2, -2.0), Build.mat(Color(0.55, 0.57, 0.6), 0.5, 0.4))
-	var yb := Build.mat(Color(0.95, 0.75, 0.05), 0.6)
-	Build.box(root, Vector3(0.1, 4.6, 0.15), Vector3(x, 2.3, -4.3), yb)
-	Build.box(root, Vector3(0.1, 4.6, 0.15), Vector3(x, 2.3, 0.3), yb)
-
-
-static func _misc(root: Node3D) -> void:
-	var red := Build.mat(Color(0.8, 0.08, 0.06), 0.4)
+static func _wall_signs(root: Node3D) -> void:
 	var black := Build.mat(Color(0.08, 0.08, 0.08), 0.6)
-	# Feuerlöscher
-	for p in [Vector3(-11.75, 0, 2.5), Vector3(5.0, 0, -7.75), Vector3(11.75, 0, 2.8)]:
-		Build.cyl(root, 0.08, 0.55, p + Vector3(0, 0.35, 0), red)
-		Build.cyl(root, 0.03, 0.08, p + Vector3(0, 0.66, 0), black)
 	# Schilder
 	var sign_bg := Build.mat(Color(0.05, 0.35, 0.75), 0.6)
 	Build.box(root, Vector3(1.6, 0.7, 0.02), Vector3(0.5, 2.6, -7.97), sign_bg)
@@ -316,22 +184,6 @@ static func _misc(root: Node3D) -> void:
 	Build.box(root, Vector3(0.35, 0.35, 0.12), Vector3(-1.5, 1.6, 7.93), Build.mat(Color(0.05, 0.55, 0.25), 0.5))
 	Build.label(root, "+", Vector3(-1.5, 1.6, 7.865), 0.008, Color.WHITE, 64, PI)
 	Build.label(root, "WERKSTATT TURNER", Vector3(0, 5.0, 7.83), 0.012, Color(0.25, 0.27, 0.3), 96, PI)
-	# Spänebehälter neben der Drehmaschine
-	var grey := Build.mat(Color(0.35, 0.38, 0.4), 0.7, 0.3)
-	Build.box(root, Vector3(1.0, 0.7, 0.7), Vector3(3.6, 0.35, -0.9), grey, true)
-	Build.label(root, "SPÄNE", Vector3(3.6, 0.45, -0.545), 0.004, Color(0.95, 0.75, 0.05), 48)
-	# Palette mit Kartons
-	var pal := Build.mat(Color(0.7, 0.58, 0.4), 0.9)
-	var carton := Build.mat(Color(0.65, 0.5, 0.32), 0.9)
-	Build.box(root, Vector3(1.2, 0.14, 0.8), Vector3(9.5, 0.07, -6.8), pal, true)
-	Build.box(root, Vector3(0.55, 0.45, 0.38), Vector3(9.2, 0.37, -6.6), carton, true)
-	Build.box(root, Vector3(0.55, 0.45, 0.38), Vector3(9.8, 0.37, -6.6), carton, true)
-	Build.box(root, Vector3(0.55, 0.45, 0.38), Vector3(9.5, 0.82, -6.8), carton, true)
-	# Mülltonnen
-	Build.cyl(root, 0.28, 0.9, Vector3(7.2, 0.45, 7.5), Build.mat(Color(0.1, 0.3, 0.6), 0.7), Build.AXIS_Y, true)
-	Build.cyl(root, 0.28, 0.9, Vector3(6.5, 0.45, 7.5), Build.mat(Color(0.75, 0.6, 0.1), 0.7), Build.AXIS_Y, true)
-	# Druckluftschlauch-Trommel
-	Build.cyl(root, 0.2, 0.12, Vector3(-1.4, 2.2, -7.9), Build.mat(Color(0.85, 0.2, 0.1), 0.5), Build.AXIS_Z)
 	# Uhr
 	Build.cyl(root, 0.25, 0.04, Vector3(-4.0, 3.2, -7.95), Build.mat(Color(0.95, 0.95, 0.95), 0.5), Build.AXIS_Z)
 	Build.box(root, Vector3(0.02, 0.18, 0.01), Vector3(-4.0, 3.27, -7.92), black)

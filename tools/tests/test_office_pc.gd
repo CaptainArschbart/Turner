@@ -27,6 +27,7 @@ func meshes(n: Node) -> int:
 	return c
 func _initialize() -> void:
 	await process_frame
+	root.get_node("GameState").pending = {"unlock_all": true}
 	var w = load("res://scenes/world.tscn").instantiate()
 	root.add_child(w)
 	for i in 5:
@@ -52,30 +53,16 @@ func _initialize() -> void:
 			"Standbohrmaschinen", "Erodiermaschinen", "Feilen", "Handentgrater"]:
 		ok(texts.has(t), "Übersicht enthält " + t)
 	ok(texts.count("CNC") == 2 and texts.count("Konventionell") == 2, "Dreh- und Fräsmaschinen haben CNC und Konventionell")
-	# Maschinenwerkzeuge: Tab, Unterkategorien, Modelle
+	# Maschinenwerkzeuge gibt es nur noch im Shop
 	var o = pc.overlay
-	ok(o.tabs.get_tab_count() == 3, "Drei Tabs")
-	ok(o._tool_grid.get_child_count() == 0, "Vorschauen entstehen erst beim Öffnen des Tabs")
-	o.tabs.current_tab = 2
-	await process_frame
-	ok(o._machine == 1, "Tab startet bei den Fräsmaschinen")
-	ok(o._tool_grid.get_child_count() == MachineCatalog.MILL_TOOLS.size(), "Alle Fräswerkzeuge gelistet")
-	var names := []
-	collect(o._tool_grid, names)
-	for t in ["Schaftfräser", "Messerkopf", "Messerkopf-Aufnahme", "Wendeplatten", "Spiralbohrer", "Werkzeugaufnahmen"]:
-		ok(names.has(t), "Fräswerkzeug " + t)
-	for t in MachineCatalog.MILL_TOOLS:
-		var model = MillTools.build(t["model"])
-		ok(meshes(model) > 0, "Modell hat Geometrie: " + t["model"])
-		model.free()
-	o.select_machine(0)
-	await process_frame
-	ok(o._tool_grid.get_child_count() == LatheTools.count(), "Drehmaschine zeigt die vorhandenen Drehwerkzeuge")
-	o.select_machine(2)
-	await process_frame
-	ok(o._tool_grid.get_child_count() == 0 and o._no_tools.visible, "Rundschleifen ohne Werkzeuge")
-	ok(texts.has("In der Werkstatt: " + MachineCatalog.MILL_NAME), "Fräsmaschine steht in der Maschinenübersicht")
-	o.tabs.current_tab = 0
+	ok(o.tabs.get_tab_count() == 5, "Fünf Tabs im Shop")
+	ok(o.overview_tabs.get_tab_count() == 2, "Maschinen und Handwerkzeuge in der Maschinenübersicht")
+	for i in o.overview_tabs.get_tab_count():
+		ok(o.overview_tabs.get_tab_title(i) != "Maschinenwerkzeuge", "Kein Tab Maschinenwerkzeuge in der Übersicht")
+	ok(o.tabs.get_tab_title(1) == "Maschinenwerkzeuge", "Im Shop bleibt der Tab")
+	o.open_program("overview")
+	ok(texts.has("Im Spiel: " + MachineCatalog.MILL_NAME), "Fräsmaschine steht in der Maschinenübersicht")
+	o.overview_tabs.current_tab = 0
 	await press("interact")
 	ok(not pc.overlay.visible and p.operating == null, "Interagieren schließt den PC")
 	ok(w.hud.visible, "HUD wieder da")
