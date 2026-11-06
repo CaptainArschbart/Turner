@@ -196,7 +196,7 @@ func step(delta: float) -> void:
 				_ops.pop_front()
 				var b: Dictionary = prog["blocks"][int(op["i"])]
 				var t := lathe.tool()
-				var r := NcCam.plan(b, prog, t, {"prof": lathe.profile, "pos": Vector2(lathe.tool_z, lathe.tool_x), "zlim": lathe.z_min()})
+				var r := NcCam.plan(b, prog, t, {"prof": lathe.profile, "pos": Vector2(lathe.tool_z, lathe.tool_x), "zlim": lathe.z_min(), "zoff": lathe.wcs_z})
 				if r.has("err"):
 					_fail("Satz %d: %s" % [int(op["i"]) + 1, r["err"]])
 					return
@@ -204,8 +204,9 @@ func step(delta: float) -> void:
 				poly = r.get("poly", PackedVector2Array())
 				move_i = 0
 				var mv_ops: Array = []
+				var fin := bool(r.get("finish", false))
 				for m in moves:
-					mv_ops.append({"op": "mv", "z": m[0], "x": m[1], "r": m[2], "p": true})
+					mv_ops.append({"op": "mv", "z": m[0], "x": m[1], "r": m[2], "p": true, "fin": fin})
 				_ops = mv_ops + _ops
 			"mv":
 				t_left = _do_move(op, t_left)
@@ -227,7 +228,7 @@ func step(delta: float) -> void:
 func _wp_moves() -> Array:
 	var hd := NcCam.head(prog)
 	var xw := float(hd["xt"]) * 0.5
-	var zw := float(hd["zt"])
+	var zw := float(hd["zt"]) + lathe.wcs_z
 	var out: Array = []
 	var x_up := maxf(lathe.tool_x, xw)
 	if x_up > lathe.tool_x + 0.001:
@@ -260,13 +261,15 @@ func _do_move(op: Dictionary, t_left: float) -> float:
 		return t_left
 	var travel := minf(dist, spd * t_left)
 	var dv := d / dist * travel
+	lathe.nc_finish = bool(op.get("fin", false))
 	lathe.move_tool(dv.x, dv.y, rapid, spd if not rapid else -1.0)
+	lathe.nc_finish = false
 	if lathe.estop:
 		_fail("Kollision - Programm abgebrochen.")
 		return 0.0
 	var moved := Vector2(lathe.tool_z, lathe.tool_x) - pos
 	if moved.length() < travel * 0.5 - 0.001:
-		_fail("Bewegung blockiert bei X Ø%.3f Z%.3f (siehe Meldung)." % [lathe.tool_x * 2.0, lathe.tool_z])
+		_fail("Bewegung blockiert bei X Ø%.3f Z%.3f (siehe Meldung)." % [lathe.tool_x * 2.0, lathe.tool_z - lathe.wcs_z])
 		return 0.0
 	if travel >= dist - 0.00001:
 		lathe.tool_z = tgt.x

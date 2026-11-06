@@ -6,10 +6,10 @@ extends Control
 
 var lathe: Lathe
 var prof := PackedFloat32Array()          # leer = Ist-Material der Maschine
-var polys: Array = []                      # Konturen (PackedVector2Array in z, r)
-var hi_poly := PackedVector2Array()        # hervorgehobene Kontur
-var hi_point := Vector2(NAN, NAN)          # hervorgehobener Konturpunkt (z, r)
-var moves: Array = []                      # [z, x, eilgang, ...]
+var polys: Array = []                      # Konturen (PackedVector2Array in Programm-z, r)
+var hi_poly := PackedVector2Array()        # hervorgehobene Kontur (Programm-z)
+var hi_point := Vector2(NAN, NAN)          # hervorgehobener Konturpunkt (Programm-z, r)
+var moves: Array = []                      # [z, x, eilgang, ...] in Maschinen-z (ab Backe)
 var done_moves := 0                        # bereits gefahrene Züge (dunkler)
 var start_pos := Vector2(NAN, NAN)         # Lage vor dem ersten Zug
 var show_tool := true
@@ -35,6 +35,11 @@ func _p(z: float, r: float) -> Vector2:
 	return Vector2(_o.x + (z - _z0) * _s, _o.y - r * _s)
 
 
+## Werkstücknullpunkt (Programm-Z 0) in Maschinen-z.
+func _zo() -> float:
+	return lathe.wcs_z if lathe else 0.0
+
+
 func _fit(pr: PackedFloat32Array) -> void:
 	var zmax := pr.size() * Lathe.SEG
 	var rmax := 0.0
@@ -42,7 +47,7 @@ func _fit(pr: PackedFloat32Array) -> void:
 		rmax = maxf(rmax, r)
 	for pl in polys + [hi_poly]:
 		for q in pl:
-			zmax = maxf(zmax, q.x)
+			zmax = maxf(zmax, q.x + _zo())
 			rmax = maxf(rmax, q.y)
 	for m in moves:
 		zmax = maxf(zmax, minf(float(m[0]), pr.size() * Lathe.SEG + 40.0))
@@ -55,7 +60,17 @@ func _fit(pr: PackedFloat32Array) -> void:
 
 
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), Color(0.97, 0.97, 0.96))
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0.075, 0.085, 0.10))
+	# feines Raster
+	var gc := Color(1, 1, 1, 0.035)
+	var gx := 0.0
+	while gx < size.x:
+		draw_line(Vector2(gx, 0), Vector2(gx, size.y), gc, 1.0)
+		gx += 20.0
+	var gy := size.y
+	while gy > 0.0:
+		draw_line(Vector2(0, gy), Vector2(size.x, gy), gc, 1.0)
+		gy -= 20.0
 	var pr := _profile()
 	if pr.is_empty():
 		return
@@ -63,8 +78,8 @@ func _draw() -> void:
 	var seg := Lathe.SEG
 	# Futter mit Backe
 	var r0 := pr[0] if pr.size() > 0 else 20.0
-	draw_rect(Rect2(_p(-20.0, r0 + 14.0), Vector2(20.0 * _s, (r0 + 14.0) * _s)), Color(0.55, 0.57, 0.6))
-	draw_rect(Rect2(_p(-8.0, r0 + 9.0), Vector2(8.0 * _s, 9.0 * _s)), Color(0.35, 0.36, 0.38))
+	draw_rect(Rect2(_p(-20.0, r0 + 14.0), Vector2(20.0 * _s, (r0 + 14.0) * _s)), Color(0.27, 0.29, 0.33))
+	draw_rect(Rect2(_p(-8.0, r0 + 9.0), Vector2(8.0 * _s, 9.0 * _s)), Color(0.19, 0.2, 0.23))
 	# Werkstück
 	var pts := PackedVector2Array([_p(0.0, 0.0)])
 	var i := 0
@@ -78,17 +93,24 @@ func _draw() -> void:
 		i = j + 1
 	pts.append(_p(pr.size() * seg, 0.0))
 	if pts.size() >= 3:
-		draw_colored_polygon(pts, Color(0.72, 0.74, 0.78))
-		draw_polyline(pts, Color(0.35, 0.37, 0.4), 1.0)
+		draw_colored_polygon(pts, Color(0.36, 0.39, 0.44))
+		draw_polyline(pts, Color(0.62, 0.66, 0.72), 1.0)
 	# Drehachse
-	draw_dashed_line(_p(_z0, 0.0), _p(_z0 + (size.x - 12.0) / _s, 0.0), Color(0.3, 0.3, 0.3), 1.0, 6.0)
+	draw_dashed_line(_p(_z0, 0.0), _p(_z0 + (size.x - 12.0) / _s, 0.0), Color(0.5, 0.54, 0.6), 1.0, 6.0)
 	# Konturen
 	for pl in polys:
-		_poly(pl, Color(0.15, 0.25, 0.55), 1.5)
+		_poly(pl, Color(0.35, 0.6, 1.0), 1.5)
 	if hi_poly.size() >= 2:
-		_poly(hi_poly, Color(0.05, 0.35, 0.95), 2.5)
+		_poly(hi_poly, Color(0.55, 0.8, 1.0), 2.5)
 	if not is_nan(hi_point.x):
-		draw_circle(_p(hi_point.x, hi_point.y), 4.0, Color(1.0, 0.5, 0.0))
+		draw_circle(_p(hi_point.x + _zo(), hi_point.y), 4.0, Color(1.0, 0.65, 0.2))
+	# Werkstücknullpunkt W an Z0 auf der Drehachse
+	var w0 := _p(_zo(), 0.0)
+	var wc := Color(1.0, 0.85, 0.3)
+	draw_arc(w0, 6.0, 0.0, TAU, 20, wc, 1.5)
+	draw_line(w0 + Vector2(-9, 0), w0 + Vector2(9, 0), wc, 1.0)
+	draw_line(w0 + Vector2(0, -9), w0 + Vector2(0, 9), wc, 1.0)
+	draw_string(get_theme_default_font(), w0 + Vector2(-4, -11), "W", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, wc)
 	# Verfahrwege
 	var last := start_pos
 	for k in moves.size():
@@ -99,9 +121,9 @@ func _draw() -> void:
 			var b := _p(q.x, q.y)
 			var dim := k < done_moves
 			if bool(m[2]):
-				draw_dashed_line(a, b, Color(0.85, 0.15, 0.1, 0.45 if dim else 0.9), 1.0, 4.0)
+				draw_dashed_line(a, b, Color(1.0, 0.38, 0.32, 0.35 if dim else 0.9), 1.0, 4.0)
 			else:
-				draw_line(a, b, Color(0.1, 0.55, 0.2, 0.4 if dim else 0.95), 1.2)
+				draw_line(a, b, Color(0.35, 0.9, 0.5, 0.35 if dim else 0.95), 1.2)
 		last = q
 	# Schneide
 	if show_tool and lathe:
@@ -111,15 +133,15 @@ func _draw() -> void:
 		for v in poly:
 			tp.append(_p(lathe.tool_z + v.x, lathe.tool_x + v.y))
 		draw_colored_polygon(tp, Color(0.95, 0.7, 0.1))
-		draw_polyline(tp + PackedVector2Array([tp[0]]), Color(0.3, 0.2, 0.0), 1.0)
+		draw_polyline(tp + PackedVector2Array([tp[0]]), Color(1.0, 0.9, 0.6), 1.0)
 	if title != "":
-		draw_string(get_theme_default_font(), Vector2(6, 14), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.2, 0.22, 0.25))
+		draw_string(get_theme_default_font(), Vector2(6, 14), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.62, 0.78, 1.0))
 	# Maßstab
 	var mm := 10.0 if _s > 2.0 else 50.0
 	var y := 14.0
 	var x1 := size.x - 8.0
-	draw_line(Vector2(x1 - mm * _s, y), Vector2(x1, y), Color(0.2, 0.2, 0.2), 1.0)
-	draw_string(get_theme_default_font(), Vector2(x1 - mm * _s - 34.0, y + 4.0), "%d mm" % int(mm), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.2, 0.2, 0.2))
+	draw_line(Vector2(x1 - mm * _s, y), Vector2(x1, y), Color(0.6, 0.64, 0.7), 1.0)
+	draw_string(get_theme_default_font(), Vector2(x1 - mm * _s - 34.0, y + 4.0), "%d mm" % int(mm), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.6, 0.64, 0.7))
 
 
 func _poly(pl: PackedVector2Array, c: Color, w: float) -> void:
@@ -127,5 +149,5 @@ func _poly(pl: PackedVector2Array, c: Color, w: float) -> void:
 		return
 	var out := PackedVector2Array()
 	for q in pl:
-		out.append(_p(q.x, q.y))
+		out.append(_p(q.x + _zo(), q.y))
 	draw_polyline(out, c, w)

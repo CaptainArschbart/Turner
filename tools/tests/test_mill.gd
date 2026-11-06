@@ -378,8 +378,10 @@ func _initialize() -> void:
 		ok(mesh_bounds(l.carriage).end.x < mesh_bounds(ts_nodes[0]).position.x, "Schlitten erreicht bei voller Drehlänge den Reitstock nicht")
 	# ohne das seitlich angewinkelte Bedienpult, das über den Spindelkasten hinausragt
 	l._pult.visible = false
+	l.periphery.visible = false     # Späneförderer und Spänewagen stehen neben der Maschine
 	var lb := mesh_bounds(l)
 	l._pult.visible = true
+	l.periphery.visible = true
 	ok(lb.size.x < 3.2, "Drehmaschine passt zur Drehlänge")
 
 	# Verlassen

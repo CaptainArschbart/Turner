@@ -250,7 +250,7 @@ func _refresh_help() -> void:
 			"SPINDEL     %s  Start/Stopp   |   %s/%s  Drehzahl   |   %s  Kühlung" % [b.call("spindle_toggle"), b.call("rpm_up"), b.call("rpm_down"), b.call("coolant")],
 			"VORSCHUB    %s  Auto an/aus (Handrad-Achse), Richtung am Pult   |   %s/%s  mm/U" % [b.call("auto_feed"), b.call("feed_up"), b.call("feed_down")],
 			"PULT        Maus: Fenster rechts unten oder Bildschirm am Maschinenpult (%s) - dort Zyklen / NC-Programme" % b.call("cam_panel"),
-			"TÜR         Schwarzen Griff mit linker Maus ziehen oder %s   (Zyklusstart nur bei geschlossener Tür)" % b.call("door_toggle"),
+			"TÜR         Linksklick auf die Tür: rastet am Schlitten ein   |   Linksklick schwarzer Hebel: lösen   |   %s   (Zyklusstart nur bei eingerasteter Tür)" % b.call("door_toggle"),
 			"KAMERA      Rechte Maus  Drehen (+ Rad = Zoom)   |   Mittlere Maus  Verschieben   |   %s/%s/%s  Ansichten" % [b.call("cam_top"), b.call("cam_front"), b.call("cam_reset")],
 			"WERKZEUGE   Werkbank: Linksklick nimmt, am Halterkopf Linksklick setzt ein (vorher %s verlassen)" % b.call("interact"),
 			"SONST       1-4  Halterplatz einschwenken   |   %s  Not-Halt   |   %s  Rohteil   |   %s  Abgeben   |   %s  Verlassen" % [b.call("emergency_stop"), b.call("new_workpiece"), b.call("submit_part"), b.call("interact")],
@@ -302,7 +302,7 @@ func _process(delta: float) -> void:
 		var nc_txt := "Hand"
 		if lathe.nc.state != "idle":
 			nc_txt = "AUTO %s: %s" % [lathe.nc.prog.get("name", ""), lathe.nc.state_text()]
-		parts.append("Tür: %s   Steuerung: %s" % ["ZU" if lathe.door_closed() else ("AUF" if lathe.door_t < 0.001 else "fährt"), nc_txt])
+		parts.append("Tür: %s   Steuerung: %s" % ["ZU" if lathe.door_closed() else ("AUF" if lathe.door_t < 0.001 and not lathe._door_closing else "fährt"), nc_txt])
 		if lathe.estop:
 			parts.append("!!! NOT-HALT AKTIV !!!")
 		_status.text = "\n".join(parts)

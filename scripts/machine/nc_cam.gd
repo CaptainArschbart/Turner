@@ -28,24 +28,44 @@ const TRANS := ["-", "Fase", "Radius"]
 # ======================================================================= Programme
 
 static func new_program(pname: String) -> Dictionary:
-	return {"name": pname, "blocks": [new_block("head")]}
+	return {"name": pname, "wks": true, "blocks": [new_block("head")]}
+
+
+## Programme vor dem Werkstücknullpunkt hatten Z ab Backen-Stirnfläche: auf WKS umrechnen
+## (Nullpunkt bei zero_z, also z - zero_z). Gibt true zurück, wenn umgerechnet wurde.
+static func migrate_to_wks(prog: Dictionary, zero_z: float) -> bool:
+	if bool(prog.get("wks", false)):
+		return false
+	for b in prog.get("blocks", []):
+		match str(b["type"]):
+			"head":
+				b["zt"] = float(b["zt"]) - zero_z
+			"cut":
+				b["z0"] = float(b["z0"]) - zero_z
+				b["z1"] = float(b["z1"]) - zero_z
+			"contour":
+				b["z0"] = float(b["z0"]) - zero_z
+				for e in b["els"]:
+					e["z"] = float(e["z"]) - zero_z
+	prog["wks"] = true
+	return true
 
 
 static func new_block(type: String, prog := {}) -> Dictionary:
 	match type:
 		"head":
-			return {"type": "head", "sc": 1.0, "xt": 160.0, "zt": 230.0, "smax": 2500.0, "kss": 1}
+			return {"type": "head", "sc": 1.0, "xt": 160.0, "zt": 70.0, "smax": 2500.0, "kss": 1}
 		"cut":
 			return {"type": "cut", "mode": 0, "dir": 0, "t": "T1", "f": 0.25, "v": 180.0,
-				"z0": 160.0, "x1": 50.0, "z1": 100.0, "d": 2.0, "ux": 0.4, "uz": 0.2}
+				"z0": 0.0, "x1": 50.0, "z1": -60.0, "d": 2.0, "ux": 0.4, "uz": 0.2}
 		"contour":
 			var n := 1
 			while not find_contour(prog, "KONTUR%d" % n).is_empty():
 				n += 1
-			return {"type": "contour", "name": "KONTUR%d" % n, "x0": 0.0, "z0": 150.0, "els": [
-				{"x": 40.0, "z": 150.0, "tr": 0, "tv": 0.0},
-				{"x": 40.0, "z": 100.0, "tr": 0, "tv": 0.0},
-				{"x": 64.0, "z": 100.0, "tr": 0, "tv": 0.0},
+			return {"type": "contour", "name": "KONTUR%d" % n, "x0": 0.0, "z0": 0.0, "els": [
+				{"x": 40.0, "z": 0.0, "tr": 0, "tv": 0.0},
+				{"x": 40.0, "z": -50.0, "tr": 0, "tv": 0.0},
+				{"x": 64.0, "z": -50.0, "tr": 0, "tv": 0.0},
 			]}
 		"stock":
 			var cname := ""
@@ -100,12 +120,12 @@ static func summary(b: Dictionary) -> String:
 ## Beispielprogramme (stehen im Programm-Manager, wenn noch keine Programme da sind).
 static func examples() -> Array:
 	var welle := new_program("WELLE_AUFTRAG2")
-	welle["blocks"].append({"type": "contour", "name": "WELLE", "x0": 0.0, "z0": 150.0, "els": [
-		{"x": 50.0, "z": 150.0, "tr": 1, "tv": 1.0},
-		{"x": 50.0, "z": 90.0, "tr": 0, "tv": 0.0},
-		{"x": 58.0, "z": 90.0, "tr": 0, "tv": 0.0},
-		{"x": 58.0, "z": 5.0, "tr": 0, "tv": 0.0},
-		{"x": 64.0, "z": 5.0, "tr": 0, "tv": 0.0},
+	welle["blocks"].append({"type": "contour", "name": "WELLE", "x0": 0.0, "z0": -10.0, "els": [
+		{"x": 50.0, "z": -10.0, "tr": 1, "tv": 1.0},
+		{"x": 50.0, "z": -70.0, "tr": 0, "tv": 0.0},
+		{"x": 58.0, "z": -70.0, "tr": 0, "tv": 0.0},
+		{"x": 58.0, "z": -155.0, "tr": 0, "tv": 0.0},
+		{"x": 64.0, "z": -155.0, "tr": 0, "tv": 0.0},
 	]})
 	welle["blocks"].append({"type": "stock", "contour": "WELLE", "mode": 0, "dir": 0, "t": "T1", "f": 0.3,
 		"v": 180.0, "d": 2.5, "ux": 0.4, "uz": 0.2})
@@ -113,14 +133,14 @@ static func examples() -> Array:
 		"v": 220.0, "d": 1.0, "ux": 0.0, "uz": 0.0})
 	var plan := new_program("PLANEN_2MM")
 	plan["blocks"].append({"type": "cut", "mode": 0, "dir": 1, "t": "T1", "f": 0.2, "v": 180.0,
-		"z0": 160.0, "x1": 0.0, "z1": 158.0, "d": 1.0, "ux": 0.0, "uz": 0.0})
+		"z0": 0.0, "x1": 0.0, "z1": -2.0, "d": 1.0, "ux": 0.0, "uz": 0.0})
 	var flansch := new_program("BUND_PLAN")
-	flansch["blocks"].append({"type": "contour", "name": "BUND", "x0": 0.0, "z0": 156.0, "els": [
-		{"x": 30.0, "z": 156.0, "tr": 0, "tv": 0.0},
-		{"x": 30.0, "z": 140.0, "tr": 2, "tv": 2.0},
-		{"x": 52.0, "z": 140.0, "tr": 1, "tv": 1.0},
-		{"x": 52.0, "z": 120.0, "tr": 0, "tv": 0.0},
-		{"x": 64.0, "z": 120.0, "tr": 0, "tv": 0.0},
+	flansch["blocks"].append({"type": "contour", "name": "BUND", "x0": 0.0, "z0": -4.0, "els": [
+		{"x": 30.0, "z": -4.0, "tr": 0, "tv": 0.0},
+		{"x": 30.0, "z": -20.0, "tr": 2, "tv": 2.0},
+		{"x": 52.0, "z": -20.0, "tr": 1, "tv": 1.0},
+		{"x": 52.0, "z": -40.0, "tr": 0, "tv": 0.0},
+		{"x": 64.0, "z": -40.0, "tr": 0, "tv": 0.0},
 	]})
 	flansch["blocks"].append({"type": "stock", "contour": "BUND", "mode": 0, "dir": 1, "t": "T1", "f": 0.25,
 		"v": 180.0, "d": 2.0, "ux": 0.4, "uz": 0.2})
@@ -132,11 +152,11 @@ static func examples() -> Array:
 # ======================================================================= Kontur
 
 ## Kontur als Polylinie Vector2(z, r) mit eingerechneten Fasen und Rundungen.
-static func contour_points(c: Dictionary) -> PackedVector2Array:
-	var pts: Array[Vector2] = [Vector2(float(c["z0"]), float(c["x0"]) * 0.5)]
+static func contour_points(c: Dictionary, zoff := 0.0) -> PackedVector2Array:
+	var pts: Array[Vector2] = [Vector2(float(c["z0"]) + zoff, float(c["x0"]) * 0.5)]
 	var trs: Array = [[0, 0.0]]
 	for e in c.get("els", []):
-		var p := Vector2(float(e["z"]), float(e["x"]) * 0.5)
+		var p := Vector2(float(e["z"]) + zoff, float(e["x"]) * 0.5)
 		if p.distance_to(pts[pts.size() - 1]) < 0.0005:
 			continue
 		pts.append(p)
@@ -200,13 +220,14 @@ static func poly_max(poly: PackedVector2Array, a: float, b: float) -> float:
 
 ## Sollradius je Segment für einen Abspansatz. prof = Ist-Material (Radius je Segment).
 ## Segmente außerhalb des Bearbeitungsbereichs behalten ihr Material (geschützt).
-static func target(b: Dictionary, prog: Dictionary, prof: PackedFloat32Array) -> Dictionary:
+## zoff = Lage des Werkstücknullpunkts (Programm-Z 0) über der Backen-Stirnfläche (mm).
+static func target(b: Dictionary, prog: Dictionary, prof: PackedFloat32Array, zoff := 0.0) -> Dictionary:
 	var n := prof.size()
 	var tg := PackedFloat32Array()
 	tg.resize(n)
 	if str(b["type"]) == "cut":
-		var za := minf(float(b["z0"]), float(b["z1"]))
-		var zb := maxf(float(b["z0"]), float(b["z1"]))
+		var za := minf(float(b["z0"]), float(b["z1"])) + zoff
+		var zb := maxf(float(b["z0"]), float(b["z1"])) + zoff
 		var r1 := maxf(float(b["x1"]) * 0.5, 0.0)
 		if zb - za < SEG:
 			return {"err": "Abspanen: Bereich Z0 bis Z1 zu kurz."}
@@ -217,7 +238,7 @@ static func target(b: Dictionary, prog: Dictionary, prof: PackedFloat32Array) ->
 	var c := find_contour(prog, str(b.get("contour", "")))
 	if c.is_empty():
 		return {"err": "Kontur \"%s\" nicht im Programm." % b.get("contour", "")}
-	var poly := contour_points(c)
+	var poly := contour_points(c, zoff)
 	if poly.size() < 2:
 		return {"err": "Kontur %s hat keine Elemente." % c["name"]}
 	var zlo := INF
@@ -239,7 +260,7 @@ static func target(b: Dictionary, prog: Dictionary, prof: PackedFloat32Array) ->
 		else:
 			var r := poly_max(poly, a, e)
 			tg[i] = minf(prof[i], r if r >= 0.0 else 0.0)
-	return {"tg": tg, "zlo": zlo, "zhi": zhi, "poly": poly}
+	return {"tg": tg, "zlo": zlo, "zhi": zhi, "poly": contour_points(c)}   # poly in Programm-Z
 
 
 ## Aufmaß: Sollkontur um UZ axial und UX/2 radial aufdicken.
@@ -273,13 +294,14 @@ static func safe_x(t: Dictionary, tg: PackedFloat32Array, z: float) -> float:
 # ======================================================================= Bahnen
 
 ## Bahn für einen Abspansatz. ctx: prof (Ist-Material), pos (Schneide z, x), zlim (kleinstes Z
-## der Maschine für dieses Werkzeug). Ergebnis: {"moves", "after" (Material danach), "err", "info"}.
+## der Maschine für dieses Werkzeug), zoff (Werkstücknullpunkt über der Backen-Stirnfläche).
+## Bahnen und Material in Maschinen-Z (ab Backen-Stirnfläche), Konturen (poly) in Programm-Z. Ergebnis: {"moves", "after" (Material danach), "err", "info"}.
 static func plan(b: Dictionary, prog: Dictionary, t: Dictionary, ctx: Dictionary) -> Dictionary:
 	var err := check_block(b, t)
 	if err != "":
 		return {"err": err}
 	var prof: PackedFloat32Array = ctx["prof"]
-	var tr := target(b, prog, prof)
+	var tr := target(b, prog, prof, float(ctx.get("zoff", 0.0)))
 	if tr.has("err"):
 		return {"err": tr["err"]}
 	var tg: PackedFloat32Array = tr["tg"]
@@ -526,6 +548,20 @@ static func _finish(prof: PackedFloat32Array, goal: PackedFloat32Array, p: Dicti
 	var pos: Vector2 = p["pos"]
 	if face:
 		pts.reverse()
+		# Anfang: direkt über der ersten Planfläche ansetzen (nur EINE Zustellung - kein Anfahren
+		# am Außendurchmesser und Nachrücken in Z). Ende: an der Drehmitte aufhören, nicht noch
+		# auf X0 in Z weiterfahren.
+		var s := 0
+		for q in range(pts.size() - 1):
+			if pts[q + 1].y < pts[q].y - 2.0 * SEG:
+				s = q
+				break
+		var e := pts.size() - 1
+		for q in range(s, pts.size()):
+			if pts[q].y <= 0.01:
+				e = q
+				break
+		pts = pts.slice(s, e + 1)
 		_approach(mv, pos, pts[0].x, minf(pts[0].y + sc, x_clear), x_clear)
 		for q in pts:
 			mv.append([q.x, q.y, false])
@@ -534,56 +570,36 @@ static func _finish(prof: PackedFloat32Array, goal: PackedFloat32Array, p: Dicti
 			mv.append([last.x, CENTER_OVER, false])
 		mv.append([last.x + sc, maxf(last.y, 0.0) + sc, false])
 		mv.append([last.x + sc, x_clear, true])
-		return {"moves": _simplify(mv)}
-	# längs
+		return {"moves": _simplify(mv), "finish": true}
+	# längs: einfach die Kontur abfahren - von rechts kommend die Planflächen hinauf und die
+	# Durchmesser entlang, in einem Zug (das Schlichtaufmaß vor Planflächen nimmt die Schneide mit)
+	var thick := _finish_too_thick(prof, goal, t)
+	if thick != "":
+		return {"err": thick}
 	_approach(mv, pos, pts[0].x, pts[0].y, x_clear)
-	var lim := maxf(0.3, float(t["max_dz"]) * 0.5)
-	var i := 0
-	while i < pts.size() - 1:
-		var a := pts[i]
-		var b := pts[i + 1]
-		if not _steep(a, b):
-			mv.append([b.x, b.y, false])
-			i += 1
-			continue
-		var j := i + 1
-		while j < pts.size() - 1 and _steep(pts[j], pts[j + 1]):
-			j += 1
-		var top := pts[j]
-		# Materialschicht vor der Fläche (rechts davon) über der Schneide?
-		var hi_seg := -1
-		var s0 := maxi(int(floor((a.x + zmin_t) / SEG)), 0)
-		var s1 := mini(int(floor((a.x + zmax_t + 20.0) / SEG)), prof.size() - 1)
-		for s in range(s0, s1 + 1):
-			if prof[s] > a.y + lim:
-				hi_seg = s
-		if hi_seg < 0:
-			for q in range(i + 1, j + 1):
-				mv.append([pts[q].x, pts[q].y, false])
-			i = j
-			continue
-		var zg := (hi_seg + 1) * SEG - zmin_t + 0.3
-		# bisherige Bahn (letzter Zug endet in a) bei zg kappen
-		var last: Array = mv[mv.size() - 1]
-		var prev: Array = mv[mv.size() - 2]
-		if zg < float(prev[0]) - 0.001 and zg > a.x:
-			var f := (zg - float(prev[0])) / (a.x - float(prev[0]))
-			mv[mv.size() - 1] = [zg, lerpf(float(prev[1]), a.y, f), false]
-		last = mv[mv.size() - 1]
-		var xh := top.y + maxf(sc, 0.5)
-		mv.append([last[0], xh, false])
-		mv.append([top.x, xh, false])
-		for q in range(j, i - 1, -1):           # Fläche von oben nach innen
-			mv.append([pts[q].x, pts[q].y, false])
-		if a.y <= 0.01:
-			mv.append([a.x, CENTER_OVER, false])
-			mv.append([a.x, a.y, false])
-		for q in range(i + 1, j + 1):           # an der fertigen Fläche zurück nach oben
-			mv.append([pts[q].x, pts[q].y, false])
-		i = j
+	for q in range(1, pts.size()):
+		mv.append([pts[q].x, pts[q].y, false])
 	var e: Array = mv[mv.size() - 1]
 	mv.append([e[0], x_clear, true])
-	return {"moves": _simplify(mv)}
+	return {"moves": _simplify(mv), "finish": true}
+
+
+## Schlichten setzt ein Schruppen voraus: steht irgendwo radial mehr als die zulässige Zustellung
+## über der Kontur - und nicht nur als dünnes Planaufmaß direkt vor einer Planfläche -, Fehlertext.
+static func _finish_too_thick(prof: PackedFloat32Array, goal: PackedFloat32Array, t: Dictionary) -> String:
+	var lim := float(t["max_dx"]) + 0.05
+	var near := int(ceil(1.0 / SEG))
+	for i in prof.size():
+		if prof[i] - goal[i] <= lim:
+			continue
+		var face_layer := false
+		for j in range(maxi(i - near, 0), mini(i + near, prof.size() - 1) + 1):
+			if goal[j] >= prof[i] - lim:   # dahinter steht die Schulter (mit ihrem Aufmaß)
+				face_layer = true
+				break
+		if not face_layer:
+			return "Zu viel Material für das Schlichten (%.1f mm) - vorher schruppen." % (prof[i] - goal[i])
+	return ""
 
 
 static func _steep(a: Vector2, b: Vector2) -> bool:
@@ -639,6 +655,7 @@ static func _simplify(mv: Array) -> Array:
 static func simulate(prog: Dictionary, lathe) -> Dictionary:
 	var prof: PackedFloat32Array = lathe.profile.duplicate()
 	var hd := head(prog)
+	var zoff: float = lathe.wcs_z
 	var pos := Vector2(lathe.tool_z, lathe.tool_x)
 	var cur_t := str(lathe.tool()["id"])
 	var moves: Array = []
@@ -661,11 +678,11 @@ static func simulate(prog: Dictionary, lathe) -> Dictionary:
 			errs.append("Satz %d: %s ist nicht im Werkzeughalter bestückt." % [bi + 1, tid])
 		var t := LatheTools.get_tool(ti)
 		if tid != cur_t:
-			var wp := Vector2(float(hd["zt"]), float(hd["xt"]) * 0.5)
+			var wp := Vector2(float(hd["zt"]) + zoff, float(hd["xt"]) * 0.5)
 			time += pos.distance_to(wp) / RAPID + 4.0
 			pos = wp
 			cur_t = tid
-		var r := plan(b, prog, t, {"prof": prof, "pos": pos, "zlim": maxf(1.0, -float(t["zmin"]) + 0.5)})
+		var r := plan(b, prog, t, {"prof": prof, "pos": pos, "zlim": maxf(1.0, -float(t["zmin"]) + 0.5), "zoff": zoff})
 		if r.has("err"):
 			errs.append("Satz %d: %s" % [bi + 1, r["err"]])
 			continue

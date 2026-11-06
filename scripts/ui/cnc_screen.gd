@@ -14,15 +14,21 @@ const HDR_H := 42.0
 const HSK_H := 30.0
 const BODY := Rect2(4.0, HDR_H + 2.0, W - SK_W - 10.0, H - HDR_H - HSK_H - 8.0)
 
-const C_BG := Color(0.78, 0.80, 0.82)
-const C_HDR := Color(0.12, 0.21, 0.35)
-const C_WIN := Color(0.98, 0.98, 0.97)
-const C_TITLE := Color(0.70, 0.78, 0.88)
-const C_TXT := Color(0.08, 0.09, 0.10)
-const C_MUT := Color(0.40, 0.42, 0.45)
-const C_SEL := Color(1.0, 0.66, 0.22)
-const C_OK := Color(0.08, 0.48, 0.15)
-const C_ERR := Color(0.80, 0.10, 0.05)
+# Dunkles, flaches Design (an aktuelle Steuerungsoberflächen angelehnt): Anthrazit-Flächen,
+# abgerundete Kacheln, ein blauer Akzent für Auswahl und aktive Tasten.
+const C_BG := Color(0.065, 0.075, 0.09)
+const C_HDR := Color(0.04, 0.05, 0.06)
+const C_WIN := Color(0.115, 0.13, 0.155)
+const C_LINE := Color(0.20, 0.23, 0.27)
+const C_TITLE := Color(0.62, 0.78, 1.0)
+const C_TXT := Color(0.90, 0.92, 0.95)
+const C_MUT := Color(0.55, 0.60, 0.67)
+const C_SEL := Color(0.17, 0.50, 0.96)
+const C_KEY := Color(0.165, 0.185, 0.215)
+const C_FIELD := Color(0.075, 0.085, 0.10)
+const C_OK := Color(0.33, 0.86, 0.48)
+const C_WARN := Color(1.0, 0.72, 0.26)
+const C_ERR := Color(1.0, 0.38, 0.32)
 
 const FORMS := {
 	"head": [
@@ -139,26 +145,34 @@ func _ready() -> void:
 
 # ======================================================================= Theme / Bausteine
 
-static func _sb(bg: Color, border: Color, w := 1, radius := 2) -> StyleBoxFlat:
+static func _sb(bg: Color, border: Color, w := 1, radius := 5) -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
 	s.bg_color = bg
 	s.border_color = border
 	s.set_border_width_all(w)
 	s.set_corner_radius_all(radius)
-	s.content_margin_left = 5
-	s.content_margin_right = 5
+	s.content_margin_left = 6
+	s.content_margin_right = 6
 	s.content_margin_top = 2
 	s.content_margin_bottom = 2
+	s.anti_aliasing = true
+	return s
+
+
+## Aktive Taste: Akzentfläche mit hellem Rand oben (wie eine leuchtende Taste).
+static func _sb_active() -> StyleBoxFlat:
+	var s := _sb(C_SEL, C_SEL.lightened(0.35), 0)
+	s.border_width_top = 2
 	return s
 
 
 func _theme() -> Theme:
 	var t := Theme.new()
 	t.default_font_size = 12
-	var key := _sb(Color(0.90, 0.91, 0.92), Color(0.42, 0.44, 0.47))
-	var key_h := _sb(Color(0.96, 0.97, 0.98), Color(0.25, 0.4, 0.65), 2)
-	var key_p := _sb(C_SEL, Color(0.55, 0.32, 0.0), 2)
-	var key_d := _sb(Color(0.74, 0.76, 0.78), Color(0.6, 0.62, 0.64))
+	var key := _sb(C_KEY, C_KEY, 0)
+	var key_h := _sb(C_KEY.lightened(0.08), C_SEL, 1)
+	var key_p := _sb_active()
+	var key_d := _sb(Color(0.095, 0.105, 0.125), Color(0, 0, 0, 0), 0)
 	for type in ["Button", "OptionButton"]:
 		t.set_stylebox("normal", type, key)
 		t.set_stylebox("hover", type, key_h)
@@ -167,36 +181,46 @@ func _theme() -> Theme:
 		t.set_stylebox("disabled", type, key_d)
 		t.set_stylebox("focus", type, StyleBoxEmpty.new())
 		t.set_color("font_color", type, C_TXT)
-		t.set_color("font_hover_color", type, C_TXT)
-		t.set_color("font_pressed_color", type, C_TXT)
-		t.set_color("font_hover_pressed_color", type, C_TXT)
-		t.set_color("font_disabled_color", type, Color(0.52, 0.54, 0.56))
+		t.set_color("font_hover_color", type, Color.WHITE)
+		t.set_color("font_pressed_color", type, Color.WHITE)
+		t.set_color("font_hover_pressed_color", type, Color.WHITE)
+		t.set_color("font_disabled_color", type, Color(0.36, 0.39, 0.44))
+	t.set_color("arrow_color", "OptionButton", C_MUT)
 	t.set_color("font_color", "Label", C_TXT)
-	t.set_stylebox("normal", "LineEdit", _sb(Color.WHITE, Color(0.55, 0.57, 0.6)))
-	t.set_stylebox("focus", "LineEdit", _sb(Color(1.0, 0.97, 0.88), C_SEL, 2))
-	t.set_stylebox("read_only", "LineEdit", _sb(Color(0.9, 0.9, 0.9), Color(0.7, 0.7, 0.7)))
+	t.set_stylebox("normal", "LineEdit", _sb(C_FIELD, C_LINE, 1))
+	t.set_stylebox("focus", "LineEdit", _sb(C_FIELD, C_SEL, 2))
+	t.set_stylebox("read_only", "LineEdit", _sb(Color(0.10, 0.11, 0.13), Color(0, 0, 0, 0), 0))
 	t.set_color("font_color", "LineEdit", C_TXT)
-	t.set_color("caret_color", "LineEdit", C_TXT)
-	t.set_color("selection_color", "LineEdit", Color(1.0, 0.75, 0.4))
-	t.set_color("font_uneditable_color", "LineEdit", C_MUT)
-	var il := _sb(Color.WHITE, Color(0.6, 0.62, 0.65), 1, 0)
-	t.set_stylebox("panel", "ItemList", il)
+	t.set_color("caret_color", "LineEdit", C_TITLE)
+	t.set_color("selection_color", "LineEdit", Color(C_SEL, 0.55))
+	t.set_color("font_uneditable_color", "LineEdit", Color(0.42, 0.46, 0.52))
+	t.set_color("font_placeholder_color", "LineEdit", Color(0.42, 0.46, 0.52))
+	t.set_stylebox("panel", "ItemList", _sb(C_FIELD, C_LINE, 1, 6))
 	t.set_stylebox("focus", "ItemList", StyleBoxEmpty.new())
-	t.set_stylebox("selected", "ItemList", _sb(C_SEL, C_SEL, 0, 0))
-	t.set_stylebox("selected_focus", "ItemList", _sb(C_SEL, C_SEL, 0, 0))
-	t.set_stylebox("hovered", "ItemList", _sb(Color(0.9, 0.93, 0.97), Color(0.9, 0.93, 0.97), 0, 0))
+	t.set_stylebox("selected", "ItemList", _sb(Color(C_SEL, 0.85), C_SEL, 0, 4))
+	t.set_stylebox("selected_focus", "ItemList", _sb(Color(C_SEL, 0.85), C_SEL, 0, 4))
+	t.set_stylebox("hovered", "ItemList", _sb(Color(1, 1, 1, 0.05), Color(0, 0, 0, 0), 0, 4))
+	t.set_stylebox("hovered_selected", "ItemList", _sb(C_SEL.lightened(0.1), C_SEL, 0, 4))
 	t.set_stylebox("cursor", "ItemList", StyleBoxEmpty.new())
 	t.set_stylebox("cursor_unfocused", "ItemList", StyleBoxEmpty.new())
 	t.set_color("font_color", "ItemList", C_TXT)
-	t.set_color("font_selected_color", "ItemList", C_TXT)
-	t.set_color("font_hovered_color", "ItemList", C_TXT)
-	t.set_color("guide_color", "ItemList", Color(0.9, 0.9, 0.9))
-	t.set_constant("v_separation", "ItemList", 3)
-	t.set_stylebox("panel", "PopupMenu", _sb(Color(0.97, 0.97, 0.97), Color(0.4, 0.42, 0.45)))
-	t.set_stylebox("hover", "PopupMenu", _sb(C_SEL, C_SEL, 0, 0))
+	t.set_color("font_selected_color", "ItemList", Color.WHITE)
+	t.set_color("font_hovered_color", "ItemList", Color.WHITE)
+	t.set_color("guide_color", "ItemList", Color(1, 1, 1, 0.04))
+	t.set_constant("v_separation", "ItemList", 4)
+	var pm := _sb(Color(0.14, 0.16, 0.19), C_LINE, 1, 6)
+	pm.shadow_color = Color(0, 0, 0, 0.5)
+	pm.shadow_size = 6
+	t.set_stylebox("panel", "PopupMenu", pm)
+	t.set_stylebox("hover", "PopupMenu", _sb(C_SEL, C_SEL, 0, 4))
 	t.set_color("font_color", "PopupMenu", C_TXT)
-	t.set_color("font_hover_color", "PopupMenu", C_TXT)
-	t.set_stylebox("panel", "Panel", _sb(C_WIN, Color(0.5, 0.52, 0.55), 1, 0))
+	t.set_color("font_hover_color", "PopupMenu", Color.WHITE)
+	t.set_stylebox("panel", "Panel", _sb(C_WIN, C_LINE, 1, 8))
+	for sb_type in ["VScrollBar", "HScrollBar"]:
+		t.set_stylebox("scroll", sb_type, _sb(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 3))
+		t.set_stylebox("grabber", sb_type, _sb(Color(1, 1, 1, 0.16), Color(0, 0, 0, 0), 0, 3))
+		t.set_stylebox("grabber_highlight", sb_type, _sb(Color(1, 1, 1, 0.26), Color(0, 0, 0, 0), 0, 3))
+		t.set_stylebox("grabber_pressed", sb_type, _sb(C_SEL, Color(0, 0, 0, 0), 0, 3))
 	return t
 
 
@@ -224,19 +248,26 @@ func _win(parent: Control, r: Rect2, title: String) -> Control:
 	p.size = r.size
 	p.mouse_filter = Control.MOUSE_FILTER_PASS
 	parent.add_child(p)
+	var mark := ColorRect.new()
+	mark.color = C_SEL
+	mark.position = Vector2(8, 6)
+	mark.size = Vector2(3, 11)
+	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(mark)
 	var tb := ColorRect.new()
-	tb.color = C_TITLE
-	tb.position = Vector2(1, 1)
-	tb.size = Vector2(r.size.x - 2, 18)
+	tb.color = C_LINE
+	tb.position = Vector2(8, 20)
+	tb.size = Vector2(r.size.x - 16, 1)
 	tb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	p.add_child(tb)
-	var tl := _label(title, 11, Color(0.08, 0.14, 0.25))
-	tl.position = Vector2(6, 1)
+	var tl := _label(title, 10, C_TITLE)
+	tl.uppercase = true
+	tl.position = Vector2(16, 3)
 	tl.name = "Title"
 	p.add_child(tl)
 	var c := Control.new()
-	c.position = Vector2(4, 22)
-	c.size = r.size - Vector2(8, 26)
+	c.position = Vector2(6, 25)
+	c.size = r.size - Vector2(12, 31)
 	c.mouse_filter = Control.MOUSE_FILTER_PASS
 	p.add_child(c)
 	return c
@@ -287,10 +318,22 @@ func _build_header() -> void:
 	hb.size = Vector2(W, 22)
 	hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(hb)
+	var acc := ColorRect.new()
+	acc.color = C_SEL
+	acc.position = Vector2(0, 21)
+	acc.size = Vector2(W, 1)
+	acc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(acc)
+	var dot := ColorRect.new()
+	dot.color = C_SEL
+	dot.position = Vector2(6, 6)
+	dot.size = Vector2(10, 10)
+	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(dot)
 	_hdr_area = _label("", 13, Color.WHITE)
-	_hdr_area.position = Vector2(6, 2)
+	_hdr_area.position = Vector2(22, 2)
 	add_child(_hdr_area)
-	_hdr_mid = _label("", 12, Color(0.85, 0.9, 1.0))
+	_hdr_mid = _label("", 12, C_MUT)
 	_hdr_mid.position = Vector2(150, 3)
 	add_child(_hdr_mid)
 	_hdr_door = _label("", 12, Color.WHITE)
@@ -299,13 +342,13 @@ func _build_header() -> void:
 	_hdr_door.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	add_child(_hdr_door)
 	var mb := ColorRect.new()
-	mb.color = Color(0.93, 0.94, 0.95)
+	mb.color = Color(0.09, 0.10, 0.12)
 	mb.position = Vector2(0, 22)
 	mb.size = Vector2(W, 19)
 	mb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(mb)
 	_hdr_msg = _label("", 12, C_TXT)
-	_hdr_msg.position = Vector2(6, 23)
+	_hdr_msg.position = Vector2(8, 23)
 	_hdr_msg.size = Vector2(W - 12, 17)
 	_hdr_msg.clip_text = true
 	add_child(_hdr_msg)
@@ -358,7 +401,7 @@ func _apply_keys(keys: Array[Button], cbs: Array, defs: Array) -> void:
 		b.disabled = d.size() > 3 and bool(d[3])
 		cbs[i] = d[1]
 		if d.size() > 2 and bool(d[2]):
-			b.add_theme_stylebox_override("normal", _sb(C_SEL, Color(0.55, 0.32, 0.0), 2))
+			b.add_theme_stylebox_override("normal", _sb_active())
 		else:
 			b.remove_theme_stylebox_override("normal")
 
@@ -412,6 +455,8 @@ func _refresh() -> void:
 	match page:
 		"jog":
 			vdefs = _keys_jog()
+			hdefs[6] = ["Z0 an\nStirnfläche", func(): lathe.set_wcs_face()]
+			hdefs[7] = ["Z0 an\nSchneide", func(): lathe.set_wcs_tool()]
 		"auto":
 			vdefs = _keys_auto()
 		"pm":
@@ -458,10 +503,10 @@ func _process(delta: float) -> void:
 	_hdr_mid.position.x = maxf(150.0, _hdr_area.position.x + _hdr_area.get_minimum_size().x + 24.0)
 	if lathe.door_closed():
 		_hdr_door.text = "Schutztür ZU"
-		_hdr_door.add_theme_color_override("font_color", Color(0.55, 1.0, 0.55))
+		_hdr_door.add_theme_color_override("font_color", C_OK)
 	else:
-		_hdr_door.text = "Schutztür AUF" if lathe.door_t < 0.001 else "Schutztür fährt"
-		_hdr_door.add_theme_color_override("font_color", Color(1.0, 0.6, 0.4))
+		_hdr_door.text = "Schutztür AUF" if lathe.door_t < 0.001 and not lathe._door_closing else "Schutztür fährt"
+		_hdr_door.add_theme_color_override("font_color", C_WARN)
 	match page:
 		"jog":
 			_update_jog()
@@ -478,7 +523,7 @@ func _on_message(text: String, col: Color) -> void:
 	if col.r > 0.95 and col.g < 0.5:
 		c = C_ERR
 	elif col.r > 0.95 and col.g < 0.85:
-		c = Color(0.6, 0.35, 0.0)
+		c = C_WARN
 	_hdr_msg.add_theme_color_override("font_color", c)
 	var t := Time.get_time_dict_from_system()
 	_log.append(["%02d:%02d:%02d  %s" % [t["hour"], t["minute"], t["second"], text], c])
@@ -494,11 +539,24 @@ func _build_jog() -> Control:
 	var pg := _page()
 	var w := BODY.size.x
 	var c := _win(pg, Rect2(0, 0, w, 132), "Position WKS (Schneide)")
-	_jog_pos = _label("", 26)
-	_jog_pos.position = Vector2(8, 0)
+	for k in 2:
+		var tile := Panel.new()
+		tile.add_theme_stylebox_override("panel", _sb(C_FIELD, C_LINE, 1, 6))
+		tile.position = Vector2(0, k * 50)
+		tile.size = Vector2(290, 46)
+		tile.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		c.add_child(tile)
+		var ax := _label(["X Ø", "Z"][k], 20, C_TITLE)
+		ax.position = Vector2(12, 8)
+		tile.add_child(ax)
+	_jog_pos = _label("", 30)
+	_jog_pos.position = Vector2(60, -3)
+	_jog_pos.size = Vector2(220, 100)
+	_jog_pos.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_jog_pos.add_theme_constant_override("line_spacing", 9)
 	c.add_child(_jog_pos)
 	_jog_mks = _label("", 11, C_MUT)
-	_jog_mks.position = Vector2(300, 6)
+	_jog_mks.position = Vector2(306, 6)
 	c.add_child(_jog_mks)
 	var c2 := _win(pg, Rect2(0, 136, w, 196), "T, F, S")
 	_jog_info = _label("", 13)
@@ -509,7 +567,8 @@ func _build_jog() -> Control:
 	hint.text = ("Handbetrieb: Schlitten mit %s%s%s%s bzw. Handrad (Mausrad) verfahren.\n" +
 		"Zyklen: Bereich Programm - Kontur anlegen, Abspanen längs / plan einfügen,\n" +
 		"Simulation prüfen, Anwählen. In AUTO mit NC-START abarbeiten.\n" +
-		"Zyklusstart nur bei geschlossener Schutztür (Taste %s).") % [
+		"Zyklusstart nur bei geschlossener Schutztür (Taste %s).\n" +
+		"Nullpunkt W (Z0) an der Stirnfläche - zum Futter hin ist Z negativ.") % [
 		Settings.binding_text("lathe_x_in"), Settings.binding_text("lathe_z_minus"),
 		Settings.binding_text("lathe_x_out"), Settings.binding_text("lathe_z_plus"),
 		Settings.binding_text("door_toggle")]
@@ -533,9 +592,9 @@ func _keys_jog() -> Array:
 
 
 func _update_jog() -> void:
-	_jog_pos.text = "X  Ø %10.3f\nZ     %10.3f" % [lathe.tool_x * 2.0, lathe.tool_z]
+	_jog_pos.text = "%.3f\n%.3f" % [lathe.tool_x * 2.0, lathe.tool_z - lathe.wcs_z]
 	var mk := lathe.machine_pos()
-	_jog_mks.text = "MKS Bezugspunkt F\nX Ø %.3f   Z %.3f\n\nHandrad: %s, %s / Raste" % [mk.y * 2.0, mk.x,
+	_jog_mks.text = "MKS Bezugspunkt F\nX Ø %.3f   Z %.3f\nNullpunkt W: Z0 = %.3f ab Backe\nHandrad: %s, %s / Raste" % [mk.y * 2.0, mk.x, lathe.wcs_z,
 		"X" if lathe.hw_axis == 0 else "Z", Settings.handwheel_step_name()]
 	var t := lathe.tool()
 	var sp := "läuft" if lathe.spindle_speed > 5.0 else "steht"
@@ -609,7 +668,7 @@ func _update_auto() -> void:
 		"Satz: %s" % ("N%d" % ((nc.block + 1) * 10) if nc.block >= 0 else "-"),
 		"",
 		"X Ø %9.3f" % (lathe.tool_x * 2.0),
-		"Z    %9.3f" % lathe.tool_z,
+		"Z    %9.3f" % (lathe.tool_z - lathe.wcs_z),
 		"Restweg Z %.3f  X %.3f" % [rw.x, rw.y * 2.0],
 		"",
 		"T  %s  %s" % [t["id"], t["short"]],
@@ -1089,7 +1148,7 @@ func _form_accept() -> void:
 func _draw_help() -> void:
 	var c := _form_help
 	var sz := c.size
-	c.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.97, 0.97, 0.96))
+	c.draw_rect(Rect2(Vector2.ZERO, sz), C_FIELD)
 	if _form_blk.is_empty():
 		return
 	var f := c.get_theme_default_font()
@@ -1097,13 +1156,13 @@ func _draw_help() -> void:
 	var ax := sz.y - 70.0
 	var x0 := 30.0
 	var x1 := sz.x - 14.0
-	var ink := Color(0.15, 0.17, 0.2)
-	var blue := Color(0.08, 0.3, 0.75)
-	var green := Color(0.1, 0.55, 0.2)
+	var ink := C_MUT
+	var blue := Color(0.4, 0.65, 1.0)
+	var green := Color(0.35, 0.9, 0.5)
 	c.draw_dashed_line(Vector2(6, ax), Vector2(sz.x - 6, ax), ink, 1.0, 6.0)
-	c.draw_rect(Rect2(6, ax - 120, x0 - 6, 120), Color(0.55, 0.57, 0.6))
+	c.draw_rect(Rect2(6, ax - 120, x0 - 6, 120), Color(0.30, 0.32, 0.36))
 	if type == "head":
-		c.draw_rect(Rect2(x0, ax - 80, x1 - x0 - 50, 80), Color(0.75, 0.77, 0.8))
+		c.draw_rect(Rect2(x0, ax - 80, x1 - x0 - 50, 80), Color(0.26, 0.29, 0.33))
 		var wp := Vector2(x1 - 20, ax - 150)
 		c.draw_circle(wp, 5, Color(0.9, 0.5, 0.1))
 		c.draw_string(f, wp + Vector2(-60, -10), "Wechselpunkt XT/ZT", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
@@ -1117,10 +1176,10 @@ func _draw_help() -> void:
 	var step_z := x0 + (x1 - x0) * 0.45
 	var step_r := ax - 60.0
 	var end_z := x1 - 30.0
-	c.draw_rect(Rect2(x0, top, x1 - x0, ax - top), Color(0.82, 0.83, 0.86))
+	c.draw_rect(Rect2(x0, top, x1 - x0, ax - top), Color(0.20, 0.22, 0.26))
 	var part := PackedVector2Array([Vector2(x0, ax), Vector2(x0, top), Vector2(step_z, top), Vector2(step_z, step_r),
 		Vector2(end_z, step_r), Vector2(end_z, ax)])
-	c.draw_colored_polygon(part, Color(0.62, 0.65, 0.7))
+	c.draw_colored_polygon(part, Color(0.36, 0.39, 0.44))
 	c.draw_polyline(part, blue, 2.0)
 	# Schnittaufteilung
 	if finish:
@@ -1481,7 +1540,7 @@ func _update_tools() -> void:
 		var d := lathe.tool_data(LatheTools.get_tool(LatheTools.index_of(id)))
 		var st := lathe.slot_status(s)
 		_tl_lbl[s].text = "L1 %.3f  L2 %.3f  R %.1f  SL %d\n%s" % [d["l1"], d["l2"], d["r"], d["sl"], st["text"]]
-		_tl_lbl[s].add_theme_color_override("font_color", [C_TXT, Color(0.6, 0.35, 0.0), C_ERR][int(st["level"])])
+		_tl_lbl[s].add_theme_color_override("font_color", [C_TXT, C_WARN, C_ERR][int(st["level"])])
 
 
 # ======================================================================= Meldungen

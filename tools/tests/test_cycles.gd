@@ -66,11 +66,16 @@ func _initialize() -> void:
 	l.prog_sel = "WELLE_AUFTRAG2"
 	ok(not l.nc.nc_start(prog(l, "WELLE_AUFTRAG2")), "Zyklusstart bei offener Tür verweigert")
 	l.toggle_door()
-	for i in 30:
+	for i in 40:
 		l._physics_process(0.05)
-	ok(l.door_closed() and l._door.position.x > l.DOOR_TRAVEL - 0.001, "Tür zugeschoben (Pult fährt mit)")
+	var dx: float = l._door.position.x + l.DOOR_X1 - (l.carriage.position.x + 0.31)
+	ok(l.door_closed() and absf(dx) < 0.002, "Tür zum Schlitten geschoben und eingerastet (%.3f)" % dx)
+	l.move_tool(-40.0, 0.0)
+	dx = l._door.position.x + l.DOOR_X1 - (l.carriage.position.x + 0.31)
+	ok(l.door_closed() and absf(dx) < 0.002, "eingerastete Tür fährt mit dem Schlitten (%.3f)" % dx)
+	l.move_tool(40.0, 0.0)
 
-	# --- Tür am Griff mit der Maus ziehen
+	# --- Tür mit Linksklick: Tür anklicken -> rastet am Schlitten ein, Hebel -> löst
 	l.set_door(false)
 	l.operating = true
 	l.set_view("front")
@@ -79,33 +84,79 @@ func _initialize() -> void:
 		l._update_camera(0.1)
 	var hp: Vector3 = l.to_global(l.HANDLE_POS)
 	var mp: Vector2 = l.op_cam.unproject_position(hp)
-	ok(l.handle_hit(mp), "Griff unter der Maus erkannt (%s)" % mp)
-	ok(not l.handle_hit(l.op_cam.unproject_position(hp + Vector3(0.2, 0, 0))), "20 cm daneben kein Griff")
+	ok(l.handle_hit(mp), "Hebel unter der Maus erkannt (%s)" % mp)
+	ok(not l.handle_hit(l.op_cam.unproject_position(hp + Vector3(0.2, 0, 0))), "20 cm daneben kein Hebel")
 	var ev := InputEventMouseButton.new()
 	ev.button_index = MOUSE_BUTTON_LEFT
 	ev.pressed = true
-	ev.position = mp
-	ok(l._door_input(ev), "Griff gepackt")
-	var target_px: Vector2 = l.op_cam.unproject_position(l.to_global(l.HANDLE_POS + Vector3(l.DOOR_TRAVEL * 0.5, 0, 0)))
-	var mv := InputEventMouseMotion.new()
-	mv.position = target_px
-	l._door_input(mv)
-	ok(absf(l.door_t - 0.5) < 0.05 and not l.door_closed(), "halb zugezogen (%.2f)" % l.door_t)
-	mv.position = l.op_cam.unproject_position(l.to_global(l.HANDLE_POS + Vector3(l.DOOR_TRAVEL * 0.97, 0, 0)))
-	l._door_input(mv)
-	var up := ev.duplicate() as InputEventMouseButton
-	up.pressed = false
-	l._door_input(up)
-	for i in 10:
+	ev.position = l.op_cam.unproject_position(l.to_global(Vector3(l.DOOR_CX, 1.37, 0.535)))
+	ok(l.door_hit(ev.position), "Türfenster unter der Maus erkannt")
+	ok(l._door_input(ev), "Linksklick auf die Tür")
+	l._physics_process(0.05)
+	ok(not l.door_closed() and l.door_t > 0.0, "Tür schiebt sich nach rechts (%.2f)" % l.door_t)
+	for i in 40:
 		l._physics_process(0.05)
-	ok(l.door_closed(), "losgelassen nahe am Ende: rastet zu (%.3f)" % l.door_t)
+	ok(l.door_closed(), "Tür am Schlitten eingerastet")
+	ok(not l._door_input(ev) or l.door_closed(), "Klick auf eingerastete Tür löst sie nicht")
+	ev.position = l.op_cam.unproject_position(l.to_global(l.HANDLE_POS + Vector3(l._door.position.x, 0, 0)))
+	ok(l._door_input(ev) and not l.door_closed(), "Klick auf den schwarzen Hebel löst die Tür")
+	for i in 40:
+		l._physics_process(0.05)
+	ok(l.door_t < 0.001, "gelöste Tür aufgeschoben")
 	l.operating = false
 	l.set_view("reset")
+
+	# --- Ego-Ansicht: Fadenkreuz-Strahl trifft Tür bzw. Hebel, Linksklick (click) wirkt
+	await physics_frame
+	await physics_frame
+	var space: PhysicsDirectSpaceState3D = l.get_world_3d().direct_space_state
+	var aim := func(pm: Vector3):
+		var gp: Vector3 = l.to_global(pm)
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(gp + l.global_basis.z * 1.5, gp))
+		return hit["collider"].get_meta("interact") if hit and hit["collider"].has_meta("interact") else null
+	var tgt = aim.call(Vector3(l.DOOR_CX, 1.40, 0.55))
+	ok(tgt != null and tgt.has_method("click") and not tgt.get("lever"), "Fadenkreuz auf der Tür: Tür-Ziel (%s)" % tgt)
+	if tgt != null and tgt.has_method("click"):
+		tgt.click(null)
+	for i in 40:
+		l._physics_process(0.05)
+	ok(l.door_closed(), "Linksklick in der Ego-Ansicht: Tür eingerastet")
+	await physics_frame
+	await physics_frame
+	tgt = aim.call(l.HANDLE_POS + Vector3(l._door.position.x, 0, 0))
+	ok(tgt != null and tgt.has_method("click") and tgt.get("lever"), "Fadenkreuz auf dem Hebel: Hebel-Ziel (%s)" % tgt)
+	if tgt != null and tgt.has_method("click"):
+		tgt.click(null)
+	ok(not l.door_closed(), "Linksklick auf den Hebel in der Ego-Ansicht löst die Tür")
+	l.set_door(true)
 
 	# --- Simulation vorab
 	var sim: Dictionary = NcCam.simulate(prog(l, "WELLE_AUFTRAG2"), l)
 	ok(sim["errs"].is_empty(), "Simulation ohne Fehler %s" % [sim["errs"]])
 	ok(sim["moves"].size() > 20 and sim["time"] > 30.0, "Simulation: %d Züge, %.0f s" % [sim["moves"].size(), sim["time"]])
+
+	# --- Schlichten: jede Planfläche genau EIN Planspan (kein Zug an der fertigen Fläche zurück)
+	var mvs: Array = sim["moves"]
+	var lastblk: int = int(mvs[mvs.size() - 1][3])
+	var face_feeds := {}
+	for k in range(1, mvs.size()):
+		var m0: Array = mvs[k - 1]
+		var m1: Array = mvs[k]
+		if int(m1[3]) != lastblk or bool(m1[2]):
+			continue
+		if absf(float(m1[0]) - float(m0[0])) < 0.01 and absf(float(m1[1]) - float(m0[1])) > 1.0:
+			var key := snappedf(float(m1[0]), 0.5)
+			face_feeds[key] = int(face_feeds.get(key, 0)) + 1
+	var twice := face_feeds.keys().filter(func(z): return int(face_feeds[z]) > 1)
+	ok(face_feeds.size() >= 2 and twice.is_empty(), "Schlichten: jede Planfläche ein Zug (%s)" % [face_feeds])
+	# Kontur ohne Absetzen in einem Zug: zwischen erstem und letztem Schnitt kein Eilgang
+	var fm: Array = mvs.filter(func(m): return int(m[3]) == lastblk)
+	var f0 := fm.find(fm.filter(func(m): return not bool(m[2]))[0])
+	var g0_mid := 0
+	for k in range(f0, fm.size() - 1):
+		if bool(fm[k][2]):
+			g0_mid += 1
+	ok(g0_mid == 0, "Schlichten fährt die Kontur ohne Absetzen ab (%d Eilgänge dazwischen)" % g0_mid)
 
 	# --- Längsschruppen + Schlichten (Auftrag 2)
 	ok(l.nc.nc_start(prog(l, "WELLE_AUFTRAG2")), "NC-Start WELLE_AUFTRAG2")
@@ -124,7 +175,7 @@ func _initialize() -> void:
 	ok(not l.spindle_on, "Handbedienung im Automatik gesperrt")
 	ok(not l.nc.nc_start({}), "Fortsetzen bei offener Tür verweigert")
 	l.toggle_door()
-	for i in 30:
+	for i in 80:
 		l._physics_process(0.05)
 	ok(l.nc.nc_start({}), "Tür zu: NC-Start setzt fort")
 	var dur := run(l)
@@ -158,6 +209,26 @@ func _initialize() -> void:
 	ok(absf(l.radius_at(150.0) * 2.0 - 30.0) < 0.1, "Bund: Zapfen Ø%.3f" % (l.radius_at(150.0) * 2.0))
 	ok(absf(l.radius_at(130.0) * 2.0 - 52.0) < 0.1, "Bund: Ø%.3f" % (l.radius_at(130.0) * 2.0))
 	ok(absf(l.radius_at(110.0) - 30.0) < 0.01, "Bund: Rohteil links unberührt")
+
+	# --- Plan-Schlichten: genau eine Zustellung - Eilgang über die Planfläche, dann in einem Zug
+	# über die Mitte, ohne Nachrücken in Z und ohne Weg auf X0
+	l.new_workpiece(60.0, 160.0)
+	var pf := NcCam.new_program("PF")
+	pf["blocks"].append({"type": "cut", "mode": 1, "dir": 1, "t": "T3", "f": 0.1, "v": 200.0,
+		"z0": 0.0, "x1": 0.0, "z1": -1.0, "d": 1.0, "ux": 0.0, "uz": 0.0})
+	var fs: Dictionary = NcCam.simulate(pf, l)
+	var feeds: Array = fs["moves"].filter(func(m): return not bool(m[2]))
+	ok(feeds.size() >= 1 and absf(float(feeds[0][0]) - 159.0) < 0.01 and float(feeds[0][1]) < 0.0,
+		"Plan-Schlichten: ein Zug bei Z159 über die Mitte (%s)" % [feeds.slice(0, 3)])
+	var bp: Dictionary = NcCam.simulate(prog(l, "BUND_PLAN"), l)
+	var fin: Array = bp["moves"].filter(func(m): return int(m[3]) == bp["moves"][bp["moves"].size() - 1][3] and not bool(m[2]))
+	ok(fin.size() >= 2 and float(fin[0][1]) < 30.0 and absf(float(fin[0][0]) - float(fin[1][0])) > 1.0,
+		"Bund-Schlichten beginnt direkt an der Planfläche")
+	var on_axis := false
+	for k in fin.size() - 1:
+		if absf(float(fin[k][1])) < 0.01 and absf(float(fin[k + 1][1])) < 0.01:
+			on_axis = true
+	ok(not on_axis, "Plan-Schlichten fährt nicht auf X0 in Z weiter")
 
 	# --- Pult-Software
 	var s = l.screen
@@ -208,6 +279,41 @@ func _initialize() -> void:
 	await process_frame
 	l2.set_state(st)
 	ok(l2.programs.size() == l.programs.size() and l2.prog_sel == "TEST_1" and l2.door_closed(), "Programme, Anwahl und Tür geladen")
+
+	# --- Werkstücknullpunkt an der Stirnfläche: Programm-Z negativ zum Futter hin
+	l.new_workpiece(60.0, 170.0)
+	ok(is_equal_approx(l.wcs_z, 170.0), "Nullpunkt Z0 an der Rohteil-Stirnfläche (%.1f)" % l.wcs_z)
+	ok(float(prog(l, "PLANEN_2MM")["blocks"][1]["z1"]) < 0.0, "Beispielprogramm arbeitet bei Z minus")
+	l.tool_z = 180.0
+	s.show_page("jog")
+	s._update_jog()
+	ok(s._jog_pos.text.ends_with("10.000"), "Pult zeigt Z im WKS (%s)" % s._jog_pos.text.replace("\n", " / "))
+	l.nc.reset()
+	l.set_door(true)
+	ok(l.nc.nc_start(prog(l, "PLANEN_2MM")), "NC-Start PLANEN_2MM am 170er Rohteil")
+	run(l)
+	ok(absf(l.part_length() - 168.0) < 0.3, "Planen um 2 mm ab Stirnfläche: Länge %.2f" % l.part_length())
+	l.tool_z = 175.0
+	l.set_wcs_face()
+	ok(is_equal_approx(l.wcs_z, l.part_length()), "Z0 an die neue Stirnfläche gesetzt")
+	l.set_wcs_tool()
+	ok(is_equal_approx(l.wcs_z, 175.0), "Z0 an die Schneide gesetzt")
+	var st2: Dictionary = l.get_state()
+	l2.set_state(st2)
+	ok(is_equal_approx(l2.wcs_z, 175.0), "Nullpunkt wird gespeichert")
+	# alter Spielstand: Programme ab Backen-Stirnfläche werden auf WKS umgerechnet
+	var old := {"name": "ALT", "blocks": [{"type": "head", "sc": 1.0, "xt": 160.0, "zt": 230.0, "smax": 2500.0, "kss": 1},
+		{"type": "cut", "mode": 0, "dir": 1, "t": "T1", "f": 0.2, "v": 180.0, "z0": 160.0, "x1": 0.0, "z1": 158.0,
+		"d": 1.0, "ux": 0.0, "uz": 0.0}]}
+	var st3 := st2.duplicate(true)
+	st3.erase("wcs_z")
+	st3["stock_len"] = 160.0
+	st3["programs"] = [old]
+	l2.set_state(st3)
+	var mb: Dictionary = l2.programs[0]["blocks"][1]
+	ok(is_equal_approx(float(mb["z0"]), 0.0) and is_equal_approx(float(mb["z1"]), -2.0)
+		and is_equal_approx(float(l2.programs[0]["blocks"][0]["zt"]), 70.0) and is_equal_approx(l2.wcs_z, 160.0),
+		"alter Spielstand umgerechnet (Z0 %s Z1 %s)" % [mb["z0"], mb["z1"]])
 
 	print("CHECKS %d FAILS %d" % [checks, fails])
 	quit()

@@ -118,17 +118,30 @@ const PULT_ANGLE := 0.55                   # Pult zum Bediener hin angewinkelt (
 const DOOR_TRAVEL := 0.84                  # Weg der Schiebetür von auf (über dem Spindelkasten) bis zu
 const DOOR_TIME := 0.9                     # s für den ganzen Weg
 const DOOR_LAYER := 1 << 2                 # Sichtebene der Tür (Bedienkamera blendet sie von innen aus)
-var door_t := 0.0                          # 0 = auf, 1 = zu
-var door_target := 0.0
+var door_t := 0.0                          # Türlage in DOOR_TRAVEL: 0 = auf, eingerastet = am Schlitten
+var door_latched := false                  # am Bettschlitten eingerastet (= Schutztür zu)
+var _door_closing := false                 # schiebt sich gerade zum Schlitten
+const DOOR_LATCH_DX := 0.31 - DOOR_X1      # rechter Türrand bündig mit dem rechten Schlittenende
+const DOOR_MAX := 2.06 - DOOR_X1           # weiter rechts endet die Laufschiene
 const HANDLE_POS := Vector3(DOOR_X1 - 0.03, 1.32, 0.57)   # Türgriff (Tür auf), Maschinenkoordinaten
 const HANDLE_PICK := Vector3(0.06, 0.46, 0.06)           # Greifbereich um den Griff
-var _door_drag := false
-var _door_grab := 0.0                                     # Abstand Mausstrahl - Türlage beim Greifen (m)
 var _handle_hover := false
 var _door: Node3D
+var periphery: Node3D                                     # Späneförderer und Spänewagen (stehen neben der Maschine)
+var _telescope: Array = []                                # Teleskopabdeckung links/rechts vom Bettschlitten
+var _chain: Array[MeshInstance3D] = []                    # Glieder der Energiekette
+const CHAIN_LINKS := 64
+const CHAIN_PITCH := 0.04                                 # m je Glied
+const CHAIN_FIX := 0.05                                   # festes Ende der Kette (x, m)
+const CHAIN_LEN := 1.9                                    # Länge Untertrum + Obertrum (ohne Bogen)
+const CHAIN_R := 0.04                                     # Biegeradius
 var nc: NcChannel                          # Zyklensteuerung
 var programs: Array = []                   # NC-Programme (siehe NcCam)
 var prog_sel := ""                         # für AUTO angewähltes Programm
+## Werkstücknullpunkt (Z0 der NC-Programme und der Pult-Anzeige) in mm über der Backen-
+## Stirnfläche. Standard: Stirnfläche des Rohteils; am Pult neu setzbar (Ankratzen).
+var wcs_z := 160.0
+var nc_finish := false                     # gerade läuft ein Schlichtzug der Zyklensteuerung
 var nc_internal := false                   # Aufruf kommt vom NC-Kanal (Sperren für Handbedienung aus)
 var chips: CPUParticles3D
 var coolant_fx: CPUParticles3D
@@ -219,6 +232,11 @@ func _build() -> void:
 	var green := Build.mat(Color(0.1, 0.65, 0.2), 0.4)
 	var yellow := Build.mat(Color(0.95, 0.78, 0.05), 0.5)
 	var seam := Build.mat(Color(0.12, 0.13, 0.14), 0.7)
+	var bed_m := Build.mat(Color(0.47, 0.49, 0.51), 0.62)        # Grauguss lackiert (Bett, Reitstockfuß)
+	var saddle_m := Build.mat(Color(0.55, 0.57, 0.59), 0.45, 0.3)
+	var beige := Build.mat(Color(0.84, 0.80, 0.66), 0.8)         # Innenraum: cremefarben gesprenkelt
+	var stainless := Build.mat(Color(0.74, 0.75, 0.76), 0.3, 1.0)
+	var ts_w := Build.mat(Color(0.88, 0.88, 0.85), 0.55)         # Reitstock: gebrochenes Weiß
 
 	# Unterbau: Standfuß unter dem Spindelkasten, Fuß rechts, dazwischen die Spänewanne
 	Build.box(self, Vector3(0.88, 0.58, 0.86), Vector3(-0.62, 0.33, 0.0), a)
@@ -228,22 +246,45 @@ func _build() -> void:
 		Build.box(self, Vector3(0.006, 0.5, 0.004), Vector3(x, 0.33, 0.431), seam)
 		for s in [-1.0, 1.0]:
 			Build.box(self, Vector3(0.012, 0.09, 0.02), Vector3(x + s * 0.04, 0.45, 0.44), dark)
-	Build.box(self, Vector3(1.34, 0.06, 0.95), Vector3(0.75, 0.2, 0.06), dark)
+	Build.box(self, Vector3(1.34, 0.06, 0.95), Vector3(0.75, 0.2, 0.06), stainless)
 	Build.box(self, Vector3(1.34, 0.25, 0.03), Vector3(0.75, 0.33, 0.52), a)
 	Build.box(self, Vector3(1.34, 0.02, 0.07), Vector3(0.75, 0.455, 0.5), g)          # Wannenkante
 	Build.box(self, Vector3(1.34, 0.4, 0.03), Vector3(0.75, 0.42, -0.41), a)
 
-	# Bett mit geschliffenen Flachführungen, Bettfront mit Leit-, Zug- und Schaltstange
-	Build.box(self, Vector3(3.07, 0.28, 0.56), Vector3(0.48, 0.76, 0.0), g)
+	# Bett (Grauguss) mit geschliffenen Führungen: vorne Prisma, hinten Flachbahn. Die E50 HD hat
+	# keine Leit-/Zugspindel - die Bettfront deckt ein Edelstahlblech ab. Hinten neben dem Bett
+	# Teleskopabdeckung über dem Kugelgewindetrieb und dahinter die Energiekette zum Bettschlitten.
+	Build.box(self, Vector3(3.07, 0.28, 0.56), Vector3(0.48, 0.76, 0.0), bed_m)
 	Build.box(self, Vector3(3.07, 0.03, 0.5), Vector3(0.48, 0.635, 0.0), a)
-	for z in [0.21, -0.21]:
-		Build.box(self, Vector3(3.02, 0.03, 0.08), Vector3(0.48, 0.915, z), ways)
+	for s in [-1.0, 1.0]:                                                             # Prisma vorne
+		Build.box(self, Vector3(3.02, 0.032, 0.05), Vector3(0.48, 0.912, 0.21 + s * 0.017), ways, false, Vector3(s * 0.75, 0, 0))
+	Build.box(self, Vector3(3.02, 0.03, 0.08), Vector3(0.48, 0.915, -0.21), ways)     # Flachbahn hinten
 	Build.box(self, Vector3(3.02, 0.02, 0.05), Vector3(0.48, 0.91, 0.0), ways)
 	Build.box(self, Vector3(3.02, 0.01, 0.1), Vector3(0.48, 0.912, 0.0), dark)         # Bettschlitz
-	Build.cyl(self, 0.014, 2.92, Vector3(0.48, 0.84, 0.3), steel, Build.AXIS_X)
-	Build.cyl(self, 0.011, 2.92, Vector3(0.48, 0.78, 0.3), steel, Build.AXIS_X)
-	Build.cyl(self, 0.009, 2.92, Vector3(0.48, 0.72, 0.3), steel, Build.AXIS_X)
-	Build.box(self, Vector3(0.05, 0.16, 0.06), Vector3(1.99, 0.78, 0.3), g)           # Lagerbock rechts
+	Build.box(self, Vector3(3.02, 0.11, 0.006), Vector3(0.48, 0.82, 0.283), stainless)  # Bettfrontblech
+	Build.box(self, Vector3(3.02, 0.012, 0.02), Vector3(0.48, 0.885, 0.285), ways)
+	for i in 11:                                                                      # Blechschrauben
+		Build.cyl(self, 0.004, 0.004, Vector3(-0.05 + i * 0.2, 0.85, 0.287), dark, Build.AXIS_Z, false, 8)
+	Build.box(self, Vector3(3.02, 0.26, 0.11), Vector3(0.48, 0.75, -0.335), bed_m)     # Rückwange
+	Build.box(self, Vector3(3.02, 0.004, 0.11), Vector3(0.48, 0.881, -0.335), beige)
+	_telescope = []
+	for side in 2:
+		var plates: Array[MeshInstance3D] = []
+		for i in 6:
+			var tp := Build.box(self, Vector3(1, 0.012, 0.05 - i * 0.002), Vector3(0, 0.92 - i * 0.004, -0.305), stainless)
+			plates.append(tp)
+			Build.box(tp, Vector3(1, 0.004, 0.006), Vector3(0, 0.007, 0.022 - i * 0.001), steel)   # Lamellenkante
+		_telescope.append(plates)
+	var link_m := Build.mat(Color(0.62, 0.6, 0.55), 0.45, 0.6)
+	_chain = []
+	for i in CHAIN_LINKS:
+		var lk := Build.box(self, Vector3(CHAIN_PITCH * 0.92, 0.03, 0.05), Vector3.ZERO, link_m)
+		Build.box(lk, Vector3(CHAIN_PITCH * 0.3, 0.032, 0.052), Vector3(CHAIN_PITCH * 0.35, 0, 0), a)
+		_chain.append(lk)
+	# Schalthebel links am Bett (Spindel Ein/Aus wie an der konventionellen Maschine)
+	Build.box(self, Vector3(0.05, 0.05, 0.05), Vector3(-0.15, 0.69, 0.31), dark)
+	Build.cyl(self, 0.008, 0.2, Vector3(-0.15, 0.69, 0.42), steel, Build.AXIS_Z)
+	Build.sphere(self, 0.018, Vector3(-0.15, 0.69, 0.53), dark)
 	# Auffangfläche für abgestochene Teile (eigene Physik-Ebene)
 	var pan := Build.collider(self, Vector3(1.34, 0.06, 0.95), Vector3(0.75, 0.2, 0.06))
 	pan.collision_layer = PIECE_LAYER
@@ -258,7 +299,8 @@ func _build() -> void:
 	Build.box(self, Vector3(0.86, 0.82, 0.76), Vector3(-0.62, 1.31, -0.02), w)
 	Build.box(self, Vector3(0.87, 0.02, 0.77), Vector3(-0.62, 1.73, -0.02), g)
 	var fx := -0.187
-	Build.box(self, Vector3(0.004, 0.40, 0.52), Vector3(fx, AXIS_H + 0.03, 0.0), Build.mat(Color(0.84, 0.85, 0.86), 0.5))
+	Build.box(self, Vector3(0.003, 0.66, 0.74), Vector3(fx - 0.0015, 1.25, -0.02), beige)   # Stirnwand innen
+	Build.box(self, Vector3(0.004, 0.40, 0.52), Vector3(fx, AXIS_H + 0.03, 0.0), Build.mat(Color(0.80, 0.77, 0.66), 0.6))
 	for s in [-1.0, 1.0]:
 		Build.box(self, Vector3(0.012, 0.035, 0.6), Vector3(fx + 0.004, AXIS_H + 0.03 + s * 0.2, 0.0), g)
 		Build.box(self, Vector3(0.012, 0.44, 0.035), Vector3(fx + 0.004, AXIS_H + 0.03, s * 0.28), g)
@@ -309,9 +351,9 @@ func _build() -> void:
 	Build.box(self, Vector3(DOOR_X1 - DOOR_X0, 0.014, 0.19), Vector3(DOOR_CX, 1.087, 0.47), g)
 	_logo(self, Vector3(DOOR_X0 + 0.12, 0.86, 0.561), 0.06, blue)
 	Build.label(self, "WEILER", Vector3(DOOR_CX + 0.07, 0.86, 0.561), 0.0017, Color(0.06, 0.18, 0.58), 64)
-	var rail_x0 := DOOR_X0 - 0.05
-	var rail_x1 := DOOR_X1 + DOOR_TRAVEL + 0.05
-	Build.box(self, Vector3(rail_x1 - rail_x0, 0.03, 0.04), Vector3((rail_x0 + rail_x1) * 0.5, 1.735, 0.45), g)  # Laufschiene
+	# Laufschiene (Alu-Profil mit schwarzer Abdeckleiste) über die ganze Maschinenlänge
+	Build.box(self, Vector3(3.16, 0.03, 0.04), Vector3(0.51, 1.735, 0.45), Build.mat(Color(0.78, 0.79, 0.8), 0.3, 0.8))
+	Build.box(self, Vector3(3.16, 0.012, 0.03), Vector3(0.51, 1.756, 0.45), seam)
 	_door = Node3D.new()
 	add_child(_door)
 	var door_parts: Array[GeometryInstance3D] = []
@@ -326,34 +368,83 @@ func _build() -> void:
 	for n in door_parts:
 		n.layers = DOOR_LAYER
 
-	# Reitstock: weißes Gehäuse, langer Pinolenkörper, Handrad hinten, Klemmhebel
-	Build.box(ts, Vector3(0.38, 0.06, 0.5), Vector3(0, 0.96, 0), g)
-	Build.box(ts, Vector3(0.34, 0.17, 0.30), Vector3(0.0, 1.075, 0), w)
-	Build.box(ts, Vector3(0.24, 0.06, 0.22), Vector3(0.0, 1.17, 0), w)
-	Build.cyl(ts, 0.075, 0.42, Vector3(-0.01, AXIS_H, 0), w, Build.AXIS_X, false, 32)
-	Build.cyl(ts, 0.06, 0.02, Vector3(-0.225, AXIS_H, 0), g, Build.AXIS_X, false, 32)
-	Build.cyl(ts, 0.04, 0.2, Vector3(-0.26, AXIS_H, 0), steel, Build.AXIS_X)
+	# Reitstock wie an der E50 HD: grauer Fuß auf den Bettbahnen mit schwarzen Klemmleisten, darauf
+	# ein gebrochen weißes, kantiges Oberteil mit gefasten Längskanten. Vorne die verchromte Pinole,
+	# hinten das Scheibenhandrad mit Kurbelgriff, oben Pinolen- und Reitstockklemmhebel.
+	Build.box(ts, Vector3(0.40, 0.06, 0.46), Vector3(0, 0.96, 0), bed_m)
+	for zz in [-0.215, 0.215]:
+		for xx in [-0.17, 0.17]:
+			Build.box(ts, Vector3(0.035, 0.03, 0.03), Vector3(xx, 0.945, zz), dark)
+	Build.box(ts, Vector3(0.40, 0.004, 0.46), Vector3(0, 0.991, 0), seam)            # Trennfuge Fuß/Oberteil
+	Build.box(ts, Vector3(0.36, 0.09, 0.30), Vector3(0.0, 1.04, 0), ts_w)           # Unterteil
+	Build.box(ts, Vector3(0.2, 0.06, 0.16), Vector3(0.06, 1.11, 0), ts_w)            # Steg
+	Build.box(ts, Vector3(0.44, 0.13, 0.17), Vector3(-0.02, AXIS_H, 0), ts_w)       # Pinolengehäuse
+	Build.box(ts, Vector3(0.44, 0.03, 0.11), Vector3(-0.02, AXIS_H + 0.07, 0), ts_w)
+	for sz in [-1.0, 1.0]:
+		Build.box(ts, Vector3(0.44, 0.045, 0.03), Vector3(-0.02, AXIS_H + 0.062, sz * 0.068), ts_w, false, Vector3(sz * 0.785, 0, 0))
+	Build.box(ts, Vector3(0.08, 0.06, 0.15), Vector3(-0.2, 1.07, 0), ts_w, false, Vector3(0, 0, -0.5))   # Schräge vorne
+	Build.cyl(ts, 0.05, 0.012, Vector3(-0.246, AXIS_H, 0), stainless, Build.AXIS_X, false, 32)
+	Build.cyl(ts, 0.036, 0.1, Vector3(-0.29, AXIS_H, 0), chrome, Build.AXIS_X, false, 32)  # Pinole
 	if model == null:
-		Build.cyl(ts, 0.025, 0.05, Vector3(-0.385, AXIS_H, 0), steel, Build.AXIS_X, false, 16, 0.002)
-	Build.cyl(ts, 0.008, 0.06, Vector3(-0.17, AXIS_H + 0.1, 0), dark)                 # Pinolenklemmung
-	Build.sphere(ts, 0.014, Vector3(-0.17, AXIS_H + 0.135, 0), dark)
-	Build.cyl(ts, 0.012, 0.006, Vector3(-0.08, AXIS_H + 0.076, 0.0), blue)
-	Build.cyl(ts, 0.02, 0.04, Vector3(0.22, AXIS_H, 0), chrome, Build.AXIS_X)
+		Build.cyl(ts, 0.025, 0.05, Vector3(-0.365, AXIS_H, 0), steel, Build.AXIS_X, false, 16, 0.002)
+	for c in [Vector2(-0.16, 1.12), Vector2(-0.03, 1.06)]:                          # Lagerstopfen seitlich
+		Build.cyl(ts, 0.022, 0.006, Vector3(c.x, c.y, 0.152), stainless, Build.AXIS_Z, false, 24)
+		Build.cyl(ts, 0.004, 0.007, Vector3(c.x, c.y, 0.153), dark, Build.AXIS_Z, false, 8)
+	Build.box(ts, Vector3(0.07, 0.05, 0.004), Vector3(0.12, 1.05, 0.151), Build.mat(Color(0.7, 0.7, 0.68), 0.6))   # Tasche mit Mutter
+	Build.cyl(ts, 0.012, 0.02, Vector3(0.12, 1.045, 0.15), dark, Build.AXIS_Y, false, 6)
+	Build.box(ts, Vector3(0.05, 0.02, 0.001), Vector3(0.12, AXIS_H + 0.0855, 0.04), Build.mat(Color(0.95, 0.95, 0.93), 0.6))  # Skalenschild
+	# Pinolenklemmung: verchromter Hebel mit schwarzem Griff
+	var ql := Node3D.new()
+	ql.position = Vector3(-0.17, AXIS_H + 0.085, 0.05)
+	ql.rotation = Vector3(0.0, 0.5, 0.55)
+	ts.add_child(ql)
+	Build.cyl(ql, 0.012, 0.02, Vector3.ZERO, chrome)
+	Build.cyl(ql, 0.006, 0.17, Vector3(0.0, 0.0, 0.0), chrome, Build.AXIS_X).position.x = 0.085
+	Build.cyl(ql, 0.012, 0.06, Vector3(0.19, 0.0, 0.0), dark, Build.AXIS_X, false, 16, 0.009)
+	# Reitstockklemmung: gebogener Hebel hinten oben
+	var cl := Node3D.new()
+	cl.position = Vector3(0.12, AXIS_H + 0.08, -0.05)
+	cl.rotation = Vector3(0.3, 0.0, -0.35)
+	ts.add_child(cl)
+	Build.cyl(cl, 0.007, 0.16, Vector3(0, 0.08, 0), chrome)
+	Build.cyl(cl, 0.013, 0.07, Vector3(0, 0.19, 0), dark, Build.AXIS_Y, false, 16, 0.009)
+	# Scheibenhandrad hinten
+	Build.cyl(ts, 0.042, 0.02, Vector3(0.21, AXIS_H, 0), stainless, Build.AXIS_X, false, 32)
+	Build.cyl(ts, 0.05, 0.012, Vector3(0.226, AXIS_H, 0), steel, Build.AXIS_X, false, 40)   # Skalenring
 	var tw := Node3D.new()
-	tw.position = Vector3(0.25, AXIS_H, 0)
+	tw.position = Vector3(0.24, AXIS_H, 0)
 	tw.rotation.y = PI / 2
 	ts.add_child(tw)
-	_handwheel(tw, 0.075, chrome, dark)
-	Build.box(ts, Vector3(0.05, 0.03, 0.06), Vector3(0.0, 0.98, 0.27), dark)          # Klemmhebel
-	Build.cyl(ts, 0.007, 0.12, Vector3(0.0, 1.02, 0.3), dark, Build.AXIS_Y)
+	var rim := MeshInstance3D.new()
+	var rt := TorusMesh.new()
+	rt.inner_radius = 0.082
+	rt.outer_radius = 0.1
+	rt.rings = 48
+	rim.mesh = rt
+	rim.material_override = chrome
+	rim.rotation.x = PI / 2
+	tw.add_child(rim)
+	Build.cyl(tw, 0.086, 0.012, Vector3(0, 0, -0.004), dark, Build.AXIS_Z, false, 40)
+	Build.cyl(tw, 0.028, 0.03, Vector3(0, 0, 0.004), chrome, Build.AXIS_Z, false, 24)
+	Build.cyl(tw, 0.011, 0.04, Vector3(0, 0.072, 0.024), dark, Build.AXIS_Z, false, 16)       # Kurbelgriff
 
 	# Bettschlitten mit Schlosskasten: blaues Bedienfeld, Handrad links
-	Build.box(carriage, Vector3(0.42, 0.09, 0.76), Vector3(0.1, 0.975, 0.0), g)
+	Build.box(carriage, Vector3(0.42, 0.09, 0.76), Vector3(0.1, 0.975, 0.0), saddle_m)
 	for z in [0.385, -0.385]:
 		Build.box(carriage, Vector3(0.44, 0.05, 0.02), Vector3(0.1, 0.95, z), dark)  # Abstreifer
-	Build.box(carriage, Vector3(0.5, 0.34, 0.09), Vector3(0.1, 0.76, 0.42), g)
+	# Schlosskasten wie im Foto: Weiler-blau, hellgraues Tastenfeld, rechts der Vorschub-Drehknopf
+	Build.box(carriage, Vector3(0.5, 0.34, 0.09), Vector3(0.1, 0.76, 0.42), blue)
+	Build.box(carriage, Vector3(0.502, 0.006, 0.092), Vector3(0.1, 0.928, 0.42), saddle_m)
 	Build.box(carriage, Vector3(0.3, 0.24, 0.02), Vector3(0.17, 0.78, 0.47), blue)
-	Build.box(carriage, Vector3(0.27, 0.21, 0.004), Vector3(0.17, 0.78, 0.481), w)
+	Build.box(carriage, Vector3(0.27, 0.21, 0.004), Vector3(0.17, 0.78, 0.481), Build.mat(Color(0.83, 0.84, 0.85), 0.5))
+	Build.cyl(carriage, 0.016, 0.01, Vector3(0.155, 0.745, 0.486), dark, Build.AXIS_Z, false, 16)   # Kreuzschalthebel
+	Build.cyl(carriage, 0.005, 0.06, Vector3(0.155, 0.745, 0.515), steel, Build.AXIS_Z)
+	Build.sphere(carriage, 0.012, Vector3(0.155, 0.745, 0.548), dark)
+	Build.cyl(carriage, 0.03, 0.03, Vector3(0.22, 0.625, 0.48), dark, Build.AXIS_Z, false, 32)     # Vorschub-Drehknopf
+	Build.cyl(carriage, 0.032, 0.006, Vector3(0.22, 0.625, 0.468), chrome, Build.AXIS_Z, false, 32)
+	# gelber Schraubendreher auf dem Schlosskasten
+	Build.cyl(carriage, 0.012, 0.09, Vector3(0.22, 0.942, 0.425), yellow, Build.AXIS_X, false, 12)
+	Build.cyl(carriage, 0.003, 0.11, Vector3(0.12, 0.942, 0.425), steel, Build.AXIS_X, false, 8)
 	var abtn := [[0.08, 0.86, red], [0.12, 0.86, green], [0.16, 0.86, dark], [0.20, 0.86, dark],
 		[0.08, 0.815, dark], [0.12, 0.815, yellow], [0.16, 0.815, dark]]
 	for b in abtn:
@@ -434,9 +525,10 @@ func _build() -> void:
 	cross_slide.add_child(coolant_fx)
 
 	# Verkleidung: Rückwand, rechte Stirnwand, Dach mit LED-Leuchten
-	Build.box(self, Vector3(2.24, 0.74, 0.02), Vector3(0.94, 1.29, -0.40), g)
-	Build.box(self, Vector3(2.24, 0.004, 0.004), Vector3(0.94, 1.2, -0.388), seam)
+	Build.box(self, Vector3(2.24, 0.74, 0.02), Vector3(0.94, 1.29, -0.40), beige)
+	Build.box(self, Vector3(2.24, 0.004, 0.004), Vector3(0.94, 1.2, -0.388), Build.mat(Color(0.7, 0.66, 0.53), 0.8))
 	Build.box(self, Vector3(0.05, 1.14, 0.84), Vector3(2.06, 1.15, 0.0), w)             # Stirnwand
+	Build.box(self, Vector3(0.004, 0.72, 0.76), Vector3(2.033, 1.29, -0.02), beige)      # innen cremefarben
 	Build.box(self, Vector3(0.055, 0.004, 0.84), Vector3(2.06, 0.95, 0.0), seam)
 	# Dach: liegt auf eigener Sichtebene, damit die Bedienkamera von oben hindurchsehen kann
 	var canopy: Array[GeometryInstance3D] = [
@@ -445,8 +537,10 @@ func _build() -> void:
 		Build.box(self, Vector3(2.30, 0.006, 0.006), Vector3(0.93, 1.592, 0.036), seam),
 	]
 	var led := Build.emissive(Color(0.95, 0.97, 1.0), 2.5)
-	for x in [0.3, 0.95, 1.6]:
-		canopy.append(Build.box(self, Vector3(0.5, 0.01, 0.05), Vector3(x, 1.687, -0.08), led))
+	var alu := Build.mat(Color(0.72, 0.73, 0.75), 0.35, 0.8)
+	for x in [0.42, 1.38]:                          # zwei LED-Leuchten unter dem Dach
+		canopy.append(Build.box(self, Vector3(0.66, 0.022, 0.06), Vector3(x, 1.678, -0.05), alu))
+		canopy.append(Build.box(self, Vector3(0.62, 0.006, 0.04), Vector3(x, 1.665, -0.05), led))
 	canopy.append(Build.label(self, "E50", Vector3(1.46, 1.655, 0.037), 0.0015, Color(0.06, 0.18, 0.58), 64))
 	canopy.append(Build.label(self, "HD", Vector3(1.585, 1.678, 0.037), 0.0008, Color(0.35, 0.75, 0.2), 64))
 	for n in canopy:
@@ -507,6 +601,8 @@ func _build() -> void:
 	Build.box(shelf, Vector3(0.36, 0.006, 0.12), Vector3(-0.07, 0.019, 0.02), Build.mat(Color(0.32, 0.34, 0.37), 0.6))
 	Build.box(shelf, Vector3(0.12, 0.004, 0.1), Vector3(0.19, 0.019, 0.02), Build.mat(Color(0.7, 0.72, 0.74), 0.3))
 
+	_build_details()
+
 	# Arbeitsleuchte im Dach (die LED-Streifen sind nur Deko)
 	lamp = SpotLight3D.new()
 	lamp.position = Vector3(0.0, 1.64, -0.12)
@@ -526,11 +622,194 @@ func _build() -> void:
 	pt.lathe = self
 	add_child(pt)
 	hit2.set_meta("interact", pt)   # E aufs Pult: gleich in die Pultansicht
+	# Tür und schwarzer Hebel: Linksklick mit dem Fadenkreuz (stehen etwas vor der Maschinenhülle,
+	# damit der Blickstrahl sie zuerst trifft; der Hebel noch vor der Tür)
+	var dt := DoorTarget.new()
+	dt.lathe = self
+	add_child(dt)
+	var dhit := Build.collider(_door, Vector3(DOOR_X1 - DOOR_X0, 0.62, 0.06), Vector3(DOOR_CX, 1.40, 0.57))
+	dhit.set_meta("interact", dt)
+	var lt := DoorTarget.new()
+	lt.lathe = self
+	lt.lever = true
+	add_child(lt)
+	var lhit := Build.collider(_door, Vector3(0.06, 0.46, 0.06), HANDLE_POS + Vector3(0, 0, 0.03))
+	lhit.set_meta("interact", lt)
 
 	op_cam = Camera3D.new()
 	op_cam.fov = 55
 	op_cam.near = 0.002
 	add_child(op_cam)
+
+
+## Teile nach den Fotos der E50 HD im Betrieb: aufgeklappter Futterschutz, Späneförderer mit
+## Spänewagen, Holzrost vor der Maschine, Spiral-Luftschlauch, Gelenkleuchte und Aushang.
+func _build_details() -> void:
+	var w := Build.mat(Color(0.90, 0.91, 0.91), 0.42)
+	var beige := Build.mat(Color(0.84, 0.80, 0.66), 0.8)
+	var dark := Build.mat(Color(0.07, 0.07, 0.08), 0.75)
+	var steel := Build.mat(Color(0.72, 0.73, 0.75), 0.28, 1.0)
+	var conv_m := Build.mat(Color(0.33, 0.35, 0.37), 0.6, 0.2)
+
+	# Futterschutz: weiße Haube, innen cremefarben, nach hinten oben aufgeklappt. Eigene Sichtebene
+	# wie die Tür, damit er der Bedienkamera nicht im Weg steht.
+	var hood := Node3D.new()
+	hood.position = Vector3(-0.08, AXIS_H + 0.22, -0.12)
+	hood.rotation.x = -0.55
+	add_child(hood)
+	var hood_parts: Array[GeometryInstance3D] = [
+		Build.box(hood, Vector3(0.22, 0.01, 0.34), Vector3(0, 0.0, 0.17), w),
+		Build.box(hood, Vector3(0.21, 0.004, 0.33), Vector3(0, -0.007, 0.17), beige),
+		Build.box(hood, Vector3(0.22, 0.25, 0.01), Vector3(0, -0.125, 0.34), w),
+		Build.box(hood, Vector3(0.21, 0.24, 0.004), Vector3(0, -0.125, 0.333), beige),
+		Build.box(hood, Vector3(0.02, 0.012, 0.016), Vector3(0, -0.2, 0.352), dark),
+		Build.cyl(hood, 0.012, 0.22, Vector3.ZERO, steel, Build.AXIS_X),
+	]
+	for sx in [-0.105, 0.105]:
+		hood_parts.append(Build.box(hood, Vector3(0.01, 0.12, 0.34), Vector3(sx, -0.06, 0.17), w))
+		hood_parts.append(Build.box(hood, Vector3(0.01, 0.25, 0.08), Vector3(sx, -0.125, 0.3), w))
+	for n in hood_parts:
+		n.layers = DOOR_LAYER
+
+	# Späneförderer: steigt am rechten Maschinenende schräg an und wirft in den Spänewagen
+	periphery = Node3D.new()
+	periphery.name = "Peripherie"
+	add_child(periphery)
+	var conv := Build.box(periphery, Vector3(1.13, 0.16, 0.36), Vector3(2.5, 0.6, 0.05), conv_m, false, Vector3(0, 0, 0.666))
+	Build.box(conv, Vector3(1.13, 0.012, 0.3), Vector3(0, 0.086, 0), Build.mat(Color(0.42, 0.44, 0.46), 0.5, 0.3))
+	for x in [-0.3, 0.1, 0.45]:
+		Build.box(conv, Vector3(0.012, 0.165, 0.365), Vector3(x, 0, 0), Build.mat(Color(0.2, 0.21, 0.22), 0.6))
+	Build.box(periphery, Vector3(0.26, 0.24, 0.38), Vector3(3.0, 0.98, 0.05), conv_m)
+	Build.box(periphery, Vector3(0.2, 0.14, 0.3), Vector3(3.1, 0.82, 0.05), conv_m)
+	Build.cyl(periphery, 0.065, 0.16, Vector3(2.98, 1.0, 0.32), Build.mat(Color(0.2, 0.32, 0.55), 0.5), Build.AXIS_Z)   # Antrieb
+	for x in [2.3, 2.75]:
+		var leg_h: float = 0.25 + (float(x) - 2.06) * 0.78
+		Build.box(periphery, Vector3(0.04, leg_h, 0.04), Vector3(x, leg_h * 0.5, -0.1), dark)
+		Build.box(periphery, Vector3(0.04, leg_h, 0.04), Vector3(x, leg_h * 0.5, 0.2), dark)
+	Build.collider(periphery, Vector3(0.95, 1.1, 0.4), Vector3(2.55, 0.55, 0.05))
+
+	# Spänewagen mit Gabeltaschen, voll mit Wirrspänen
+	var bin := Node3D.new()
+	bin.position = Vector3(3.22, 0, 0.05)
+	periphery.add_child(bin)
+	var bin_m := Build.mat(Color(0.30, 0.32, 0.34), 0.55, 0.3)
+	Build.box(bin, Vector3(0.64, 0.02, 0.76), Vector3(0, 0.1, 0), bin_m)
+	for sx in [-1.0, 1.0]:
+		Build.box(bin, Vector3(0.02, 0.62, 0.76), Vector3(sx * 0.31, 0.41, 0), bin_m)
+		Build.box(bin, Vector3(0.64, 0.62, 0.02), Vector3(0, 0.41, sx * 0.37), bin_m)
+		Build.box(bin, Vector3(0.12, 0.09, 0.78), Vector3(sx * 0.18, 0.045, 0), dark)       # Gabeltaschen
+	Build.box(bin, Vector3(0.66, 0.025, 0.025), Vector3(0, 0.72, 0.38), bin_m)
+	var chip_m := Build.mat(Color(0.56, 0.57, 0.6), 0.35, 1.0)
+	Build.box(bin, Vector3(0.6, 0.02, 0.72), Vector3(0, 0.52, 0), Build.mat(Color(0.38, 0.39, 0.41), 0.6, 0.6))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 50
+	var curl := TorusMesh.new()
+	curl.inner_radius = 0.012
+	curl.outer_radius = 0.016
+	curl.rings = 10
+	curl.ring_segments = 4
+	for i in 70:
+		var c := MeshInstance3D.new()
+		c.mesh = curl
+		c.material_override = chip_m
+		c.position = Vector3(rng.randf_range(-0.27, 0.27), 0.53 + rng.randf() * 0.04, rng.randf_range(-0.33, 0.33))
+		c.rotation = Vector3(rng.randf() * TAU, rng.randf() * TAU, rng.randf() * TAU)
+		c.scale = Vector3(1.0, rng.randf_range(1.0, 3.0), 1.0)
+		bin.add_child(c)
+	Build.collider(bin, Vector3(0.64, 0.74, 0.76), Vector3(0, 0.37, 0))
+
+	# Holzrost vor der Maschine
+	var grate_m := Build.mat(Color(0.17, 0.15, 0.13), 0.9)
+	for i in 8:
+		Build.box(self, Vector3(1.9, 0.022, 0.07), Vector3(0.6, 0.027, 0.66 + i * 0.1), grate_m)
+	for i in 7:
+		Build.box(self, Vector3(0.05, 0.016, 0.78), Vector3(-0.3 + i * 0.3, 0.008, 1.01), grate_m)
+
+	# Spiral-Luftschlauch mit Blaspistole vorne rechts am Bett
+	var air := Build.mat(Color(0.12, 0.32, 0.8), 0.4)
+	Build.box(self, Vector3(0.03, 0.03, 0.03), Vector3(1.9, 0.88, 0.3), dark)
+	_rod(self, Vector3(1.9, 0.88, 0.31), Vector3(1.9, 0.88, 0.5), 0.005, air)
+	var coil := TorusMesh.new()
+	coil.inner_radius = 0.045
+	coil.outer_radius = 0.054
+	coil.rings = 20
+	coil.ring_segments = 6
+	for i in 15:
+		var r := MeshInstance3D.new()
+		r.mesh = coil
+		r.material_override = air
+		r.position = Vector3(1.9 + sin(i * 0.7) * 0.004, 0.86 - i * 0.026, 0.5)
+		r.rotation = Vector3(0.18, 0.0, 0.12 * (1.0 if i % 2 == 0 else -1.0))
+		add_child(r)
+	_rod(self, Vector3(1.9, 0.47, 0.5), Vector3(1.88, 0.38, 0.52), 0.005, air)
+	Build.box(self, Vector3(0.03, 0.08, 0.025), Vector3(1.88, 0.34, 0.52), Build.mat(Color(0.55, 0.56, 0.58), 0.4, 0.8))
+	Build.cyl(self, 0.004, 0.09, Vector3(1.88, 0.255, 0.52), steel)
+
+	# Gelenkleuchte auf dem Spindelkasten und Aushang an der Seite
+	_rod(self, Vector3(-0.95, 1.74, 0.28), Vector3(-0.98, 2.02, 0.22), 0.012, dark)
+	_rod(self, Vector3(-0.98, 2.02, 0.22), Vector3(-0.86, 2.12, 0.3), 0.01, dark)
+	Build.sphere(self, 0.018, Vector3(-0.98, 2.02, 0.22), dark)
+	Build.cyl(self, 0.04, 0.03, Vector3(-0.95, 1.745, 0.28), dark)
+	Build.cyl(self, 0.028, 0.08, Vector3(-0.83, 2.1, 0.32), dark, Build.AXIS_X, false, 16, 0.02)
+	var paper := Build.box(self, Vector3(0.002, 0.30, 0.21), Vector3(-1.052, 1.45, 0.16), Build.mat(Color(0.96, 0.96, 0.94), 0.9))
+	for i in 9:
+		Build.box(paper, Vector3(0.002, 0.006, 0.15 - (i % 3) * 0.03), Vector3(-0.0005, 0.11 - i * 0.025, -0.01), Build.mat(Color(0.35, 0.35, 0.38), 0.9))
+
+
+## Gerader Stab von p0 nach p1.
+func _rod(parent: Node3D, p0: Vector3, p1: Vector3, r: float, m: Material) -> MeshInstance3D:
+	var d := p1 - p0
+	var seg := Build.cyl(parent, r, d.length(), (p0 + p1) * 0.5, m, Build.AXIS_Y, false, 12)
+	var y := d.normalized()
+	var x := y.cross(Vector3.FORWARD if absf(y.z) < 0.9 else Vector3.RIGHT).normalized()
+	seg.basis = Basis(x, y, x.cross(y))
+	return seg
+
+
+## Teleskopabdeckung und Energiekette hinter dem Bett an die Lage des Bettschlittens anpassen.
+func _layout_bed_covers() -> void:
+	if _telescope.size() < 2 or carriage == null:
+		return
+	var cx := carriage.position.x
+	var spans := [Vector2(-0.18, cx - 0.11), Vector2(cx + 0.31, 2.03)]
+	for side in 2:
+		var sp: Vector2 = spans[side]
+		var plates: Array = _telescope[side]
+		var n := plates.size()
+		var length := maxf(sp.y - sp.x, 0.06)
+		var pl := maxf(length / n * 1.25, 0.06)
+		for i in n:
+			var tp := plates[i] as MeshInstance3D
+			# höchste Lamelle am Schlitten, die kleineren schieben sich darunter
+			var k := (n - 1 - i) if side == 0 else i
+			var x0 := sp.x + (length - pl) * float(k) / float(n - 1)
+			tp.scale.x = pl
+			tp.position.x = x0 + pl * 0.5
+	# Energiekette: Untertrum liegt ab CHAIN_FIX in der Rinne, Obertrum hängt am Schlitten
+	if _chain.is_empty():
+		return
+	var m := cx + 0.31
+	var loop := (CHAIN_FIX + m + CHAIN_LEN) * 0.5
+	var y_lo := 0.895
+	var y_hi := y_lo + 2.0 * CHAIN_R
+	var lower := loop - CHAIN_FIX
+	var arc := PI * CHAIN_R
+	for i in _chain.size():
+		var s := i * CHAIN_PITCH
+		var lk := _chain[i]
+		var p: Vector3
+		var ang := 0.0
+		if s < lower:
+			p = Vector3(CHAIN_FIX + s, y_lo, -0.36)
+		elif s < lower + arc:
+			ang = (s - lower) / CHAIN_R
+			p = Vector3(loop + sin(ang) * CHAIN_R, y_lo + CHAIN_R - cos(ang) * CHAIN_R, -0.36)
+		else:
+			ang = PI
+			p = Vector3(loop - (s - lower - arc), y_hi, -0.36)
+		lk.visible = p.x >= m - 0.02 or s < lower + arc
+		lk.position = p
+		lk.rotation.z = ang
 
 
 ## Bildschirm am Bedienpult: Bedienoberfläche der Zyklensteuerung (CncScreen), in einem
@@ -920,6 +1199,10 @@ func _sync_slides() -> void:
 	if chips:
 		chips.position.x = tip.x
 		chips.position.z = tip.z + 0.002
+	_layout_bed_covers()
+	if door_latched:
+		door_t = _latch_t()
+		_place_door()
 
 
 ## Läuft gerade die Einschwenk-Animation?
@@ -1192,6 +1475,7 @@ func new_workpiece(d: float, length: float) -> void:
 	auto_feed_x = false
 	tool_x = maxf(tool_x, d * 0.5 + 10.0)
 	tool_z = maxf(tool_z, length + 15.0)
+	wcs_z = length                 # Werkstücknullpunkt an der Stirnfläche des Rohteils
 	_update_jaws()
 	_dirty = true
 	if workpiece_mi:
@@ -1407,7 +1691,9 @@ func _step_tool(sz: float, sx: float, rapid: bool, speed: float) -> bool:
 			return false
 		var side := absf(sz) > absf(sx)
 		var limit: float = t["max_dz"] if side else t["max_dx"]
-		if depth > limit + 0.05:
+		# Schlichtzug der Zyklensteuerung: fährt längs ins dünne Planaufmaß vor einer Schulter
+		# (Spanbreite = Schulterhöhe, Spandicke = Vorschub) - das schafft die Schlichtplatte
+		if depth > limit + 0.05 and not (nc_finish and side):
 			if t["id"] == "T6" and side:
 				_warn("Stechmeißel nur radial einsetzen (seitlich max. 0,3 mm)!")
 			else:
@@ -1757,14 +2043,60 @@ func _nc_locked() -> bool:
 # ======================================================================= Schiebetür
 
 ## Schutztür ganz geschlossen (und nicht gerade beim Öffnen)?
+## Werkstücknullpunkt Z0 neu setzen (mm über der Backen-Stirnfläche).
+func set_wcs(z: float) -> void:
+	if _nc_locked():
+		return
+	wcs_z = z
+	_info("Werkstücknullpunkt gesetzt: Z0 = Maschine Z %.3f." % z)
+
+
+## Z0 an die aktuelle Stirnfläche des Werkstücks legen.
+func set_wcs_face() -> void:
+	set_wcs(part_length())
+
+
+## Z0 an die Schneide legen (Stirnfläche angekratzt).
+func set_wcs_tool() -> void:
+	set_wcs(tool_z)
+
+
 func door_closed() -> bool:
-	return door_target >= 1.0 and door_t >= 0.999
+	return door_latched
 
 
-## Tür von Hand auf- bzw. zuschieben (läuft sie gerade, kehrt sie um).
+## Türlage (Anteil von DOOR_TRAVEL), in der die Tür am Bettschlitten einrastet: ihr rechter Rand
+## steht bündig mit dem rechten Ende des Schlittens.
+func _latch_t() -> float:
+	if carriage == null:
+		return 1.0
+	var off := clampf(carriage.position.x + DOOR_LATCH_DX, 0.0, DOOR_MAX)
+	return off / DOOR_TRAVEL
+
+
+## Tür nach rechts zum Bettschlitten schieben; dort rastet sie ein und fährt mit ihm mit.
+func close_door() -> void:
+	if door_latched or _door_closing:
+		return
+	_door_closing = true
+	_info("Schutztür wird zum Schlitten geschoben.")
+
+
+## Schwarzen Hebel ziehen: Tür vom Schlitten lösen und aufschieben.
+func open_door() -> void:
+	if not door_latched and not _door_closing:
+		return
+	door_latched = false
+	_door_closing = false
+	_info("Schutztür gelöst und aufgeschoben.")
+
+
+## Tür zu- bzw. aufschieben (läuft sie gerade zu, kehrt sie um).
 func toggle_door() -> void:
-	door_target = 0.0 if door_target >= 1.0 else 1.0
-	_info("Schutztür wird %s." % ("geschlossen" if door_target >= 1.0 else "geöffnet"))
+	if door_latched or _door_closing:
+		open_door()
+	else:
+		close_door()
 
 
 ## Mausstrahl (Fensterposition) in Maschinenkoordinaten: [Ursprung, Richtung].
@@ -1773,7 +2105,7 @@ func _mouse_ray(mouse_pos: Vector2) -> Array:
 	return [inv * op_cam.project_ray_origin(mouse_pos), inv.basis * op_cam.project_ray_normal(mouse_pos)]
 
 
-## Liegt die Maus über dem Türgriff?
+## Liegt die Maus über dem schwarzen Hebel (Türgriff)?
 func handle_hit(mouse_pos: Vector2) -> bool:
 	if op_cam == null or _door == null:
 		return false
@@ -1783,70 +2115,64 @@ func handle_hit(mouse_pos: Vector2) -> bool:
 	return box.intersects_ray(r[0], r[1]) != null
 
 
-## X (Maschine) des Mausstrahls in der Ebene des Griffs, NAN wenn parallel.
-func _ray_door_x(mouse_pos: Vector2) -> float:
+## Liegt die Maus über der Tür (Fenster, Pfosten, Kopfteil)? Nur von vorn, wo man sie sieht.
+func door_hit(mouse_pos: Vector2) -> bool:
+	if op_cam == null or _door == null or op_cam.position.z <= 0.64:
+		return false
 	var r := _mouse_ray(mouse_pos)
-	var o: Vector3 = r[0]
-	var d: Vector3 = r[1]
-	if absf(d.z) < 1e-5:
-		return NAN
-	var t := (HANDLE_POS.z - o.z) / d.z
-	return o.x + d.x * t if t > 0.0 else NAN
+	var x0 := DOOR_X0 + _door.position.x
+	var box := AABB(Vector3(x0, 1.09, 0.48), Vector3(DOOR_X1 - DOOR_X0, 0.63, 0.1))
+	return box.intersects_ray(r[0], r[1]) != null
 
 
-## Linke Maustaste am Türgriff: Tür mit der Maus auf- und zuziehen. Nahe an den Enden rastet
-## sie ein; geschlossen gilt sie erst ganz zu.
+## Linke Maustaste: auf die Tür geklickt schiebt sie sich zum Schlitten und rastet ein, ein
+## Klick auf den schwarzen Hebel löst sie wieder und schiebt sie auf.
 func _door_input(event: InputEvent) -> bool:
 	if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
 		return false
 	if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
 		var mb := event as InputEventMouseButton
-		if mb.pressed and handle_hit(mb.position):
-			var x := _ray_door_x(mb.position)
-			if is_nan(x):
-				return false
-			_door_drag = true
-			_door_grab = x - door_t * DOOR_TRAVEL
-			door_target = door_t
-			return true
-		if not mb.pressed and _door_drag:
-			_door_drag = false
-			if door_t > 0.93:
-				door_target = 1.0
-			elif door_t < 0.07:
-				door_target = 0.0
+		if not mb.pressed:
+			return false
+		if handle_hit(mb.position):
+			if door_latched or _door_closing:
+				open_door()
 			else:
-				door_target = door_t
-			_info("Schutztür %s." % ("geschlossen" if door_target >= 1.0 else ("offen" if door_target <= 0.0 else "halb offen")))
+				close_door()
+			return true
+		if door_hit(mb.position) and not door_latched and not _door_closing:
+			close_door()
 			return true
 		return false
 	if event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
-		if _door_drag:
-			var x := _ray_door_x(mm.position)
-			if not is_nan(x):
-				door_t = clampf((x - _door_grab) / DOOR_TRAVEL, 0.0, 1.0)
-				door_target = door_t
-				_place_door()
-			return true
-		var hov := handle_hit(mm.position)
+		var hov := handle_hit(mm.position) or (not door_latched and door_hit(mm.position))
 		if hov != _handle_hover:
 			_handle_hover = hov
-			Input.set_default_cursor_shape(Input.CURSOR_DRAG if hov else Input.CURSOR_ARROW)
+			Input.set_default_cursor_shape(Input.CURSOR_POINTING_HAND if hov else Input.CURSOR_ARROW)
 	return false
 
 
-## Tür sofort in eine Lage setzen (Laden, Tests, Render).
+## Tür sofort in eine Lage setzen (Laden, Tests, Render): zu = am Schlitten eingerastet.
 func set_door(closed: bool) -> void:
-	door_target = 1.0 if closed else 0.0
-	door_t = door_target
+	door_latched = closed
+	_door_closing = false
+	door_t = _latch_t() if closed else 0.0
 	_place_door()
 
 
 func _step_door(delta: float) -> void:
-	if _door_drag or is_equal_approx(door_t, door_target):
-		return
-	door_t = move_toward(door_t, door_target, delta / DOOR_TIME)
+	if door_latched:
+		door_t = _latch_t()           # fährt mit dem Schlitten
+	elif _door_closing:
+		var lt := _latch_t()
+		door_t = move_toward(door_t, lt, delta / DOOR_TIME)
+		if is_equal_approx(door_t, lt):
+			_door_closing = false
+			door_latched = true
+			_info("Schutztür am Schlitten eingerastet.")
+	elif door_t > 0.0:
+		door_t = move_toward(door_t, 0.0, delta / DOOR_TIME)
 	_place_door()
 
 
@@ -2036,6 +2362,30 @@ class PultTarget extends Node:
 		lathe.interact(p, true)
 
 
+## Ziel für das Fadenkreuz auf der Schutztür bzw. ihrem schwarzen Hebel: Linksklick auf die Tür
+## schiebt sie zum Schlitten (rastet ein), Linksklick auf den Hebel löst sie. [E] bedient die Maschine.
+class DoorTarget extends Node:
+	var lathe: Lathe
+	var lever := false
+
+	func get_prompt() -> String:
+		var e := "[%s] Maschine bedienen" % Settings.binding_text("interact")
+		if lathe.door_latched or lathe._door_closing:
+			if lever:
+				return "[Linksklick] Hebel: Schutztür lösen   " + e
+			return "Schutztür am Schlitten eingerastet - schwarzer Hebel löst sie   " + e
+		return "[Linksklick] Schutztür zum Schlitten schieben   " + e
+
+	func click(_p: Node) -> void:
+		if lever:
+			lathe.toggle_door()
+		else:
+			lathe.close_door()
+
+	func interact(p: Node) -> void:
+		lathe.interact(p)
+
+
 ## Wird gerade auf den Pult-Bildschirm geschaut? (HUD blendet dann die Dreh-Anzeigen aus)
 func in_panel_view() -> bool:
 	return _panel_view
@@ -2066,9 +2416,6 @@ func stop_operating() -> void:
 		return
 	operating = false
 	_screen_drag = false
-	if _door_drag:
-		_door_drag = false
-		door_target = 1.0 if door_t > 0.93 else (0.0 if door_t < 0.07 else door_t)
 	if _handle_hover:
 		_handle_hover = false
 		Input.set_default_cursor_shape(Input.CURSOR_ARROW)
@@ -2272,7 +2619,8 @@ func get_state() -> Dictionary:
 		"machined": mach, "rz": Array(rz), "tool_z": tool_z, "tool_x": tool_x, "tool": tool_idx,
 		"holder": holder.duplicate(), "active_slot": active_slot,
 		"rpm": rpm_set, "feed": feed_set, "css": css, "vc": vc_set, "rpm_limit": rpm_limit,
-		"coolant": coolant, "door": door_target >= 1.0, "programs": programs.duplicate(true), "prog_sel": prog_sel}
+		"coolant": coolant, "door": door_latched, "programs": programs.duplicate(true), "prog_sel": prog_sel,
+		"wcs_z": wcs_z}
 
 
 func set_state(d: Dictionary) -> void:
@@ -2311,6 +2659,10 @@ func set_state(d: Dictionary) -> void:
 	if pr is Array and not pr.is_empty():
 		programs = pr.duplicate(true)
 		prog_sel = str(d.get("prog_sel", ""))
+		# ältere Spielstände: Programm-Z ab Backen-Stirnfläche -> WKS (Nullpunkt Rohteil-Stirnfläche)
+		for prog in programs:
+			NcCam.migrate_to_wks(prog, stock_len)
+	wcs_z = float(d.get("wcs_z", stock_len))
 	var h = d.get("holder", null)
 	if h is Array and h.size() == SLOTS:
 		for s in SLOTS:
