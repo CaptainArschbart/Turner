@@ -18,6 +18,13 @@ func collect(n: Node, out: Array) -> void:
 		out.append(n.text)
 	for c in n.get_children():
 		collect(c, out)
+func meshes(n: Node) -> int:
+	var c := 0
+	if n is MeshInstance3D and n.mesh and n.mesh.get_surface_count() > 0:
+		c = 1
+	for k in n.get_children():
+		c += meshes(k)
+	return c
 func _initialize() -> void:
 	await process_frame
 	var w = load("res://scenes/world.tscn").instantiate()
@@ -45,6 +52,30 @@ func _initialize() -> void:
 			"Standbohrmaschinen", "Erodiermaschinen", "Feilen", "Handentgrater"]:
 		ok(texts.has(t), "Übersicht enthält " + t)
 	ok(texts.count("CNC") == 2 and texts.count("Konventionell") == 2, "Dreh- und Fräsmaschinen haben CNC und Konventionell")
+	# Maschinenwerkzeuge: Tab, Unterkategorien, Modelle
+	var o = pc.overlay
+	ok(o.tabs.get_tab_count() == 3, "Drei Tabs")
+	ok(o._tool_grid.get_child_count() == 0, "Vorschauen entstehen erst beim Öffnen des Tabs")
+	o.tabs.current_tab = 2
+	await process_frame
+	ok(o._machine == 1, "Tab startet bei den Fräsmaschinen")
+	ok(o._tool_grid.get_child_count() == MachineCatalog.MILL_TOOLS.size(), "Alle Fräswerkzeuge gelistet")
+	var names := []
+	collect(o._tool_grid, names)
+	for t in ["Schaftfräser", "Messerkopf", "Messerkopf-Aufnahme", "Wendeplatten", "Spiralbohrer", "Werkzeugaufnahmen"]:
+		ok(names.has(t), "Fräswerkzeug " + t)
+	for t in MachineCatalog.MILL_TOOLS:
+		var model = MillTools.build(t["model"])
+		ok(meshes(model) > 0, "Modell hat Geometrie: " + t["model"])
+		model.free()
+	o.select_machine(0)
+	await process_frame
+	ok(o._tool_grid.get_child_count() == LatheTools.count(), "Drehmaschine zeigt die vorhandenen Drehwerkzeuge")
+	o.select_machine(2)
+	await process_frame
+	ok(o._tool_grid.get_child_count() == 0 and o._no_tools.visible, "Rundschleifen ohne Werkzeuge")
+	ok(texts.has("In der Werkstatt: " + MachineCatalog.MILL_NAME), "Fräsmaschine steht in der Maschinenübersicht")
+	o.tabs.current_tab = 0
 	await press("interact")
 	ok(not pc.overlay.visible and p.operating == null, "Interagieren schließt den PC")
 	ok(w.hud.visible, "HUD wieder da")

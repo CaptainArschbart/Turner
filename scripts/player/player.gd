@@ -3,6 +3,7 @@ extends CharacterBody3D
 ## Spielfigur (Zerspanungsmechaniker) mit 1st/3rd-Person-Kamera und Interaktion.
 
 signal prompt_changed(text: String)
+signal held_changed(text: String)
 
 const WALK := 3.2
 const SPRINT := 5.8
@@ -26,6 +27,9 @@ var operating: Node = null
 var _focus: Node = null
 var _prompt := ""
 var _walk_t := 0.0
+## Werkzeug in der Hand: {"machine", "id", "name"}, leer = Hand frei
+var held: Dictionary = {}
+var _hand: Node3D
 
 
 func _ready() -> void:
@@ -47,6 +51,9 @@ func _ready() -> void:
 	ray.target_position = Vector3(0, 0, -2.6)
 	ray.add_exception(self)
 	cam.add_child(ray)
+	_hand = Node3D.new()
+	_hand.position = Vector3(0.26, -0.24, -0.5)
+	cam.add_child(_hand)
 
 	tp_arm = SpringArm3D.new()
 	tp_arm.spring_length = 2.6
@@ -118,6 +125,7 @@ func _update_camera() -> void:
 	else:
 		cam.make_current()
 	body.visible = third_person
+	_hand.visible = not third_person
 
 
 # ------------------------------------------------------------ Eingabe
@@ -132,12 +140,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		pitch = clampf(pitch - event.relative.y * s * inv, -1.45, 1.45)
 	elif event is InputEventMouseButton and event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if click_focus():
+			get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("toggle_view"):
 		third_person = not third_person
 		_update_camera()
 	elif event.is_action_pressed("interact") and _focus:
 		get_viewport().set_input_as_handled()
 		_focus.interact(self)
+
+
+## Linksklick auf das anvisierte Ziel. Gibt true zurück, wenn es darauf reagiert.
+func click_focus() -> bool:
+	if _focus and _focus.has_method("click"):
+		_focus.click(self)
+		return true
+	return false
 
 
 func _physics_process(delta: float) -> void:
@@ -188,6 +207,9 @@ func _update_focus() -> void:
 		var c := ray.get_collider()
 		if c and c.has_meta("interact"):
 			target = c.get_meta("interact")
+			# Maschinen lenken den Blick auf ihre Werkzeugaufnahme um, wenn er dorthin zeigt
+			if target.has_method("focus_for"):
+				target = target.focus_for(ray.global_position, -ray.global_transform.basis.z)
 	_focus = target
 	_set_prompt(target.get_prompt() if target else "")
 
@@ -207,6 +229,7 @@ func start_operating(machine: Node, stand_pos: Vector3, face_yaw: float) -> void
 	rotation.y = yaw
 	pitch = -0.3
 	body.visible = false
+	_hand.visible = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
@@ -216,11 +239,35 @@ func stop_operating() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
+# ------------------------------------------------------------ Werkzeug in der Hand
+
+## Werkzeug id der Maschine in die Hand nehmen.
+func set_held(machine: Node, id: String) -> void:
+	clear_held()
+	held = {"machine": machine.MACHINE_ID, "id": id, "name": machine.tool_name(id)}
+	var model: Node3D = machine.make_tool_model(id)
+	_hand.add_child(model)
+	# Kurz fassen: Werkzeug zeigt nach vorn, Mitte in der Hand
+	if machine.TOOL_UPRIGHT:
+		model.rotation.x = PI / 2
+	model.position = -_hand.to_local(Build.bounds(model).get_center())
+	held_changed.emit("In der Hand: %s" % held["name"])
+
+
+func clear_held() -> void:
+	held = {}
+	for c in _hand.get_children():
+		_hand.remove_child(c)
+		c.queue_free()
+	held_changed.emit("")
+
+
 # ------------------------------------------------------------ Speichern
 
 func get_state() -> Dictionary:
 	return {"pos": [global_position.x, global_position.y, global_position.z], "yaw": yaw, "pitch": pitch,
-		"third_person": third_person}
+		"third_person": third_person,
+		"held": {"machine": held["machine"], "id": held["id"]} if not held.is_empty() else {}}
 
 
 func set_state(d: Dictionary) -> void:

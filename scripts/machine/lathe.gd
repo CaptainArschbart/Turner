@@ -13,9 +13,12 @@ signal submit_requested
 signal new_part_requested
 signal tool_changed(index: int)
 
+const MACHINE_ID := "lathe"
+const TOOL_UPRIGHT := false   # Werkzeugmodelle liegen schon waagerecht (Schaft in Z)
+const MOUNT_REACH := 0.13     # so nah muss der Blick am Halterkopf vorbeigehen (m)
 const AXIS_H := 1.17          # Spitzenhöhe über Boden (m)
 const SEG := 0.25             # Auflösung des Profils (mm pro Segment)
-const Z_MAX := 900.0
+const Z_MAX := 900.0          # Drehlänge; Bett und Reitstock sind darauf abgestimmt
 const X_MAX := 170.0          # max. Radius Werkzeug-Bezugspunkt (mm)
 const X_MIN := -95.0          # über die Drehmitte hinaus (Anzeige X -190)
 const CLAMP_LEN := 30.0       # eingespannte Länge in den Backen (mm)
@@ -184,22 +187,22 @@ func _build() -> void:
 
 	# Unterbau, Spänewanne, Bett
 	Build.box(self, Vector3(0.95, 0.62, 0.8), Vector3(-0.56, 0.31, 0.0), a)
-	Build.box(self, Vector3(0.6, 0.62, 0.8), Vector3(2.0, 0.31, 0.0), a)
-	Build.box(self, Vector3(1.62, 0.06, 0.95), Vector3(0.89, 0.2, 0.06), dark)
-	Build.box(self, Vector3(1.62, 0.25, 0.03), Vector3(0.89, 0.33, 0.52), a)
-	Build.box(self, Vector3(3.35, 0.28, 0.56), Vector3(0.62, 0.76, 0.0), g)
-	Build.box(self, Vector3(3.3, 0.03, 0.07), Vector3(0.62, 0.915, 0.21), chrome)
-	Build.box(self, Vector3(3.3, 0.03, 0.07), Vector3(0.62, 0.915, -0.21), chrome)
-	Build.box(self, Vector3(3.3, 0.02, 0.05), Vector3(0.62, 0.91, 0.0), chrome)
+	Build.box(self, Vector3(0.6, 0.62, 0.8), Vector3(1.72, 0.31, 0.0), a)
+	Build.box(self, Vector3(1.34, 0.06, 0.95), Vector3(0.75, 0.2, 0.06), dark)
+	Build.box(self, Vector3(1.34, 0.25, 0.03), Vector3(0.75, 0.33, 0.52), a)
+	Build.box(self, Vector3(3.07, 0.28, 0.56), Vector3(0.48, 0.76, 0.0), g)
+	Build.box(self, Vector3(3.02, 0.03, 0.07), Vector3(0.48, 0.915, 0.21), chrome)
+	Build.box(self, Vector3(3.02, 0.03, 0.07), Vector3(0.48, 0.915, -0.21), chrome)
+	Build.box(self, Vector3(3.02, 0.02, 0.05), Vector3(0.48, 0.91, 0.0), chrome)
 	# Leit- und Zugspindel
-	Build.cyl(self, 0.014, 3.2, Vector3(0.62, 0.84, 0.3), steel, Build.AXIS_X)
-	Build.cyl(self, 0.011, 3.2, Vector3(0.62, 0.78, 0.3), steel, Build.AXIS_X)
+	Build.cyl(self, 0.014, 2.92, Vector3(0.48, 0.84, 0.3), steel, Build.AXIS_X)
+	Build.cyl(self, 0.011, 2.92, Vector3(0.48, 0.78, 0.3), steel, Build.AXIS_X)
 	# Auffangfläche für abgestochene Teile (eigene Physik-Ebene)
-	var pan := Build.collider(self, Vector3(1.62, 0.06, 0.95), Vector3(0.89, 0.2, 0.06))
+	var pan := Build.collider(self, Vector3(1.34, 0.06, 0.95), Vector3(0.75, 0.2, 0.06))
 	pan.collision_layer = PIECE_LAYER
 	pan.collision_mask = 0
 	for z in [-0.42, 0.53]:
-		var wall := Build.collider(self, Vector3(1.62, 0.4, 0.04), Vector3(0.89, 0.4, z))
+		var wall := Build.collider(self, Vector3(1.34, 0.4, 0.04), Vector3(0.75, 0.4, z))
 		wall.collision_layer = PIECE_LAYER
 		wall.collision_mask = 0
 
@@ -217,7 +220,7 @@ func _build() -> void:
 	add_child(spindle_pivot)
 	# Reitstock + Bettschlitten/Planschlitten vorab anlegen, damit das Modell eingehängt werden kann
 	var ts := Node3D.new()
-	ts.position = Vector3(1.95, 0, 0)
+	ts.position = Vector3(1.73, 0, 0)
 	add_child(ts)
 	carriage = Node3D.new()
 	add_child(carriage)
@@ -329,13 +332,13 @@ func _build() -> void:
 	cross_slide.add_child(coolant_fx)
 
 	# Spritzschutz hinten + Schiebetür vorne
-	Build.box(self, Vector3(2.3, 0.62, 0.02), Vector3(0.95, 1.22, -0.36), a)
-	Build.box(self, Vector3(2.6, 0.04, 0.06), Vector3(0.65, 1.78, 0.58), a)
-	Build.box(self, Vector3(0.04, 0.9, 0.04), Vector3(2.3, 1.33, 0.58), a)
-	Build.box(self, Vector3(0.9, 0.62, 0.012), Vector3(1.6, 1.42, 0.6), guard)
-	Build.box(self, Vector3(0.92, 0.04, 0.03), Vector3(1.6, 1.11, 0.6), a)
-	Build.box(self, Vector3(0.92, 0.04, 0.03), Vector3(1.6, 1.73, 0.6), a)
-	Build.box(self, Vector3(0.03, 0.2, 0.03), Vector3(1.17, 1.42, 0.62), chrome)
+	Build.box(self, Vector3(2.02, 0.62, 0.02), Vector3(0.81, 1.22, -0.36), a)
+	Build.box(self, Vector3(2.32, 0.04, 0.06), Vector3(0.51, 1.78, 0.58), a)
+	Build.box(self, Vector3(0.04, 0.9, 0.04), Vector3(2.02, 1.33, 0.58), a)
+	Build.box(self, Vector3(0.9, 0.62, 0.012), Vector3(1.32, 1.42, 0.6), guard)
+	Build.box(self, Vector3(0.92, 0.04, 0.03), Vector3(1.32, 1.11, 0.6), a)
+	Build.box(self, Vector3(0.92, 0.04, 0.03), Vector3(1.32, 1.73, 0.6), a)
+	Build.box(self, Vector3(0.03, 0.2, 0.03), Vector3(0.89, 1.42, 0.62), chrome)
 
 	# Schaltschrank
 	Build.box(self, Vector3(0.75, 1.9, 0.35), Vector3(-0.65, 0.95, -0.6), g)
@@ -379,7 +382,7 @@ func _build() -> void:
 	lamp.look_at(to_global(Vector3(0.15, AXIS_H, 0.05)))
 
 	# Kollision + Interaktion
-	var hit := Build.collider(self, Vector3(3.35, 1.62, 1.0), Vector3(0.62, 0.81, 0.08))
+	var hit := Build.collider(self, Vector3(3.07, 1.62, 1.0), Vector3(0.48, 0.81, 0.08))
 	hit.set_meta("interact", self)
 	var hit2 := Build.collider(cp, Vector3(0.52, 0.70, 0.08), Vector3.ZERO)
 	hit2.set_meta("interact", self)
@@ -906,6 +909,100 @@ func max_radius(z0: float, z1: float) -> float:
 	for i in range(a, b + 1):
 		m = maxf(m, profile[i])
 	return m
+
+
+# ======================================================================= Werkzeug von Hand
+
+var tool_mount: ToolMount
+
+
+func tool_list() -> Array:
+	var list := []
+	for i in LatheTools.count():
+		var t := LatheTools.get_tool(i)
+		list.append({"id": t["id"], "name": "%s %s" % [t["id"], t["short"]]})
+	return list
+
+
+func tool_name(id: String) -> String:
+	var t := LatheTools.get_tool(maxi(LatheTools.index_of(id), 0))
+	return "%s %s" % [t["id"], t["name"]]
+
+
+func has_tool(id: String) -> bool:
+	return holder.find(id) >= 0
+
+
+func make_tool_model(id: String) -> Node3D:
+	var n := _build_tool_visual(LatheTools.get_tool(maxi(LatheTools.index_of(id), 0)))
+	n.visible = true
+	return n
+
+
+## Mitte des Halterkopfs in Weltkoordinaten.
+func _post_center() -> Vector3:
+	if model and model._post_root:
+		return model._post_root.global_position
+	return cross_slide.to_global(_head_pos())
+
+
+## Zeigt der Blick auf den Halterkopf?
+func focus_for(origin: Vector3, dir: Vector3) -> Node:
+	if tool_mount == null:
+		return self
+	return tool_mount if (_post_center() - origin).cross(dir).length() <= MOUNT_REACH else self
+
+
+func _free_slot() -> int:
+	return holder.find("")
+
+
+## Platz, aus dem eine freie Hand ein Werkzeug nimmt: der nächste belegte nach dem eingeschwenkten.
+func _removable_slot() -> int:
+	for k in range(1, SLOTS):
+		var s := posmod(active_slot + k, SLOTS)
+		if str(holder[s]) != "":
+			return s
+	return -1
+
+
+func hand_prompt(held: Dictionary) -> String:
+	if held.is_empty():
+		var r := _removable_slot()
+		return "" if r < 0 else "[Linksklick] %s aus Platz %d nehmen" % [tool_name(str(holder[r])), r + 1]
+	if held["machine"] != MACHINE_ID:
+		return "%s passt nicht in den Halter" % held["name"]
+	var f := _free_slot()
+	if f >= 0:
+		return "[Linksklick] %s in Platz %d einspannen" % [held["name"], f + 1]
+	return "[Linksklick] %s einspannen, %s kommt in die Hand" % [held["name"], tool_name(str(holder[active_slot]))]
+
+
+## Werkzeug von Hand: in den freien Platz, sonst Tausch mit dem eingeschwenkten. Freie Hand nimmt
+## ein nicht eingeschwenktes Werkzeug heraus.
+func hand_click(p: Node) -> void:
+	var held: Dictionary = p.held
+	if held.is_empty():
+		var r := _removable_slot()
+		if r < 0:
+			_warn("Das eingeschwenkte Werkzeug kann nicht ausgebaut werden.")
+			return
+		var out := str(holder[r])
+		if mount_tool(r, ""):
+			p.set_held(self, out)
+		return
+	if held["machine"] != MACHINE_ID:
+		_warn("%s passt nicht in den Halter." % held["name"])
+		return
+	var id := str(held["id"])
+	var f := _free_slot()
+	if f >= 0:
+		if mount_tool(f, id):
+			p.clear_held()
+		return
+	var old := str(holder[active_slot])
+	if mount_tool(active_slot, id):
+		p.set_held(self, old)
 
 
 # ======================================================================= Werkstück

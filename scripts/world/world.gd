@@ -3,8 +3,12 @@ extends Node3D
 
 var player: Player
 var lathe: Lathe
+var mill: Mill
 var office_pc: OfficePC
+var lathe_bench: ToolBench
+var mill_bench: ToolBench
 var hud: HUD
+var mill_hud: MillHUD
 var pause_menu: PauseMenu
 var env: Environment
 var probe: ReflectionProbe
@@ -17,6 +21,7 @@ var _amb_ph := 0.0
 var save_name := "Werkstatt"
 var money := 0
 var job_index := 0
+var mill_job_index := 0
 var parts := 0
 var play_time := 0.0
 
@@ -28,6 +33,10 @@ func _ready() -> void:
 	lathe = Lathe.new()
 	lathe.position = Vector3(0, 0, -2.0)
 	add_child(lathe)
+
+	mill = Mill.new()
+	mill.position = Vector3(6.85, 0, -3.1)
+	add_child(mill)
 
 	office_pc = OfficePC.new()
 	office_pc.position = Vector3(10.5, 1.05, 7.54)
@@ -41,6 +50,15 @@ func _ready() -> void:
 	hud.lathe = lathe
 	add_child(hud)
 
+	# Werkbank an jedem Arbeitsplatz, Spielerseite zur Maschine
+	lathe_bench = _add_bench(lathe, Vector3(0.6, 0, 0.35))
+	mill_bench = _add_bench(mill, Vector3(6.85, 0, -0.95))
+	player.held_changed.connect(hud.set_held)
+
+	mill_hud = MillHUD.new()
+	mill_hud.mill = mill
+	add_child(mill_hud)
+
 	pause_menu = PauseMenu.new()
 	pause_menu.world = self
 	add_child(pause_menu)
@@ -50,6 +68,13 @@ func _ready() -> void:
 	lathe.operating_changed.connect(hud.set_operating)
 	lathe.submit_requested.connect(_on_submit)
 	lathe.new_part_requested.connect(_on_new_part)
+	mill.message.connect(hud.show_message)
+	mill.operating_changed.connect(mill_hud.set_operating)
+	mill.operating_changed.connect(hud.set_other_machine)
+	mill.levers_changed.connect(mill_hud.set_levers_open)
+	mill.levers_changed.connect(hud.set_other_machine)
+	mill.submit_requested.connect(_on_mill_submit)
+	mill.new_part_requested.connect(_on_mill_new_part)
 	office_pc.using_changed.connect(func(on: bool): hud.visible = not on)
 	Settings.changed.connect(_apply_quality)
 
@@ -59,6 +84,21 @@ func _ready() -> void:
 	restore_mouse()
 	hud.show_message("Willkommen in der Werkstatt, %s! Geh zur Drehmaschine und drücke [%s]." % [
 		save_name, Settings.binding_text("interact")], Color(0.9, 0.95, 1.0))
+
+
+func _add_bench(machine: Node, pos: Vector3) -> ToolBench:
+	var mount := ToolMount.new()
+	mount.machine = machine
+	mount.player = player
+	machine.add_child(mount)
+	machine.tool_mount = mount
+	var bench := ToolBench.new()
+	bench.machine = machine
+	bench.player = player
+	bench.position = pos
+	bench.rotation.y = PI
+	add_child(bench)
+	return bench
 
 
 func _build_environment() -> void:
@@ -99,6 +139,7 @@ func _apply_quality() -> void:
 	for l in _lights.get("shadow_lights", []):
 		(l as Light3D).shadow_enabled = q >= 2
 	lathe.lamp.shadow_enabled = q >= 1
+	mill.lamp.shadow_enabled = q >= 2
 	probe.visible = q >= 1
 
 
@@ -117,6 +158,47 @@ func _refresh_hud() -> void:
 	hud.set_money(money, parts)
 	hud.set_job(Jobs.describe(_current_job()))
 	hud.set_job_data(_current_job())
+	mill_hud.set_money(money, parts)
+	mill_hud.set_job(MillJobs.get_job(mill_job_index))
+
+
+func _mill_new_workpiece() -> void:
+	var s: Array = MillJobs.get_job(mill_job_index)["size"]
+	mill.new_workpiece(s[0], s[1], s[2])
+
+
+func _on_mill_new_part() -> void:
+	_mill_new_workpiece()
+	var s: Array = MillJobs.get_job(mill_job_index)["size"]
+	hud.show_message("Neues Rohteil %d x %d x %d gespannt." % [int(s[0]), int(s[1]), int(s[2])])
+
+
+func _on_mill_submit() -> void:
+	if mill.untouched:
+		hud.show_message("Das Rohteil ist noch unbearbeitet.", Color(1, 0.75, 0.2))
+		return
+	var job := MillJobs.get_job(mill_job_index)
+	var res := mill.evaluate(job)
+	var score := float(res["score"])
+	var pay := 0
+	var verdict := "Ausschuss! Keine Vergütung."
+	if score >= 0.999:
+		pay = int(job["reward"])
+		verdict = "Alle Maße in Toleranz - sehr gut!"
+	elif score >= 0.5:
+		pay = int(round(float(job["reward"]) * score * 0.5))
+		verdict = "Nacharbeit nötig - Teilvergütung."
+	money += pay
+	parts += 1
+	var lines: Array = res["lines"]
+	var text := "PRÜFPROTOKOLL - %s\n\n%s\n\n%d / %d Merkmale in Ordnung\n%s\nVergütung: %d EUR" % [
+		job["title"], "\n".join(lines), int(res["ok"]), int(res["total"]), verdict, pay]
+	if score >= 0.999:
+		mill_job_index += 1
+		text += "\n\nNächster Fräsauftrag: %s" % MillJobs.get_job(mill_job_index)["title"]
+	hud.show_result(text)
+	_mill_new_workpiece()
+	_refresh_hud()
 
 
 func _on_new_part() -> void:
@@ -161,6 +243,7 @@ func _apply_pending(d: Dictionary) -> void:
 	save_name = str(d.get("name", "Werkstatt"))
 	money = int(d.get("money", 0))
 	job_index = int(d.get("job", 0))
+	mill_job_index = int(d.get("mill_job", 0))
 	parts = int(d.get("parts", 0))
 	play_time = float(d.get("play_time", 0.0))
 	if d.has("lathe") and d["lathe"] is Dictionary:
@@ -168,8 +251,15 @@ func _apply_pending(d: Dictionary) -> void:
 	else:
 		var job := _current_job()
 		lathe.new_workpiece(float(job["stock_d"]), float(job["stock_len"]))
+	if d.has("mill") and d["mill"] is Dictionary:
+		mill.set_state(d["mill"])
+	else:
+		_mill_new_workpiece()
 	if d.has("player") and d["player"] is Dictionary:
 		player.set_state(d["player"])
+		var h = d["player"].get("held", {})
+		if h is Dictionary and h.has("id"):
+			player.set_held(mill if h.get("machine", "") == "mill" else lathe, str(h["id"]))
 	_refresh_hud()
 
 
@@ -177,12 +267,13 @@ func save_game() -> bool:
 	var data := {
 		"name": save_name, "money": money, "job": job_index, "parts": parts, "play_time": play_time,
 		"player": player.get_state(), "lathe": lathe.get_state(),
+		"mill_job": mill_job_index, "mill": mill.get_state(),
 	}
 	return SaveManager.write_slot(GameState.current_slot, data)
 
 
 func restore_mouse() -> void:
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if lathe.operating else Input.MOUSE_MODE_CAPTURED
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if lathe.operating or mill.operating or mill.panel_open else Input.MOUSE_MODE_CAPTURED
 
 
 # ------------------------------------------------------------ Werkstatt-Atmosphäre

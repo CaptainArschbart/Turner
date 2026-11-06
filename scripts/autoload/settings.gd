@@ -47,6 +47,8 @@ const BINDINGS := [
 	["emergency_stop", "Not-Halt / quittieren", "Drehmaschine", "k", KEY_X],
 	["new_workpiece", "Neues Rohteil einspannen", "Drehmaschine", "k", KEY_N],
 	["submit_part", "Teil prüfen & abgeben", "Drehmaschine", "k", KEY_ENTER],
+	["mill_z_up", "Fräskopf heben (Z+)", "Fräsmaschine", "k", KEY_Z],
+	["mill_z_down", "Fräskopf senken (Z-)", "Fräsmaschine", "k", KEY_H],
 	["zoom_in", "Heranzoomen (halten)", "Kamera an der Maschine", "k", KEY_PLUS],
 	["zoom_out", "Herauszoomen (halten)", "Kamera an der Maschine", "k", KEY_MINUS],
 	["cam_top", "Draufsicht (genau von oben)", "Kamera an der Maschine", "k", KEY_F1],
