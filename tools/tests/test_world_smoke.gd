@@ -30,5 +30,21 @@ func _initialize() -> void:
 	w.lathe.stop_operating()
 	await process_frame
 	ok(not w.hud._panel.is_visible_in_tree(), "Pult nach Verlassen aus")
+	# E auf das Bedienpult: direkt in die Pultansicht, Dreh-Anzeigen aus
+	var pt: Node = null
+	for ch in w.lathe.get_children():
+		if ch.has_method("interact") and ch.has_method("get_prompt"):
+			pt = ch
+	ok(pt != null, "Bedienpult hat ein eigenes Interaktionsziel")
+	pt.interact(w.player)
+	for i in 3:
+		await process_frame
+	ok(w.lathe.operating and w.lathe.in_panel_view(), "E aufs Pult öffnet die Pultansicht")
+	ok(not w.hud._panel.is_visible_in_tree() and not w.hud._dro_panel.visible, "Dreh-UI in der Pultansicht ausgeblendet")
+	w.lathe.toggle_panel_view()
+	for i in 3:
+		await process_frame
+	ok(w.hud._panel.is_visible_in_tree() and w.hud._dro_panel.visible, "zurück an der Maschine: Dreh-UI wieder da")
+	w.lathe.stop_operating()
 	print("CHECKS %d FAILS %d" % [checks, fails])
 	quit()

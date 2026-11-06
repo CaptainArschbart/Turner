@@ -332,15 +332,16 @@ func _initialize() -> void:
 	ok(panel.size.x <= 450.0, "HUD-Menü schmaler (%.0f px)" % panel.size.x)
 
 	# --- Bildschirm am Bedienpult der Maschine
-	ok(l2.screen_vp != null and l2.screen_panel != null, "Pult-Bildschirm mit Menü vorhanden")
+	ok(l2.screen_vp != null and l2.screen != null, "Pult-Bildschirm mit Zyklensteuerung vorhanden")
+	var sp = l2.screen
+	sp.show_page("jog")
 	await process_frame
 	await process_frame
-	var sp = l2.screen_panel
 	var vp_size := Vector2(l2.screen_vp.size)
-	ok(sp.get_global_rect().end.y <= vp_size.y + 1.0, "Menü passt auf den Bildschirm (%s in %s)" % [sp.get_global_rect(), vp_size])
+	ok(sp.get_global_rect().end.y <= vp_size.y + 1.0 and sp.hsk[7].get_global_rect().end.x <= vp_size.x + 1.0, "Oberfläche passt auf den Bildschirm (%s in %s)" % [sp.get_global_rect(), vp_size])
 	# Klick direkt in den Bildschirm
 	var was_on: bool = l2.spindle_on
-	var c: Vector2 = sp._spindle_btn.get_global_rect().get_center()
+	var c: Vector2 = sp.vsk[0].get_global_rect().get_center()
 	_click_px(l2, c)
 	ok(l2.spindle_on != was_on, "Klick auf Pult-Bildschirm schaltet Spindel")
 	# Über die Kamera: Pultansicht, Strahl aus der Mausposition trifft den Bildschirm
@@ -353,7 +354,7 @@ func _initialize() -> void:
 	ok(px.distance_to(vp_size * 0.5) < 3.0, "Pultansicht: Bildmitte = Bildschirmmitte (%s)" % px)
 	ok(l2.screen_pixel(mid + Vector2(5000, 0)).x < 0.0, "neben dem Bildschirm kein Treffer")
 	l2.spindle_on = false
-	var bc: Vector2 = sp._css_btn.get_global_rect().get_center()
+	var bc: Vector2 = sp.vsk[2].get_global_rect().get_center()
 	var uv := bc / vp_size
 	var gp: Vector3 = l2._screen_mi.global_transform * Vector3((uv.x - 0.5) * l2.SCREEN_SIZE.x, (0.5 - uv.y) * l2.SCREEN_SIZE.y, 0.0)
 	var mpos: Vector2 = l2.op_cam.unproject_position(gp)

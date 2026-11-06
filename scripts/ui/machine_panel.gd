@@ -10,8 +10,6 @@ var lathe: Lathe
 var font_size := 13
 var row_h := 26.0
 var panel_w := 440.0
-## Knopf „Blick aufs Maschinenpult“ zeigen (nur im HUD)
-var view_btn := false
 
 var _spindle_btn: Button
 var _estop_btn: Button
@@ -153,8 +151,6 @@ func _build_spindle_tab() -> Control:
 
 	var pr := HBoxContainer.new()
 	var pe: Array = [["Neues Rohteil", func(): lathe.request_new_part()], ["Prüfen & abgeben", func(): lathe.request_submit()]]
-	if view_btn:
-		pe.append(["Pult ansehen", func(): lathe.toggle_panel_view()])
 	for e in pe:
 		var b := _button(e[0], e[1])
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL

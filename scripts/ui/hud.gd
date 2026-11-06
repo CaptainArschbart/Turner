@@ -146,7 +146,6 @@ func _ready() -> void:
 	_root.add_child(_tool_box)
 	_panel = MachinePanel.new()
 	_panel.lathe = lathe
-	_panel.view_btn = true
 	_tool_box.add_child(_panel)
 	_profile = ProfileView.new()
 	_tool_box.add_child(_profile)
@@ -202,10 +201,12 @@ func show_result(text: String) -> void:
 
 
 var _operating := false
+var _pult_help := false
 
 
 func set_operating(on: bool) -> void:
 	_operating = on
+	_pult_help = false
 	_dro_panel.visible = on
 	_cross.visible = not on
 	_tool_box.visible = on
@@ -215,13 +216,18 @@ func set_operating(on: bool) -> void:
 
 func _refresh_help() -> void:
 	var b := func(a: String) -> String: return Settings.binding_text(a)
-	if _operating:
+	if _operating and _pult_help:
+		_help.text = "PULT   Maus: Softkeys und Felder anklicken, Zahlen tippen (Enter übernimmt, Esc bricht ab)
+%s  zurück zur Maschine   |   %s  Schutztür   |   %s  Not-Halt   |   %s  Verlassen" % [
+			b.call("cam_panel"), b.call("door_toggle"), b.call("emergency_stop"), b.call("interact")]
+	elif _operating:
 		_help.text = "\n".join([
 			"VERFAHREN   %s%s%s%s  Schlitten im eingestellten Vorschub  (%s = 10-fach)" % [b.call("lathe_x_in"), b.call("lathe_z_minus"), b.call("lathe_x_out"), b.call("lathe_z_plus"), b.call("lathe_rapid")],
 			"HANDRAD     Mausrad   |   %s  Achse X/Z   |   %s  Schritt 0,001/0,01/0,1" % [b.call("hw_axis"), b.call("hw_step")],
 			"SPINDEL     %s  Start/Stopp   |   %s/%s  Drehzahl   |   %s  Kühlung" % [b.call("spindle_toggle"), b.call("rpm_up"), b.call("rpm_down"), b.call("coolant")],
 			"VORSCHUB    %s  Auto an/aus (Handrad-Achse), Richtung am Pult   |   %s/%s  mm/U" % [b.call("auto_feed"), b.call("feed_up"), b.call("feed_down")],
-			"PULT        Maus: Fenster rechts unten oder Bildschirm am Maschinenpult (%s)" % b.call("cam_panel"),
+			"PULT        Maus: Fenster rechts unten oder Bildschirm am Maschinenpult (%s) - dort Zyklen / NC-Programme" % b.call("cam_panel"),
+			"TÜR         Schwarzen Griff mit linker Maus ziehen oder %s   (Zyklusstart nur bei geschlossener Tür)" % b.call("door_toggle"),
 			"KAMERA      Rechte Maus  Drehen (+ Rad = Zoom)   |   Mittlere Maus  Verschieben   |   %s/%s/%s  Ansichten" % [b.call("cam_top"), b.call("cam_front"), b.call("cam_reset")],
 			"SONST       1-4  Halterplatz einschwenken   |   %s  Not-Halt   |   %s  Rohteil   |   %s  Abgeben   |   %s  Verlassen" % [b.call("emergency_stop"), b.call("new_workpiece"), b.call("submit_part"), b.call("interact")],
 		])
@@ -242,6 +248,14 @@ func _process(delta: float) -> void:
 	_fps.visible = bool(Settings.graphics["show_fps"])
 	if _fps.visible:
 		_fps.text = "%d FPS" % Engine.get_frames_per_second()
+	# Pultansicht: Dreh-Anzeigen ausblenden, der Bildschirm am Pult ist die Bedienung
+	var pult := _operating and lathe != null and lathe.in_panel_view()
+	if _operating:
+		_dro_panel.visible = not pult
+		_tool_box.visible = not pult
+		if pult != _pult_help:
+			_pult_help = pult
+			_refresh_help()
 	if _operating and lathe:
 		var mx := "»" if lathe.hw_axis == 0 else " "
 		var mz := "»" if lathe.hw_axis == 1 else " "
@@ -261,6 +275,10 @@ func _process(delta: float) -> void:
 		parts.append("F  %.2f mm/U   Auto-Vorschub: %s" % [lathe.feed(), feed_txt])
 		parts.append("vc %d m/min %s   KSS: %s" % [int(vc), _vc_hint(vc), "EIN" if lathe.coolant else "aus"])
 		parts.append("Rz letzter Schnitt: %.1f µm%s" % [lathe.last_rz, ("  - " + lathe.last_rz_hint) if lathe.last_rz_hint != "" else ""])
+		var nc_txt := "Hand"
+		if lathe.nc.state != "idle":
+			nc_txt = "AUTO %s: %s" % [lathe.nc.prog.get("name", ""), lathe.nc.state_text()]
+		parts.append("Tür: %s   Steuerung: %s" % ["ZU" if lathe.door_closed() else ("AUF" if lathe.door_t < 0.001 else "fährt"), nc_txt])
 		if lathe.estop:
 			parts.append("!!! NOT-HALT AKTIV !!!")
 		_status.text = "\n".join(parts)

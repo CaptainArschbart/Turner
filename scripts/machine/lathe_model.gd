@@ -170,7 +170,7 @@ func build(spindle_pivot: Node3D, cross_slide: Node3D, tailstock: Node3D, axis_h
 				var size := Vector3((bmax.z - bmin.z), 0, (bmax.x - bmin.x)) * SCALE * 1.1
 				size.y = h
 				Build.box(_post_root, size, Vector3(0, slide_top + h * 0.5 - _post_root.position.y, 0),
-					Build.mat(Color(0.20, 0.22, 0.24), 0.55))
+					Build.mat(Color(0.40, 0.19, 0.14), 0.6))   # oxidrot grundiert wie an der E50 HD
 		shank_end_mm = _post_root.position.z * 1000.0
 	root.free()
 	return true

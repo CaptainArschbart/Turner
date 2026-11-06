@@ -45,6 +45,7 @@ const BINDINGS := [
 	["feed_down", "Vorschub verringern", "Drehmaschine", "k", KEY_G],
 	["coolant", "Kühlschmierstoff an/aus", "Drehmaschine", "k", KEY_C],
 	["emergency_stop", "Not-Halt / quittieren", "Drehmaschine", "k", KEY_X],
+	["door_toggle", "Schutztür auf- / zuschieben", "Drehmaschine", "k", KEY_O],
 	["new_workpiece", "Neues Rohteil einspannen", "Drehmaschine", "k", KEY_N],
 	["submit_part", "Teil prüfen & abgeben", "Drehmaschine", "k", KEY_ENTER],
 	["zoom_in", "Heranzoomen (halten)", "Kamera an der Maschine", "k", KEY_PLUS],

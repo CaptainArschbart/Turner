@@ -82,9 +82,8 @@ var tool_nodes: Array[Node3D] = []
 var hw_z: Node3D
 var hw_x: Node3D
 var op_cam: Camera3D
-var screen_lbl: Label           # Kopfzeile (Positionsanzeige) auf dem Pult-Bildschirm
-var screen_vp: SubViewport       # Bildschirm am Bedienpult: Bedienmenü wie im HUD
-var screen_panel: PanelContainer
+var screen_vp: SubViewport       # Bildschirm am Bedienpult: Zyklensteuerung (CncScreen)
+var screen: Control
 var _screen_mi: MeshInstance3D
 var _pult: Node3D
 var _screen_drag := false
@@ -99,8 +98,35 @@ var _anim_dur := 0.0
 var _anim_from := 0.0
 var _anim_to := 0.0
 const SCREEN_SIZE := Vector2(0.44, 0.385)   # m
-const SCREEN_UI := Vector2(528, 462)       # logische Pixel des Menüs
+const SCREEN_UI := Vector2(640, 560)       # logische Pixel der Bedienoberfläche
 const SCREEN_SCALE := 2.0                  # Renderauflösung je logischem Pixel
+const SCREEN_X := -0.04                    # Bildschirmmitte im Pult (links, rechts der Tastenblock)
+const PULT_W := 0.66                       # Pultgehäuse (m) und seine Mitte im Pult
+const PULT_H := 0.80
+const PULT_X := 0.02
+const PULT_Y := -0.10
+const CANOPY_LAYER := 1 << 1               # Sichtebene des Dachs (Bedienkamera blendet es von oben aus)
+const CANOPY_Y := 1.585                    # Unterkante des Dachs (m)
+const DOOR_X0 := -0.98                     # Schiebetür (aufgeschoben) von ... bis (m)
+const DOOR_X1 := -0.16
+const DOOR_CX := (DOOR_X0 + DOOR_X1) * 0.5
+const PULT_Y0 := 1.40                      # Höhe des Pult-Ursprungs (Bildschirm knapp darüber)
+const PULT_ANGLE := 0.55                   # Pult zum Bediener hin angewinkelt (rad)
+const DOOR_TRAVEL := 0.84                  # Weg der Schiebetür von auf (über dem Spindelkasten) bis zu
+const DOOR_TIME := 0.9                     # s für den ganzen Weg
+const DOOR_LAYER := 1 << 2                 # Sichtebene der Tür (Bedienkamera blendet sie von innen aus)
+var door_t := 0.0                          # 0 = auf, 1 = zu
+var door_target := 0.0
+const HANDLE_POS := Vector3(DOOR_X1 - 0.03, 1.32, 0.57)   # Türgriff (Tür auf), Maschinenkoordinaten
+const HANDLE_PICK := Vector3(0.06, 0.46, 0.06)           # Greifbereich um den Griff
+var _door_drag := false
+var _door_grab := 0.0                                     # Abstand Mausstrahl - Türlage beim Greifen (m)
+var _handle_hover := false
+var _door: Node3D
+var nc: NcChannel                          # Zyklensteuerung
+var programs: Array = []                   # NC-Programme (siehe NcCam)
+var prog_sel := ""                         # für AUTO angewähltes Programm
+var nc_internal := false                   # Aufruf kommt vom NC-Kanal (Sperren für Handbedienung aus)
 var chips: CPUParticles3D
 var coolant_fx: CPUParticles3D
 var lamp: SpotLight3D
@@ -149,6 +175,10 @@ func _ready() -> void:
 	for k in RING:
 		_cos.append(cos(TAU * k / RING))
 		_sin.append(sin(TAU * k / RING))
+	nc = NcChannel.new(self)
+	if programs.is_empty():
+		programs = NcCam.examples()
+		prog_sel = str(programs[0]["name"])
 	_build()
 	new_workpiece(stock_d, stock_len)
 	_apply_holder()
@@ -172,28 +202,45 @@ func z_min() -> float:
 # ======================================================================= Aufbau
 
 func _build() -> void:
-	var g := Build.mat(Color(0.80, 0.81, 0.79), 0.45)          # Lichtgrau
-	var a := Build.mat(Color(0.20, 0.22, 0.24), 0.55)          # Anthrazit
+	# Farbgebung der E50 HD: weiße Verkleidung, Weiler-Blau, lichtgraues Bett, dunkelgrauer Unterbau
+	var w := Build.mat(Color(0.90, 0.91, 0.91), 0.42)          # Verkleidung weiß
+	var g := Build.mat(Color(0.74, 0.76, 0.77), 0.5)           # Bett / Schlitten lichtgrau
+	var a := Build.mat(Color(0.25, 0.27, 0.29), 0.55)          # Unterbau dunkelgrau
+	var blue := Build.mat(Color(0.06, 0.18, 0.58), 0.38)       # Weiler-Blau
 	var dark := Build.mat(Color(0.07, 0.07, 0.08), 0.75)
 	var steel := Build.mat(Color(0.72, 0.73, 0.75), 0.28, 1.0)
+	var ways := Build.mat(Color(0.80, 0.81, 0.83), 0.22, 1.0)  # geschliffene Führungen
 	var chrome := Build.mat(Color(0.86, 0.87, 0.89), 0.12, 1.0)
 	var chuck_m := Build.mat(Color(0.55, 0.56, 0.58), 0.35, 1.0)
 	var red := Build.mat(Color(0.85, 0.08, 0.05), 0.4)
 	var green := Build.mat(Color(0.1, 0.65, 0.2), 0.4)
 	var yellow := Build.mat(Color(0.95, 0.78, 0.05), 0.5)
+	var seam := Build.mat(Color(0.12, 0.13, 0.14), 0.7)
 
-	# Unterbau, Spänewanne, Bett
-	Build.box(self, Vector3(0.95, 0.62, 0.8), Vector3(-0.56, 0.31, 0.0), a)
-	Build.box(self, Vector3(0.6, 0.62, 0.8), Vector3(2.0, 0.31, 0.0), a)
+	# Unterbau: Standfuß unter dem Spindelkasten, Fuß rechts, dazwischen die Spänewanne
+	Build.box(self, Vector3(0.88, 0.58, 0.86), Vector3(-0.62, 0.33, 0.0), a)
+	Build.box(self, Vector3(0.62, 0.58, 0.86), Vector3(2.03, 0.33, 0.0), a)
+	Build.box(self, Vector3(3.36, 0.04, 0.8), Vector3(0.65, 0.02, 0.0), dark)         # Sockelleiste
+	for x in [-0.62, 2.03]:                                                           # Doppeltüren
+		Build.box(self, Vector3(0.006, 0.5, 0.004), Vector3(x, 0.33, 0.431), seam)
+		for s in [-1.0, 1.0]:
+			Build.box(self, Vector3(0.012, 0.09, 0.02), Vector3(x + s * 0.04, 0.45, 0.44), dark)
 	Build.box(self, Vector3(1.62, 0.06, 0.95), Vector3(0.89, 0.2, 0.06), dark)
 	Build.box(self, Vector3(1.62, 0.25, 0.03), Vector3(0.89, 0.33, 0.52), a)
+	Build.box(self, Vector3(1.62, 0.02, 0.07), Vector3(0.89, 0.455, 0.5), g)          # Wannenkante
+	Build.box(self, Vector3(1.62, 0.4, 0.03), Vector3(0.89, 0.42, -0.41), a)
+
+	# Bett mit geschliffenen Flachführungen, Bettfront mit Leit-, Zug- und Schaltstange
 	Build.box(self, Vector3(3.35, 0.28, 0.56), Vector3(0.62, 0.76, 0.0), g)
-	Build.box(self, Vector3(3.3, 0.03, 0.07), Vector3(0.62, 0.915, 0.21), chrome)
-	Build.box(self, Vector3(3.3, 0.03, 0.07), Vector3(0.62, 0.915, -0.21), chrome)
-	Build.box(self, Vector3(3.3, 0.02, 0.05), Vector3(0.62, 0.91, 0.0), chrome)
-	# Leit- und Zugspindel
+	Build.box(self, Vector3(3.35, 0.03, 0.5), Vector3(0.62, 0.635, 0.0), a)
+	for z in [0.21, -0.21]:
+		Build.box(self, Vector3(3.3, 0.03, 0.08), Vector3(0.62, 0.915, z), ways)
+	Build.box(self, Vector3(3.3, 0.02, 0.05), Vector3(0.62, 0.91, 0.0), ways)
+	Build.box(self, Vector3(3.3, 0.01, 0.1), Vector3(0.62, 0.912, 0.0), dark)         # Bettschlitz
 	Build.cyl(self, 0.014, 3.2, Vector3(0.62, 0.84, 0.3), steel, Build.AXIS_X)
 	Build.cyl(self, 0.011, 3.2, Vector3(0.62, 0.78, 0.3), steel, Build.AXIS_X)
+	Build.cyl(self, 0.009, 3.2, Vector3(0.62, 0.72, 0.3), steel, Build.AXIS_X)
+	Build.box(self, Vector3(0.05, 0.16, 0.06), Vector3(2.27, 0.78, 0.3), g)           # Lagerbock rechts
 	# Auffangfläche für abgestochene Teile (eigene Physik-Ebene)
 	var pan := Build.collider(self, Vector3(1.62, 0.06, 0.95), Vector3(0.89, 0.2, 0.06))
 	pan.collision_layer = PIECE_LAYER
@@ -203,13 +250,19 @@ func _build() -> void:
 		wall.collision_layer = PIECE_LAYER
 		wall.collision_mask = 0
 
-	# Spindelkasten
-	Build.box(self, Vector3(0.82, 0.62, 0.7), Vector3(-0.62, 1.21, -0.02), g)
-	Build.box(self, Vector3(0.84, 0.04, 0.72), Vector3(-0.62, 1.54, -0.02), a)
-	Build.box(self, Vector3(0.82, 0.17, 0.01), Vector3(-0.62, 1.42, 0.335), a)
-	Build.label(self, "WEILER", Vector3(-0.62, 1.435, 0.342), 0.0012, Color(0.95, 0.95, 0.95), 64)
-	Build.label(self, "E50 HD", Vector3(-0.62, 1.375, 0.342), 0.0007, Color(0.95, 0.55, 0.15), 64)
+	# Spindelkasten: weiße Kabine bis unters Dach. Zum Arbeitsraum hin eine Stirnwand mit
+	# hellgrau gerahmter Abdeckplatte, aus der die Spindelnase mit dem Futter kommt.
+	Build.box(self, Vector3(0.86, 0.82, 0.76), Vector3(-0.62, 1.31, -0.02), w)
+	Build.box(self, Vector3(0.87, 0.02, 0.77), Vector3(-0.62, 1.73, -0.02), g)
+	var fx := -0.187
+	Build.box(self, Vector3(0.004, 0.40, 0.52), Vector3(fx, AXIS_H + 0.03, 0.0), Build.mat(Color(0.84, 0.85, 0.86), 0.5))
+	for s in [-1.0, 1.0]:
+		Build.box(self, Vector3(0.012, 0.035, 0.6), Vector3(fx + 0.004, AXIS_H + 0.03 + s * 0.2, 0.0), g)
+		Build.box(self, Vector3(0.012, 0.44, 0.035), Vector3(fx + 0.004, AXIS_H + 0.03, s * 0.28), g)
+	for i in 5:                                                                       # Schraubenreihe
+		Build.cyl(self, 0.005, 0.006, Vector3(fx + 0.003, AXIS_H + 0.2, -0.2 + i * 0.1), dark, Build.AXIS_X, false, 8)
 	Build.cyl(self, 0.085, 0.07, Vector3(-0.175, AXIS_H, 0), steel, Build.AXIS_X, false, 32)
+	Build.cyl(self, 0.11, 0.012, Vector3(-0.19, AXIS_H, 0), g, Build.AXIS_X, false, 40)
 
 	# Rotierende Teile: Futter, Backen, Werkstück
 	spindle_pivot = Node3D.new()
@@ -244,33 +297,79 @@ func _build() -> void:
 	workpiece_mi.material_override = _wp_mat
 	spindle_pivot.add_child(workpiece_mi)
 
-	# Futterschutz
-	var guard := Build.glass(Color(0.8, 0.85, 0.9, 0.25))
-	Build.box(self, Vector3(0.2, 0.012, 0.42), Vector3(-0.07, AXIS_H + 0.24, 0.0), guard)
-	Build.box(self, Vector3(0.2, 0.25, 0.012), Vector3(-0.07, AXIS_H + 0.12, 0.21), guard)
+	# Futterschutz: Schiebetür mit Sichtfenster zwischen zwei blauen Pfosten, Kopfteil und Griff.
+	# Aufgeschoben steht sie über dem Spindelkasten, zugeschoben (door_t = 1) deckt sie den
+	# Arbeitsraum ab. Fest vor dem Spindelkasten: das weiße Feld mit WEILER-Schriftzug und oben die
+	# Laufschiene. Am linken Pfosten hängt das Bedienpult und fährt mit.
+	var guard := Build.glass(Color(0.8, 0.85, 0.9, 0.22))
+	Build.box(self, Vector3(DOOR_X1 - DOOR_X0, 0.46, 0.18), Vector3(DOOR_CX, 0.85, 0.47), w)
+	Build.box(self, Vector3(DOOR_X1 - DOOR_X0, 0.014, 0.19), Vector3(DOOR_CX, 1.087, 0.47), g)
+	_logo(self, Vector3(DOOR_X0 + 0.12, 0.86, 0.561), 0.06, blue)
+	Build.label(self, "WEILER", Vector3(DOOR_CX + 0.07, 0.86, 0.561), 0.0017, Color(0.06, 0.18, 0.58), 64)
+	var rail_x0 := DOOR_X0 - 0.05
+	var rail_x1 := DOOR_X1 + DOOR_TRAVEL + 0.05
+	Build.box(self, Vector3(rail_x1 - rail_x0, 0.03, 0.04), Vector3((rail_x0 + rail_x1) * 0.5, 1.735, 0.45), g)  # Laufschiene
+	_door = Node3D.new()
+	add_child(_door)
+	var door_parts: Array[GeometryInstance3D] = []
+	for x in [DOOR_X0 + 0.03, DOOR_X1 - 0.03]:
+		door_parts.append(Build.box(_door, Vector3(0.06, 0.56, 0.07), Vector3(x, 1.37, 0.525), blue))
+	door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0 - 0.12, 0.54, 0.008), Vector3(DOOR_CX, 1.37, 0.535), guard))
+	door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0 - 0.12, 0.025, 0.03), Vector3(DOOR_CX, 1.105, 0.54), w))
+	door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0, 0.07, 0.24), Vector3(DOOR_CX, 1.685, 0.44), w))
+	door_parts.append(Build.box(_door, Vector3(DOOR_X1 - DOOR_X0, 0.004, 0.004), Vector3(DOOR_CX, 1.648, 0.561), seam))
+	# Türgriff: bleibt auch sichtbar, wenn die Kamera die Tür ausblendet - an ihm zieht man die Tür
+	Build.box(_door, Vector3(0.018, 0.42, 0.02), HANDLE_POS, dark)
+	for n in door_parts:
+		n.layers = DOOR_LAYER
 
-	# Reitstock
-	Build.box(ts, Vector3(0.36, 0.1, 0.5), Vector3(0, 0.98, 0), g)
-	Build.box(ts, Vector3(0.32, 0.26, 0.3), Vector3(0, 1.16, 0), g)
+	# Reitstock: weißes Gehäuse, langer Pinolenkörper, Handrad hinten, Klemmhebel
+	Build.box(ts, Vector3(0.38, 0.06, 0.5), Vector3(0, 0.96, 0), g)
+	Build.box(ts, Vector3(0.34, 0.17, 0.30), Vector3(0.0, 1.075, 0), w)
+	Build.box(ts, Vector3(0.24, 0.06, 0.22), Vector3(0.0, 1.17, 0), w)
+	Build.cyl(ts, 0.075, 0.42, Vector3(-0.01, AXIS_H, 0), w, Build.AXIS_X, false, 32)
+	Build.cyl(ts, 0.06, 0.02, Vector3(-0.225, AXIS_H, 0), g, Build.AXIS_X, false, 32)
 	Build.cyl(ts, 0.04, 0.2, Vector3(-0.26, AXIS_H, 0), steel, Build.AXIS_X)
 	if model == null:
 		Build.cyl(ts, 0.025, 0.05, Vector3(-0.385, AXIS_H, 0), steel, Build.AXIS_X, false, 16, 0.002)
-	Build.cyl(ts, 0.07, 0.02, Vector3(0.2, AXIS_H, 0), chrome, Build.AXIS_X)
-	Build.cyl(ts, 0.012, 0.06, Vector3(0.23, AXIS_H + 0.05, 0), dark, Build.AXIS_X)
+	Build.cyl(ts, 0.008, 0.06, Vector3(-0.17, AXIS_H + 0.1, 0), dark)                 # Pinolenklemmung
+	Build.sphere(ts, 0.014, Vector3(-0.17, AXIS_H + 0.135, 0), dark)
+	Build.cyl(ts, 0.012, 0.006, Vector3(-0.08, AXIS_H + 0.076, 0.0), blue)
+	Build.cyl(ts, 0.02, 0.04, Vector3(0.22, AXIS_H, 0), chrome, Build.AXIS_X)
+	var tw := Node3D.new()
+	tw.position = Vector3(0.25, AXIS_H, 0)
+	tw.rotation.y = PI / 2
+	ts.add_child(tw)
+	_handwheel(tw, 0.075, chrome, dark)
+	Build.box(ts, Vector3(0.05, 0.03, 0.06), Vector3(0.0, 0.98, 0.27), dark)          # Klemmhebel
+	Build.cyl(ts, 0.007, 0.12, Vector3(0.0, 1.02, 0.3), dark, Build.AXIS_Y)
 
-	# Bettschlitten mit Schlosskasten
+	# Bettschlitten mit Schlosskasten: blaues Bedienfeld, Handrad links
 	Build.box(carriage, Vector3(0.42, 0.09, 0.76), Vector3(0.1, 0.975, 0.0), g)
+	for z in [0.385, -0.385]:
+		Build.box(carriage, Vector3(0.44, 0.05, 0.02), Vector3(0.1, 0.95, z), dark)  # Abstreifer
 	Build.box(carriage, Vector3(0.5, 0.34, 0.09), Vector3(0.1, 0.76, 0.42), g)
-	Build.box(carriage, Vector3(0.3, 0.12, 0.01), Vector3(0.14, 0.84, 0.47), a)
+	Build.box(carriage, Vector3(0.3, 0.24, 0.02), Vector3(0.17, 0.78, 0.47), blue)
+	Build.box(carriage, Vector3(0.27, 0.21, 0.004), Vector3(0.17, 0.78, 0.481), w)
+	var abtn := [[0.08, 0.86, red], [0.12, 0.86, green], [0.16, 0.86, dark], [0.20, 0.86, dark],
+		[0.08, 0.815, dark], [0.12, 0.815, yellow], [0.16, 0.815, dark]]
+	for b in abtn:
+		Build.cyl(carriage, 0.011, 0.012, Vector3(b[0], b[1], 0.488), b[2], Build.AXIS_Z, false, 16)
+	Build.cyl(carriage, 0.02, 0.01, Vector3(0.1, 0.725, 0.487), yellow, Build.AXIS_Z)   # Not-Halt
+	Build.cyl(carriage, 0.015, 0.02, Vector3(0.1, 0.725, 0.497), red, Build.AXIS_Z)
+	for k in [Vector2(0.2, 0.73), Vector2(0.26, 0.82), Vector2(0.26, 0.73)]:
+		Build.cyl(carriage, 0.018, 0.02, Vector3(k.x, k.y, 0.49), dark, Build.AXIS_Z, false, 20)
+		Build.box(carriage, Vector3(0.004, 0.014, 0.004), Vector3(k.x, k.y + 0.008, 0.501), w)
 	hw_z = Node3D.new()
 	hw_z.position = Vector3(-0.06, 0.74, 0.48)
 	carriage.add_child(hw_z)
 	_handwheel(hw_z, 0.085, chrome, dark)
-	Build.cyl(carriage, 0.012, 0.08, Vector3(0.25, 0.8, 0.5), dark, Build.AXIS_Z)
-	Build.sphere(carriage, 0.02, Vector3(0.25, 0.8, 0.545), red)
+	Build.cyl(carriage, 0.03, 0.03, Vector3(-0.06, 0.74, 0.47), chrome, Build.AXIS_Z)   # Skalenring
+	Build.cyl(carriage, 0.008, 0.08, Vector3(0.33, 0.65, 0.5), dark, Build.AXIS_Z)      # Schlossmutterhebel
+	Build.sphere(carriage, 0.016, Vector3(0.33, 0.65, 0.545), red)
 
 	# Planschlitten mit Schnellwechsel-Werkzeughalter
-	Build.box(cross_slide, Vector3(0.22, 0.05, 0.36), Vector3(0.07, 1.045, 0.15), a)
+	Build.box(cross_slide, Vector3(0.22, 0.05, 0.36), Vector3(0.07, 1.045, 0.15), Build.mat(Color(0.56, 0.58, 0.6), 0.4, 0.3))
 	if model == null:
 		Build.box(cross_slide, Vector3(0.14, 0.035, 0.16), Vector3(0.03, 1.088, 0.14), g)
 		# Schnellwechsel-Stahlhalter (Multifix-Art)
@@ -286,7 +385,10 @@ func _build() -> void:
 	hw_x.position = Vector3(0.07, 1.045, 0.36)
 	cross_slide.add_child(hw_x)
 	_handwheel(hw_x, 0.06, chrome, dark)
-	# KSS-Düse
+	# KSS-Düse am Gelenkschlauch, der hinter dem Werkzeughalter hochkommt
+	_hose(cross_slide, [Vector3(0.11, 1.07, -0.09), Vector3(0.11, 1.26, -0.09), Vector3(0.09, 1.36, -0.06),
+		Vector3(0.04, 1.40, -0.02), Vector3(-0.01, 1.38, 0.03), Vector3(-0.03, 1.33, 0.06)],
+		0.007, Build.mat(Color(0.62, 0.63, 0.65), 0.35, 0.9))
 	Build.cyl(cross_slide, 0.005, 0.08, Vector3(-0.03, AXIS_H + 0.11, 0.07), Build.mat(Color(0.15, 0.4, 0.8), 0.5), Build.AXIS_Y)
 	Build.cyl(cross_slide, 0.004, 0.06, Vector3(-0.03, AXIS_H + 0.07, 0.05), Build.mat(Color(0.95, 0.5, 0.1), 0.5), Build.AXIS_Y, false, 12, 0.002)
 
@@ -328,52 +430,87 @@ func _build() -> void:
 	coolant_fx.mesh = drop
 	cross_slide.add_child(coolant_fx)
 
-	# Spritzschutz hinten + Schiebetür vorne
-	Build.box(self, Vector3(2.3, 0.62, 0.02), Vector3(0.95, 1.22, -0.36), a)
-	Build.box(self, Vector3(2.6, 0.04, 0.06), Vector3(0.65, 1.78, 0.58), a)
-	Build.box(self, Vector3(0.04, 0.9, 0.04), Vector3(2.3, 1.33, 0.58), a)
-	Build.box(self, Vector3(0.9, 0.62, 0.012), Vector3(1.6, 1.42, 0.6), guard)
-	Build.box(self, Vector3(0.92, 0.04, 0.03), Vector3(1.6, 1.11, 0.6), a)
-	Build.box(self, Vector3(0.92, 0.04, 0.03), Vector3(1.6, 1.73, 0.6), a)
-	Build.box(self, Vector3(0.03, 0.2, 0.03), Vector3(1.17, 1.42, 0.62), chrome)
+	# Verkleidung: Rückwand, rechte Stirnwand, Dach mit LED-Leuchten
+	Build.box(self, Vector3(2.52, 0.74, 0.02), Vector3(1.08, 1.29, -0.40), g)
+	Build.box(self, Vector3(2.52, 0.004, 0.004), Vector3(1.08, 1.2, -0.388), seam)
+	Build.box(self, Vector3(0.05, 1.14, 0.84), Vector3(2.34, 1.15, 0.0), w)             # Stirnwand
+	Build.box(self, Vector3(0.055, 0.004, 0.84), Vector3(2.34, 0.95, 0.0), seam)
+	# Dach: liegt auf eigener Sichtebene, damit die Bedienkamera von oben hindurchsehen kann
+	var canopy: Array[GeometryInstance3D] = [
+		Build.box(self, Vector3(2.58, 0.03, 0.44), Vector3(1.07, 1.705, -0.2), w),
+		Build.box(self, Vector3(2.58, 0.13, 0.03), Vector3(1.07, 1.655, 0.02), w),
+		Build.box(self, Vector3(2.58, 0.006, 0.006), Vector3(1.07, 1.592, 0.036), seam),
+	]
+	var led := Build.emissive(Color(0.95, 0.97, 1.0), 2.5)
+	for x in [0.35, 1.05, 1.75]:
+		canopy.append(Build.box(self, Vector3(0.5, 0.01, 0.05), Vector3(x, 1.687, -0.08), led))
+	canopy.append(Build.label(self, "E50", Vector3(1.86, 1.655, 0.037), 0.0015, Color(0.06, 0.18, 0.58), 64))
+	canopy.append(Build.label(self, "HD", Vector3(1.985, 1.678, 0.037), 0.0008, Color(0.35, 0.75, 0.2), 64))
+	for n in canopy:
+		n.layers = CANOPY_LAYER
+		n.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-	# Schaltschrank
-	Build.box(self, Vector3(0.75, 1.9, 0.35), Vector3(-0.65, 0.95, -0.6), g)
-	Build.box(self, Vector3(0.012, 1.8, 0.01), Vector3(-0.65, 0.95, -0.42), a)
-	Build.box(self, Vector3(0.12, 0.1, 0.01), Vector3(-0.45, 1.6, -0.42), yellow)
+	# Schaltschrank hinter dem Spindelkasten
+	Build.box(self, Vector3(0.75, 1.7, 0.35), Vector3(-0.65, 0.85, -0.6), w)
+	Build.box(self, Vector3(0.752, 0.06, 0.352), Vector3(-0.65, 0.03, -0.6), red)
+	Build.box(self, Vector3(0.006, 1.6, 0.01), Vector3(-0.65, 0.87, -0.42), seam)
+	Build.box(self, Vector3(0.12, 0.1, 0.01), Vector3(-0.45, 1.45, -0.42), yellow)
 	Build.cyl(self, 0.04, 0.03, Vector3(-0.9, 1.1, -0.41), dark, Build.AXIS_Z)
-	Build.collider(self, Vector3(0.75, 1.9, 0.35), Vector3(-0.65, 0.95, -0.6))
+	Build.collider(self, Vector3(0.75, 1.7, 0.35), Vector3(-0.65, 0.85, -0.6))
 
-	# Bedienpult am Schwenkarm (Zyklensteuerung)
-	Build.box(self, Vector3(0.05, 0.05, 0.36), Vector3(-0.45, 1.5, 0.5), a)
+	# Bedienpult (Zyklensteuerung) senkrecht und angewinkelt am linken Türpfosten: Bildschirm
+	# mit Softkeys und Tastenblock, Maschinentastenfeld darunter, Tastaturablage unten
+	var hinge := Vector3(DOOR_X0, PULT_Y0, 0.56)
+	Build.box(_door, Vector3(0.04, 0.72, 0.05), hinge + Vector3(-0.015, -0.06, -0.02), g)   # Halteschiene
+	for y in [0.2, -0.36]:
+		Build.box(_door, Vector3(0.06, 0.06, 0.06), hinge + Vector3(-0.02, y, -0.01), dark)
 	var cp := Node3D.new()
-	cp.position = Vector3(-0.45, 1.45, 0.68)
-	cp.rotation.y = 0.4
-	add_child(cp)
+	cp.rotation.y = PULT_ANGLE
+	cp.position = hinge - cp.basis * Vector3(PULT_X + PULT_W * 0.5, 0, -0.04)
+	_door.add_child(cp)
 	_pult = cp
-	Build.box(cp, Vector3(0.52, 0.70, 0.07), Vector3.ZERO, a)
-	Build.box(cp, Vector3(SCREEN_SIZE.x + 0.02, SCREEN_SIZE.y + 0.02, 0.004), Vector3(0, 0.05, 0.036), Build.mat(Color(0.03, 0.03, 0.035), 0.6))
-	_build_screen(cp, Vector3(0, 0.05, 0.0385))
-	Build.label(cp, "WEILER", Vector3(0, 0.30, 0.036), 0.0006, Color(0.9, 0.9, 0.9), 48)
-	Build.cyl(cp, 0.018, 0.02, Vector3(-0.18, -0.21, 0.04), green, Build.AXIS_Z)
-	Build.cyl(cp, 0.018, 0.02, Vector3(-0.12, -0.21, 0.04), dark, Build.AXIS_Z)
-	Build.cyl(cp, 0.022, 0.03, Vector3(-0.05, -0.21, 0.045), dark, Build.AXIS_Z)
-	Build.cyl(cp, 0.04, 0.01, Vector3(0.17, -0.27, 0.04), yellow, Build.AXIS_Z)
-	Build.cyl(cp, 0.03, 0.035, Vector3(0.17, -0.27, 0.055), red, Build.AXIS_Z)
-	Build.cyl(cp, 0.035, 0.02, Vector3(0.07, -0.25, 0.045), chrome, Build.AXIS_Z)
+	var pg := Build.mat(Color(0.82, 0.84, 0.85), 0.45)
+	Build.box(cp, Vector3(PULT_W, PULT_H, 0.08), Vector3(PULT_X, PULT_Y, 0), pg)
+	Build.box(cp, Vector3(PULT_W - 0.03, 0.5, 0.004), Vector3(PULT_X, 0.03, 0.041), Build.mat(Color(0.30, 0.32, 0.35), 0.5))
+	Build.box(cp, Vector3(SCREEN_SIZE.x + 0.02, SCREEN_SIZE.y + 0.02, 0.004), Vector3(SCREEN_X, 0.05, 0.044), Build.mat(Color(0.03, 0.03, 0.035), 0.6))
+	_build_screen(cp, Vector3(SCREEN_X, 0.05, 0.0465))
+	_logo(cp, Vector3(0.215, 0.258, 0.044), 0.016, w)
+	Build.label(cp, "WEILER", Vector3(0.27, 0.258, 0.044), 0.00045, Color(0.95, 0.95, 0.95), 48)
+	var key_m := Build.mat(Color(0.75, 0.77, 0.79), 0.5)
+	for r in 9:                                         # Tastenblock rechts
+		for c in 3:
+			var km := yellow if r == 0 and c == 2 else key_m
+			Build.box(cp, Vector3(0.022, 0.018, 0.008), Vector3(0.235 + c * 0.03, 0.2 - r * 0.033, 0.046), km)
+	for i in 10:                                        # Softkeys unter dem Bildschirm
+		Build.box(cp, Vector3(0.03, 0.014, 0.008), Vector3(SCREEN_X - 0.2 + i * 0.0445, -0.185, 0.046), key_m)
+	# Maschinentastenfeld
+	Build.box(cp, Vector3(PULT_W - 0.03, 0.22, 0.004), Vector3(PULT_X, -0.36, 0.041), Build.mat(Color(0.88, 0.89, 0.9), 0.5))
+	for r in 3:
+		for c in 8:
+			if r == 2 and c < 2:
+				continue
+			Build.cyl(cp, 0.011, 0.012, Vector3(-0.16 + c * 0.055, -0.28 - r * 0.055, 0.047), dark, Build.AXIS_Z, false, 16)
+	Build.cyl(cp, 0.018, 0.02, Vector3(-0.25, -0.29, 0.045), green, Build.AXIS_Z)
+	Build.cyl(cp, 0.018, 0.02, Vector3(-0.25, -0.345, 0.045), dark, Build.AXIS_Z)
+	Build.cyl(cp, 0.035, 0.012, Vector3(-0.235, -0.425, 0.045), yellow, Build.AXIS_Z)
+	Build.cyl(cp, 0.026, 0.035, Vector3(-0.235, -0.425, 0.06), red, Build.AXIS_Z)
+	Build.cyl(cp, 0.03, 0.02, Vector3(-0.08, -0.395, 0.045), chrome, Build.AXIS_Z)
 	_led_on = Build.emissive(Color(0.1, 1.0, 0.2), 3.0)
 	_led_off = Build.mat(Color(0.05, 0.2, 0.05), 0.5)
-	spindle_led = Build.cyl(cp, 0.008, 0.01, Vector3(-0.18, -0.27, 0.04), _led_off, Build.AXIS_Z)
+	spindle_led = Build.cyl(cp, 0.007, 0.01, Vector3(-0.2, -0.29, 0.045), _led_off, Build.AXIS_Z)
+	# Tastaturablage
+	var shelf := Build.box(cp, Vector3(PULT_W, 0.035, 0.24), Vector3(PULT_X, -0.52, 0.1), pg)
+	shelf.rotation.x = 0.08
+	Build.box(shelf, Vector3(0.36, 0.006, 0.12), Vector3(-0.07, 0.019, 0.02), Build.mat(Color(0.32, 0.34, 0.37), 0.6))
+	Build.box(shelf, Vector3(0.12, 0.004, 0.1), Vector3(0.19, 0.019, 0.02), Build.mat(Color(0.7, 0.72, 0.74), 0.3))
 
-	# Arbeitsleuchte
-	Build.cyl(self, 0.012, 0.4, Vector3(-0.3, 1.75, -0.25), a)
-	Build.cyl(self, 0.04, 0.08, Vector3(-0.2, 1.95, -0.15), a, Build.AXIS_Y, false, 16, 0.025)
+	# Arbeitsleuchte im Dach (die LED-Streifen sind nur Deko)
 	lamp = SpotLight3D.new()
-	lamp.position = Vector3(-0.2, 1.9, -0.15)
+	lamp.position = Vector3(0.0, 1.64, -0.12)
 	lamp.light_energy = 2.5
-	lamp.spot_range = 2.0
-	lamp.spot_angle = 38
-	lamp.light_color = Color(1.0, 0.96, 0.9)
+	lamp.spot_range = 2.2
+	lamp.spot_angle = 40
+	lamp.light_color = Color(1.0, 0.97, 0.93)
 	lamp.shadow_enabled = true
 	add_child(lamp)
 	lamp.look_at(to_global(Vector3(0.15, AXIS_H, 0.05)))
@@ -381,8 +518,11 @@ func _build() -> void:
 	# Kollision + Interaktion
 	var hit := Build.collider(self, Vector3(3.35, 1.62, 1.0), Vector3(0.62, 0.81, 0.08))
 	hit.set_meta("interact", self)
-	var hit2 := Build.collider(cp, Vector3(0.52, 0.70, 0.08), Vector3.ZERO)
-	hit2.set_meta("interact", self)
+	var hit2 := Build.collider(cp, Vector3(PULT_W, PULT_H, 0.1), Vector3(PULT_X, PULT_Y, 0))
+	var pt := PultTarget.new()
+	pt.lathe = self
+	add_child(pt)
+	hit2.set_meta("interact", pt)   # E aufs Pult: gleich in die Pultansicht
 
 	op_cam = Camera3D.new()
 	op_cam.fov = 55
@@ -390,8 +530,9 @@ func _build() -> void:
 	add_child(op_cam)
 
 
-## Bildschirm am Bedienpult: dasselbe Bedienmenü wie im HUD, in einem SubViewport gerendert und
-## auf eine Fläche im Pult gelegt. Mausklicks auf die Fläche leitet _screen_input weiter.
+## Bildschirm am Bedienpult: Bedienoberfläche der Zyklensteuerung (CncScreen), in einem
+## SubViewport gerendert und auf eine Fläche im Pult gelegt. Mausklicks auf die Fläche leitet
+## _screen_input weiter, Tastatureingaben in Eingabefelder _input.
 func _build_screen(cp: Node3D, pos: Vector3) -> void:
 	screen_vp = SubViewport.new()
 	screen_vp.size = Vector2i(SCREEN_UI * SCREEN_SCALE)
@@ -400,33 +541,11 @@ func _build_screen(cp: Node3D, pos: Vector3) -> void:
 	screen_vp.handle_input_locally = true
 	screen_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	add_child(screen_vp)
-	var ui := Control.new()
-	ui.theme = UITheme.build()
-	ui.size = SCREEN_UI
-	ui.scale = Vector2.ONE * SCREEN_SCALE
-	screen_vp.add_child(ui)
-	var bg := ColorRect.new()
-	bg.color = Color(0.03, 0.05, 0.08)
-	bg.size = SCREEN_UI
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(bg)
-	var v := VBoxContainer.new()
-	v.position = Vector2(6, 4)
-	v.size = SCREEN_UI - Vector2(12, 8)
-	v.add_theme_constant_override("separation", 2)
-	ui.add_child(v)
-	screen_lbl = Label.new()
-	screen_lbl.add_theme_font_size_override("font_size", 13)
-	screen_lbl.add_theme_color_override("font_color", Color(0.55, 0.9, 1.0))
-	screen_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_child(screen_lbl)
-	screen_panel = load("res://scripts/ui/machine_panel.gd").new()
-	screen_panel.lathe = self
-	screen_panel.panel_w = SCREEN_UI.x - 12.0
-	screen_panel.font_size = 12
-	screen_panel.row_h = 23.0
-	screen_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	v.add_child(screen_panel)
+	screen = load("res://scripts/ui/cnc_screen.gd").new()
+	screen.lathe = self
+	screen.size = SCREEN_UI
+	screen.scale = Vector2.ONE * SCREEN_SCALE
+	screen_vp.add_child(screen)
 
 	var quad := QuadMesh.new()
 	quad.size = SCREEN_SIZE
@@ -472,16 +591,37 @@ func _screen_input(event: InputEvent) -> bool:
 	var me := event as InputEventMouse
 	if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
 		return false
-	var is_left := event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT
-	if event is InputEventMouseButton and not is_left:
+	var mb := event as InputEventMouseButton
+	var is_left := mb != null and mb.button_index == MOUSE_BUTTON_LEFT
+	var is_wheel := mb != null and (mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN)
+	if mb != null and not is_left and not is_wheel:
+		return false
+	if is_wheel and mb.ctrl_pressed:
 		return false
 	var px := screen_pixel(me.position, _screen_drag)
 	if px.x < 0.0:
+		if is_left and mb.pressed:
+			screen_vp.gui_release_focus()    # Klick daneben beendet die Eingabe
 		return false
 	if is_left:
 		_screen_drag = event.is_pressed()
 	push_screen_event(event, px)
-	return is_left or _screen_drag
+	return is_left or is_wheel or _screen_drag
+
+
+## Tastatur in ein Eingabefeld des Pult-Bildschirms, solange dort eines bearbeitet wird.
+func _input(event: InputEvent) -> void:
+	if not operating or screen_vp == null or not (event is InputEventKey):
+		return
+	var f := screen_vp.gui_get_focus_owner()
+	if not (f is LineEdit):
+		return
+	var k := event as InputEventKey
+	if k.pressed and k.keycode == KEY_ESCAPE:
+		screen_vp.gui_release_focus()
+	else:
+		screen_vp.push_input(event, true)
+	get_viewport().set_input_as_handled()
 
 
 ## Ereignis an Pixelposition px in das Pult-Menü geben (auch für Tests).
@@ -546,6 +686,30 @@ func _build_tool_visual(t: Dictionary) -> Node3D:
 	return n
 
 
+## Vereinfachtes Firmenzeichen: Quadratrahmen mit Schrägbalken (size = Kantenlänge, m).
+func _logo(parent: Node3D, pos: Vector3, size: float, m: Material) -> void:
+	var t := size * 0.14
+	for s in [-1.0, 1.0]:
+		Build.box(parent, Vector3(size, t, 0.002), pos + Vector3(0, s * (size - t) * 0.5, 0), m)
+		Build.box(parent, Vector3(t, size, 0.002), pos + Vector3(s * (size - t) * 0.5, 0, 0), m)
+	Build.box(parent, Vector3(size * 1.25, t, 0.002), pos, m).rotation.z = PI / 4
+
+
+## Gelenkschlauch (KSS) aus Gliedern entlang der Punkte pts.
+func _hose(parent: Node3D, pts: Array, r: float, m: Material) -> void:
+	for i in pts.size() - 1:
+		var p0: Vector3 = pts[i]
+		var p1: Vector3 = pts[i + 1]
+		var d := p1 - p0
+		var seg := Build.cyl(parent, r, d.length(), (p0 + p1) * 0.5, m, Build.AXIS_Y, false, 10)
+		var y := d.normalized()
+		var x := y.cross(Vector3.FORWARD if absf(y.z) < 0.9 else Vector3.RIGHT).normalized()
+		seg.basis = Basis(x, y, x.cross(y))
+		var n := int(d.length() / 0.02)
+		for k in n:
+			Build.sphere(parent, r * 1.2, p0 + d * (float(k) + 0.5) / n, m)
+
+
 func _handwheel(parent: Node3D, r: float, ring_m: Material, knob_m: Material) -> void:
 	var ring := MeshInstance3D.new()
 	var tm := TorusMesh.new()
@@ -579,6 +743,8 @@ func index_slot(slot: int, silent := false) -> bool:
 	var steps := posmod(slot - active_slot, SLOTS)
 	var dir := 1 if steps <= 2 else -1
 	if not silent:
+		if _nc_locked():
+			return false
 		if is_indexing():
 			_warn("Werkzeugwechsel läuft noch.")
 			return false
@@ -608,6 +774,8 @@ func index_slot(slot: int, silent := false) -> bool:
 ## in einem Platz; steckt es schon woanders, wird es umgesetzt.
 func mount_tool(slot: int, id: String) -> bool:
 	slot = posmod(slot, SLOTS)
+	if _nc_locked():
+		return false
 	if is_indexing():
 		_warn("Werkzeugwechsel läuft noch.")
 		return false
@@ -1061,7 +1229,7 @@ func radius_at(z: float) -> float:
 
 func _seg_range(z: float) -> Vector2i:
 	var t := tool()
-	var a := int(floor((z + float(t["zmin"])) / SEG))
+	var a := int(floor((z + float(t["zmin"])) / SEG + 0.0004))   # Rundung: Schneide genau auf der Segmentgrenze
 	var b := int(floor((z + float(t["zmax"])) / SEG))
 	return Vector2i(maxi(a, 0), mini(b, profile.size() - 1))
 
@@ -1272,8 +1440,11 @@ func _drop_piece(i0: int) -> void:
 	var mesh := _make_mesh(i0, i1, false)
 	for i in range(i0, profile.size()):
 		profile[i] = 0.0
+	if rmax < 1.0:
+		return   # dünner Restring (z. B. beim Planen über die Mitte) - geht mit den Spänen weg
 	_info("Teil abgestochen.")
-	if demo:
+	var host: Node = get_tree().current_scene if get_tree().current_scene else get_parent()
+	if demo or host == null:
 		return
 	var body := RigidBody3D.new()
 	body.collision_layer = PIECE_LAYER
@@ -1292,7 +1463,7 @@ func _drop_piece(i0: int) -> void:
 	cs.rotation.z = PI / 2
 	cs.position.x = zc * 0.001
 	body.add_child(cs)
-	get_tree().current_scene.add_child(body)
+	host.add_child(body)
 	body.global_transform = spindle_pivot.global_transform
 	body.angular_velocity = spindle_pivot.global_basis.x * (spindle_speed / 60.0 * TAU) * 0.3
 	get_tree().create_timer(25.0).timeout.connect(body.queue_free)
@@ -1382,6 +1553,8 @@ static func _next_step(steps: Array, v: float, dir: int) -> float:
 
 
 func toggle_spindle() -> void:
+	if _nc_locked():
+		return
 	if estop:
 		_warn("Not-Halt aktiv - mit [%s] quittieren." % Settings.binding_text("emergency_stop"))
 	elif is_indexing() and not spindle_on:
@@ -1416,6 +1589,8 @@ func set_auto_dir(axis: int, sign: int) -> void:
 		auto_feed = false
 		auto_feed_x = false
 		return
+	if _nc_locked():
+		return
 	if auto_dir() == Vector2i(sign if axis == 1 else 0, sign if axis == 0 else 0):
 		set_auto_dir(-1, 0)
 		return
@@ -1447,6 +1622,8 @@ func set_handwheel_axis(axis: int) -> void:
 
 
 func request_new_part() -> void:
+	if _nc_locked():
+		return
 	if spindle_speed > 5.0:
 		_warn("Erst Spindel stoppen!")
 	else:
@@ -1454,6 +1631,8 @@ func request_new_part() -> void:
 
 
 func request_submit() -> void:
+	if _nc_locked():
+		return
 	if spindle_speed > 5.0:
 		_warn("Erst Spindel stoppen!")
 	else:
@@ -1465,6 +1644,120 @@ func cutting_speed() -> float:
 	return PI * d * spindle_speed / 1000.0
 
 
+## Wird am Pult gerade in ein Eingabefeld geschrieben?
+func typing() -> bool:
+	return screen_vp != null and screen_vp.gui_get_focus_owner() is LineEdit
+
+
+## Handbedienung gesperrt, solange ein Programm läuft oder angehalten ist (Meldung einmalig).
+func _nc_locked() -> bool:
+	if nc == null or nc_internal or not nc.busy():
+		return false
+	_warn("Automatikbetrieb - erst RESET am Pult.")
+	return true
+
+
+# ======================================================================= Schiebetür
+
+## Schutztür ganz geschlossen (und nicht gerade beim Öffnen)?
+func door_closed() -> bool:
+	return door_target >= 1.0 and door_t >= 0.999
+
+
+## Tür von Hand auf- bzw. zuschieben (läuft sie gerade, kehrt sie um).
+func toggle_door() -> void:
+	door_target = 0.0 if door_target >= 1.0 else 1.0
+	_info("Schutztür wird %s." % ("geschlossen" if door_target >= 1.0 else "geöffnet"))
+
+
+## Mausstrahl (Fensterposition) in Maschinenkoordinaten: [Ursprung, Richtung].
+func _mouse_ray(mouse_pos: Vector2) -> Array:
+	var inv := global_transform.affine_inverse()
+	return [inv * op_cam.project_ray_origin(mouse_pos), inv.basis * op_cam.project_ray_normal(mouse_pos)]
+
+
+## Liegt die Maus über dem Türgriff?
+func handle_hit(mouse_pos: Vector2) -> bool:
+	if op_cam == null or _door == null:
+		return false
+	var r := _mouse_ray(mouse_pos)
+	var c := HANDLE_POS + Vector3(_door.position.x, 0, 0)
+	var box := AABB(c - HANDLE_PICK * 0.5, HANDLE_PICK)
+	return box.intersects_ray(r[0], r[1]) != null
+
+
+## X (Maschine) des Mausstrahls in der Ebene des Griffs, NAN wenn parallel.
+func _ray_door_x(mouse_pos: Vector2) -> float:
+	var r := _mouse_ray(mouse_pos)
+	var o: Vector3 = r[0]
+	var d: Vector3 = r[1]
+	if absf(d.z) < 1e-5:
+		return NAN
+	var t := (HANDLE_POS.z - o.z) / d.z
+	return o.x + d.x * t if t > 0.0 else NAN
+
+
+## Linke Maustaste am Türgriff: Tür mit der Maus auf- und zuziehen. Nahe an den Enden rastet
+## sie ein; geschlossen gilt sie erst ganz zu.
+func _door_input(event: InputEvent) -> bool:
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
+		return false
+	if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+		var mb := event as InputEventMouseButton
+		if mb.pressed and handle_hit(mb.position):
+			var x := _ray_door_x(mb.position)
+			if is_nan(x):
+				return false
+			_door_drag = true
+			_door_grab = x - door_t * DOOR_TRAVEL
+			door_target = door_t
+			return true
+		if not mb.pressed and _door_drag:
+			_door_drag = false
+			if door_t > 0.93:
+				door_target = 1.0
+			elif door_t < 0.07:
+				door_target = 0.0
+			else:
+				door_target = door_t
+			_info("Schutztür %s." % ("geschlossen" if door_target >= 1.0 else ("offen" if door_target <= 0.0 else "halb offen")))
+			return true
+		return false
+	if event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		if _door_drag:
+			var x := _ray_door_x(mm.position)
+			if not is_nan(x):
+				door_t = clampf((x - _door_grab) / DOOR_TRAVEL, 0.0, 1.0)
+				door_target = door_t
+				_place_door()
+			return true
+		var hov := handle_hit(mm.position)
+		if hov != _handle_hover:
+			_handle_hover = hov
+			Input.set_default_cursor_shape(Input.CURSOR_DRAG if hov else Input.CURSOR_ARROW)
+	return false
+
+
+## Tür sofort in eine Lage setzen (Laden, Tests, Render).
+func set_door(closed: bool) -> void:
+	door_target = 1.0 if closed else 0.0
+	door_t = door_target
+	_place_door()
+
+
+func _step_door(delta: float) -> void:
+	if _door_drag or is_equal_approx(door_t, door_target):
+		return
+	door_t = move_toward(door_t, door_target, delta / DOOR_TIME)
+	_place_door()
+
+
+func _place_door() -> void:
+	if _door:
+		_door.position.x = door_t * DOOR_TRAVEL
+
+
 func _physics_process(delta: float) -> void:
 	_msg_cool -= delta
 	var target := rpm() if spindle_on and not estop else 0.0
@@ -1473,9 +1766,12 @@ func _physics_process(delta: float) -> void:
 	# Rechtslauf (M3): Die Werkstückoberfläche läuft an der Schneide (Bedienerseite, Spanfläche
 	# oben) nach unten in die Platte hinein.
 	spindle_pivot.rotate_x(spindle_speed / 60.0 * TAU * delta)
+	_step_door(delta)
+	nc.step(delta)
 
-	# Tippbetrieb (WASD): im eingestellten Vorschub, Shift = 10-fach
-	if operating and not estop:
+	# Tippbetrieb (WASD): im eingestellten Vorschub, Shift = 10-fach. Nicht im Automatikbetrieb
+	# und nicht, solange am Pult in ein Eingabefeld geschrieben wird.
+	if operating and not estop and not nc.busy() and not typing():
 		var ax := Vector2(Input.get_axis("lathe_z_minus", "lathe_z_plus"), Input.get_axis("lathe_x_in", "lathe_x_out"))
 		if ax.x != 0.0:
 			auto_feed = false
@@ -1561,13 +1857,17 @@ func _update_camera(delta: float) -> void:
 	cam_target = cam_target.lerp(want, clampf(8.0 * delta, 0.0, 1.0))
 	var b := Basis(Vector3.UP, cam_yaw) * Basis(Vector3.RIGHT, cam_pitch)
 	op_cam.transform = Transform3D(b, cam_target + b * Vector3(0, 0, cam_dist))
+	# Über der Dachunterkante würde das Dach die Sicht auf den Arbeitsraum verdecken
+	op_cam.set_cull_mask_value(2, op_cam.position.y < CANOPY_Y - 0.02 or op_cam.position.z > 0.3)
+	# Die Tür nur zeigen, wenn die Kamera vor ihr steht (sonst steckt sie in Kopfteil oder Pfosten)
+	op_cam.set_cull_mask_value(3, op_cam.position.z > 0.64 or _panel_view)
 
 
 ## Mitte des Pult-Bildschirms im Maschinen-Koordinatensystem.
 func screen_center() -> Vector3:
 	if _pult == null or _screen_mi == null:
-		return Vector3(-0.45, 1.5, 0.7)
-	return _pult.transform * _screen_mi.position
+		return Vector3(-1.2, PULT_Y0 + 0.05, 0.8)
+	return _door.transform * _pult.transform * _screen_mi.position
 
 
 var _pre_panel: Array = []
@@ -1616,11 +1916,8 @@ func _zoom_step(dir: float) -> void:
 
 
 func _update_screen() -> void:
-	if screen_lbl == null:
+	if screen_vp == null:
 		return
-	var state := "NOT-HALT" if estop else ("SPINDEL EIN" if spindle_speed > 5.0 else "BEREIT")
-	screen_lbl.text = "X Ø %9.3f   Z %9.3f   P%d %s D1   %s" % [
-		tool_x * 2.0, tool_z, active_slot + 1, tool()["id"], state]
 	# Außerhalb der Bedienung reicht ein Bild alle 0,1 s
 	screen_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS if operating else SubViewport.UPDATE_ONCE
 
@@ -1631,7 +1928,23 @@ func get_prompt() -> String:
 	return "[%s] Weiler E50 HD bedienen" % Settings.binding_text("interact")
 
 
-func interact(p: Node) -> void:
+## Ziel für [E] auf dem Bedienpult: Maschine bedienen und direkt auf den Pult-Bildschirm schauen.
+class PultTarget extends Node:
+	var lathe: Lathe
+
+	func get_prompt() -> String:
+		return "[%s] Bedienpult (Zyklensteuerung)" % Settings.binding_text("interact")
+
+	func interact(p: Node) -> void:
+		lathe.interact(p, true)
+
+
+## Wird gerade auf den Pult-Bildschirm geschaut? (HUD blendet dann die Dreh-Anzeigen aus)
+func in_panel_view() -> bool:
+	return _panel_view
+
+
+func interact(p: Node, panel := false) -> void:
 	if demo or operating:
 		return
 	player = p
@@ -1640,6 +1953,12 @@ func interact(p: Node) -> void:
 	p.start_operating(self, stand, global_rotation.y)
 	op_cam.fov = float(Settings.graphics["fov"]) * 0.75
 	cam_dist = maxf(_dist_t, 0.5)
+	if panel:
+		set_view("panel")
+		cam_yaw = _yaw_t
+		cam_pitch = _pitch_t
+		cam_dist = _dist_t
+		cam_target = screen_center()
 	_update_camera(1.0)
 	op_cam.make_current()
 	operating_changed.emit(true)
@@ -1650,6 +1969,12 @@ func stop_operating() -> void:
 		return
 	operating = false
 	_screen_drag = false
+	if _door_drag:
+		_door_drag = false
+		door_target = 1.0 if door_t > 0.93 else (0.0 if door_t < 0.07 else door_t)
+	if _handle_hover:
+		_handle_hover = false
+		Input.set_default_cursor_shape(Input.CURSOR_ARROW)
 	if _panel_view:
 		set_view("back")
 	# Auto-Vorschub läuft weiter (wie die Spindel)
@@ -1665,6 +1990,8 @@ func hw_axis_name() -> String:
 ## Eine (oder mehrere) Mausrad-Rasten = Handrad der gewählten Achse um je einen Schritt.
 ## X wird wie an der Anzeige im Durchmesser verfahren. Rad hoch = zustellen bzw. zum Futter.
 func _handwheel_turn(notches: float) -> void:
+	if _nc_locked() or estop:
+		return
 	if bool(Settings.mouse.get("handwheel_invert", false)):
 		notches = -notches
 	var d := notches * Settings.handwheel_step()
@@ -1688,6 +2015,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	# Klicks auf den Bildschirm am Bedienpult bedienen dessen Menü
 	if _screen_input(event):
+		get_viewport().set_input_as_handled()
+		return
+	if _door_input(event):
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("cam_panel"):
@@ -1736,6 +2066,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		stop_operating()
 	elif event.is_action_pressed("emergency_stop"):
 		toggle_estop()
+	elif event.is_action_pressed("door_toggle"):
+		toggle_door()
 	elif event.is_action_pressed("spindle_toggle"):
 		toggle_spindle()
 	elif event.is_action_pressed("hw_axis"):
@@ -1843,7 +2175,7 @@ func get_state() -> Dictionary:
 		"machined": mach, "rz": Array(rz), "tool_z": tool_z, "tool_x": tool_x, "tool": tool_idx,
 		"holder": holder.duplicate(), "active_slot": active_slot,
 		"rpm": rpm_set, "feed": feed_set, "css": css, "vc": vc_set, "rpm_limit": rpm_limit,
-		"coolant": coolant}
+		"coolant": coolant, "door": door_target >= 1.0, "programs": programs.duplicate(true), "prog_sel": prog_sel}
 
 
 func set_state(d: Dictionary) -> void:
@@ -1877,6 +2209,11 @@ func set_state(d: Dictionary) -> void:
 	set_vc(float(d.get("vc", vc_set)))
 	set_rpm_limit(float(d.get("rpm_limit", rpm_limit)))
 	coolant = bool(d.get("coolant", false))
+	set_door(bool(d.get("door", false)))
+	var pr = d.get("programs", null)
+	if pr is Array and not pr.is_empty():
+		programs = pr.duplicate(true)
+		prog_sel = str(d.get("prog_sel", ""))
 	var h = d.get("holder", null)
 	if h is Array and h.size() == SLOTS:
 		for s in SLOTS:

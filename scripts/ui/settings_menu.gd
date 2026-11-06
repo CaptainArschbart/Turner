@@ -11,8 +11,8 @@ var _tabs: TabContainer
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	theme = UITheme.build()
-	custom_minimum_size = Vector2(960, 640)
+	theme = UITheme.menu()
+	custom_minimum_size = Vector2(940, 640)
 	_build()
 
 
@@ -36,7 +36,7 @@ func _build() -> void:
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 14)
 	add_child(root)
-	root.add_child(UITheme.title("Einstellungen"))
+	root.add_child(UITheme.heading("Einstellungen"))
 
 	_tabs = TabContainer.new()
 	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -82,6 +82,7 @@ func _row(parent: Control, label_text: String, control: Control) -> void:
 	var l := Label.new()
 	l.text = label_text
 	l.custom_minimum_size.x = 340
+	l.add_theme_color_override("font_color", Color(1, 1, 1, 0.82))
 	h.add_child(l)
 	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	h.add_child(control)
@@ -91,8 +92,10 @@ func _row(parent: Control, label_text: String, control: Control) -> void:
 func _header(parent: Control, text: String) -> void:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_color_override("font_color", UITheme.ACCENT)
-	l.add_theme_font_size_override("font_size", 20)
+	l.add_theme_color_override("font_color", UITheme.BLUE_HI)
+	l.add_theme_font_override("font", UITheme.font(600, 2))
+	l.add_theme_font_size_override("font_size", 15)
+	l.text = text.to_upper()
 	parent.add_child(l)
 
 
