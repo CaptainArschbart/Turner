@@ -2,7 +2,7 @@ class_name Player
 extends CharacterBody3D
 ## Spielfigur (Zerspanungsmechaniker) mit 1st/3rd-Person-Kamera und Interaktion.
 
-signal material_to_machine(machine: Node)
+signal material_to_machine(machine: Node, flip: bool)
 signal prompt_changed(text: String)
 signal held_changed(text: String)
 
@@ -34,6 +34,7 @@ var _prompt := ""
 var _walk_t := 0.0
 ## Werkzeug in der Hand: {"machine", "id", "name"}, leer = Hand frei
 var held: Dictionary = {}
+var gate: Callable                # Spielwelt: ist dieses Ziel gerade gesperrt? (Ziel, nur prüfen)
 var _hand: Node3D
 
 
@@ -148,18 +149,43 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if click_focus():
 			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		if right_click_focus():
+			get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("toggle_view"):
 		third_person = not third_person
 		_update_camera()
 	elif event.is_action_pressed("interact") and _focus:
 		get_viewport().set_input_as_handled()
-		_focus.interact(self)
+		if not _blocked(_focus, false):
+			_focus.interact(self)
 
 
 ## Linksklick auf das anvisierte Ziel. Gibt true zurück, wenn es darauf reagiert.
+func _blocked(target: Node, silent: bool) -> bool:
+	return gate.is_valid() and gate.call(target, silent)
+
+
+## Rechtsklick auf die Maschine: Teil andersherum einspannen, aus den Händen oder das schon eingespannte.
+func right_click_focus() -> bool:
+	if not _focus or not _focus.has_method("get_machine") or _blocked(_focus, false):
+		return false
+	var machine: Node = _focus.get_machine()
+	if carrying_bin() or not held.is_empty() or (carry.is_empty() and machine.get("has_part") != true):
+		return false
+	material_to_machine.emit(machine, true)
+	return true
+
+
 func click_focus() -> bool:
+	if _focus and _blocked(_focus, false):
+		return true
 	if _focus and not carry.is_empty() and _focus.has_method("get_machine"):
-		material_to_machine.emit(_focus.get_machine())
+		material_to_machine.emit(_focus.get_machine(), false)
+		return true
+	# Freie Hände auf der Maschine selbst: Spanntiefe des eingespannten Teils ändern
+	if _focus and hands_free() and _focus.has_method("get_machine") and not _focus.has_method("click") and _focus.get_machine().get("has_part") == true:
+		material_to_machine.emit(_focus.get_machine(), false)
 		return true
 	if _focus and _focus.has_method("click"):
 		_focus.click(self)
@@ -229,6 +255,9 @@ func _update_focus() -> void:
 			if target.has_method("focus_for"):
 				target = target.focus_for(ray.global_position, -ray.global_transform.basis.z)
 	_focus = target
+	if target and _blocked(target, true):
+		_set_prompt("Tag noch nicht gestartet: am PC im Programm Tagesbericht")
+		return
 	var text: String = target.get_prompt() if target else ""
 	if target and not carry.is_empty() and target.has_method("get_machine"):
 		if target.has_method("carry_prompt") and not carrying_bin():
@@ -238,7 +267,9 @@ func _update_focus() -> void:
 		elif carrying_bin():
 			text = "[Linksklick] Spänewanne in den Behälter leeren (%d %% voll)    |    %s" % [int(target.get_machine().tray.fraction() * 100.0), text]
 		else:
-			text = "[Linksklick] Material einspannen    |    %s" % text
+			text = "[Linksklick] Material einspannen    [Rechtsklick] Andersherum    |    %s" % text
+	elif target and hands_free() and target.has_method("get_machine") and target.get_machine().get("has_part") == true:
+		text = "%s    |    [Rechtsklick] Teil umdrehen%s" % [text, "" if target.has_method("click") else "    [Linksklick] Spanntiefe"]
 	_set_prompt(text)
 
 

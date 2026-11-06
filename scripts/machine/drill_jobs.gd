@@ -3,6 +3,8 @@ extends RefCounted
 ## Bohraufträge für die Standbohrmaschine, gleicher Aufbau wie MillJobs. Rohteil size = [Länge X, Breite Y,
 ## Höhe], Bohrungen von der rohen Oberseite (Z = 0) aus. Die Oberseite bleibt unbearbeitet.
 
+static var _all: Array = []
+
 const LIST := [
 	{
 		"title": "Bohrauftrag 1: Lochplatte",
@@ -49,5 +51,13 @@ const LIST := [
 ]
 
 
+## Feste Aufträge und die generierten dahinter.
+static func all() -> Array:
+	if _all.is_empty():
+		_all = LIST + JobGen.drill(LIST.size() + 1)
+	return _all
+
+
 static func get_job(i: int) -> Dictionary:
-	return LIST[posmod(i, LIST.size())]
+	var list := all()
+	return list[posmod(i, list.size())]

@@ -1,9 +1,9 @@
 class_name ToolStore
 extends RefCounted
 ## Werkzeugbestand einer Maschinenart: Von jedem Werkzeug gibt es bis zu MAX_COPIES Stück, jedes mit eigenem
-## Schneidstoff und Verschleiß. items hält das Stück, das gerade benutzt wird oder als nächstes dran ist,
-## spares die übrigen auf der Werkbank, placed die in den Halterungen unter der Bank. Zerstörte oder
-## verschlissene Werkzeuge fallen heraus, dann rückt das nächste Stück nach.
+## Schneidstoff und Verschleiß. placed sind die Stücke in den Halterungen unter der Werkbank. items hält das
+## Stück, das gerade an der Maschine oder in der Hand ist, spares neu gekaufte, die noch einsortiert werden.
+## Zerstörte oder verschlissene Werkzeuge fallen heraus.
 
 const GRADE_TITLES := {"hm": "Hartmetall", "hss": "HSS"}
 const MAX_COPIES := 5
@@ -13,8 +13,43 @@ var spares: Dictionary = {}       # Werkzeug-id -> Array weiterer Stücke
 var placed: Dictionary = {}       # Halterung -> {"id", "grade", "wear", "dull"}
 
 
+## Gibt es von diesem Werkzeug überhaupt ein Stück?
 func has(id: String) -> bool:
-	return items.has(id)
+	return count(id) > 0
+
+
+## Alle Stücke aller Werkzeuge.
+func total() -> int:
+	var n := placed.size() + items.size()
+	for id in spares:
+		n += spare_count(str(id))
+	return n
+
+
+## Halterung des ersten Stücks in den Halterungen, -1 = keines.
+func _first_holder(id: String) -> int:
+	var best := -1
+	for i in placed:
+		if str(placed[i]["id"]) == id and (best < 0 or int(i) < best):
+			best = int(i)
+	return best
+
+
+## Das Stück, um das es gerade geht: das benutzte, sonst das erste in den Halterungen.
+func _current(id: String) -> Dictionary:
+	if items.has(id):
+		return items[id]
+	var i := _first_holder(id)
+	return placed[i] if i >= 0 else {}
+
+
+## Ein Stück aus den Halterungen in Benutzung nehmen, wenn noch keines benutzt wird.
+func activate(id: String) -> void:
+	if items.has(id):
+		return
+	var i := _first_holder(id)
+	if i >= 0:
+		take(i)
 
 
 ## Alle Stücke dieses Werkzeugs, auch die in den Halterungen.
@@ -41,8 +76,9 @@ func add(id: String, grade := "hm") -> void:
 		items[id] = copy
 
 
-## Das benutzte Stück ist weg, das nächste rückt nach.
+## Das benutzte Stück ist weg.
 func remove(id: String) -> void:
+	activate(id)
 	if spare_count(id) > 0:
 		items[id] = spares[id].pop_front()
 		if spares[id].is_empty():
@@ -73,7 +109,19 @@ func place(id: String, i: int) -> bool:
 	return true
 
 
-## Stück aus der Halterung nehmen, es wird zum benutzten. Das bisherige bleibt auf der Werkbank.
+## Neu gekauftes Stück in die Halterung stecken.
+func place_spare(id: String, i: int) -> bool:
+	if placed.has(i) or spare_count(id) <= 0:
+		return false
+	var copy: Dictionary = spares[id].pop_front()
+	copy["id"] = id
+	placed[i] = copy
+	if spares[id].is_empty():
+		spares.erase(id)
+	return true
+
+
+## Stück aus der Halterung nehmen, es wird zum benutzten.
 func take(i: int) -> String:
 	if not placed.has(i):
 		return ""
@@ -90,15 +138,16 @@ func take(i: int) -> String:
 
 
 func grade(id: String) -> String:
-	return str(items[id]["grade"]) if items.has(id) else "hm"
+	return str(_current(id).get("grade", "hm"))
 
 
 func wear(id: String) -> float:
-	return float(items[id]["wear"]) if items.has(id) else 0.0
+	return float(_current(id).get("wear", 0.0))
 
 
 ## Verschleiß dazu, gibt den neuen Stand zurück.
 func add_wear(id: String, amount: float) -> float:
+	activate(id)
 	if not items.has(id):
 		return 0.0
 	var w := float(items[id]["wear"]) + amount
@@ -108,22 +157,24 @@ func add_wear(id: String, amount: float) -> float:
 
 ## Schleifscheiben: Wie unrund sie ist, 1 = muss abgezogen werden.
 func dull(id: String) -> float:
-	return float(items[id].get("dull", 0.0)) if items.has(id) else 0.0
+	return float(_current(id).get("dull", 0.0))
 
 
 func add_dull(id: String, amount: float) -> void:
+	activate(id)
 	if items.has(id):
 		items[id]["dull"] = minf(dull(id) + amount, 1.0)
 
 
 func set_dull(id: String, value: float) -> void:
+	activate(id)
 	if items.has(id):
 		items[id]["dull"] = value
 
 
 ## Anzeige: Hartmetall, 12 % Verschleiß
 func info(id: String) -> String:
-	if not items.has(id):
+	if not has(id):
 		return ""
 	if not GRADE_TITLES.has(grade(id)):
 		return "%d %% Verschleiß, %d %% unrund" % [int(wear(id) * 100.0), int(dull(id) * 100.0)]

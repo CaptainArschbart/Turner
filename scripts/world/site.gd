@@ -45,6 +45,7 @@ var _deliveries: Node3D
 var _stored: Node3D
 var _areas: Node3D
 var _signs: Dictionary = {}       # Regalnummer -> Label3D
+var _slot_signs: Dictionary = {}  # Regalplatz -> Label3D am Fach
 var _containers: Node3D
 
 
@@ -168,8 +169,23 @@ func _build_yard() -> void:
 	add_child(sun)
 
 
+## Stabgitterzaun: Pfosten, Riegel und Gitterfeld. Die Kollision ist eine glatte Wand.
 func _fence(size: Vector3, pos: Vector3, m: Material) -> void:
-	_out(Build.box(self, size, pos, m, true))
+	Build.collider(self, size, pos)
+	var along_x := size.x > size.z
+	var length := size.x if along_x else size.z
+	var dir := Vector3.RIGHT if along_x else Vector3.BACK
+	var mesh := Build.mat(Color(0.3, 0.38, 0.34, 0.35), 0.6)
+	mesh.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mesh.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_out(Build.box(self, Vector3(length, size.y - 0.1, 0.01) if along_x else Vector3(0.01, size.y - 0.1, length), pos, mesh))
+	for y in [0.15, size.y * 0.5, size.y - 0.05]:
+		var at := Vector3(pos.x, y, pos.z)
+		_out(Build.box(self, Vector3(length, 0.04, 0.03) if along_x else Vector3(0.03, 0.04, length), at, m))
+	var n := maxi(int(length / 2.5), 1)
+	for i in n + 1:
+		var at := pos + dir * (-length * 0.5 + i * length / n)
+		_out(Build.box(self, Vector3(0.07, size.y, 0.07), at, m))
 
 
 ## Südwand der zwei Grundkacheln mit Toröffnung, innen und außen getrennt beleuchtet.
@@ -284,6 +300,7 @@ func _rebuild_tiles() -> void:
 		_tiles.remove_child(k)
 		k.free()
 	_signs.clear()
+	_slot_signs.clear()
 	for c in workshop_cells:
 		_workshop_tile(c)
 	for row in range(-2, 2):
@@ -431,9 +448,13 @@ func _rack(pos: Vector3, rack: int, aisle: float) -> void:
 		target.slot = rack * SLOTS_PER_RACK + n
 		_tiles.add_child(target)
 		hit.set_meta("interact", target)
-		# Fachnummer an der Traverse zur Gangseite
-		var at := pos + Vector3(aisle * (post_x + 0.035), BOARD_Y0 + BOARD_STEP * shelf - 0.05, side * bay)
-		Build.label(_tiles, "%d" % (n + 1), at, 0.0022, Color(0.05, 0.05, 0.06), 36, PI / 2 * aisle)
+		# Kleines Schild am Fach, an der Traverse zur Gangseite: Nummer und Inhalt
+		var at := pos + Vector3(aisle * (post_x + 0.04), BOARD_Y0 + BOARD_STEP * shelf - 0.05, side * bay)
+		Build.box(_tiles, Vector3(0.012, 0.13, 0.9), at, Build.mat(Color(0.95, 0.95, 0.92), 0.7))
+		var plate := Build.label(_tiles, "Fach %d" % (n + 1), at + Vector3(aisle * 0.009, 0, 0), 0.0015, Color(0.05, 0.05, 0.08), 32, PI / 2 * aisle)
+		plate.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		plate.width = 0.86 / plate.pixel_size
+		_slot_signs[target.slot] = plate
 	# Schild an der Gangseite der Mittelstütze
 	var sign_at := pos + Vector3(aisle * (post_x + 0.07), 1.75, 0)
 	Build.box(_tiles, Vector3(0.02, 1.0, 1.2), sign_at, Build.mat(Color(0.93, 0.93, 0.9), 0.8))
@@ -495,34 +516,58 @@ func show_areas(layout: Layout) -> void:
 
 ## Stellplatz des i-ten Spänecontainers am Ostzaun des Hofs.
 static func container_pos(i: int) -> Vector3:
-	return Vector3(YARD_X1 - 2.2, 0.0, -4.5 + i * 4.5)
+	return Vector3(YARD_X1 - 1.7, 0.0, -4.5 + i * 4.5)
 
 
-## Spänecontainer im Hof zeichnen.
+## Spänecontainer im Hof zeichnen: Absetzmulde mit schrägen Stirnseiten, Rippen und Schild zum Hof hin.
 func show_containers(list: Array) -> void:
 	for c in _containers.get_children():
 		_containers.remove_child(c)
 		c.free()
-	var blue := Build.mat(Color(0.12, 0.3, 0.5), 0.7, 0.1)
-	var dark := Build.mat(Color(0.07, 0.15, 0.25), 0.8)
-	var size := Vector3(3.2, 1.3, 1.9)
+	var blue := Build.mat(Color(0.1, 0.27, 0.62), 0.6, 0.15)
+	blue.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var rim := Build.mat(Color(0.08, 0.22, 0.52), 0.55, 0.2)
+	var inner := Build.mat(Color(0.2, 0.22, 0.25), 0.9)
+	var top := Vector2(3.6, 1.9)
+	var bottom := Vector2(2.1, 1.5)
+	var h := 1.35
 	for i in list.size():
 		var node := Node3D.new()
 		node.position = container_pos(i)
+		# Lange Seite zeigt zum Hof, also nach Westen
+		node.rotation.y = PI / 2.0
 		_containers.add_child(node)
-		_out(Build.box(node, Vector3(size.x, 0.1, size.z), Vector3(0, 0.1, 0), dark))
+		_out(Build.box(node, Vector3(bottom.x, 0.05, bottom.y), Vector3(0, 0.125, 0), inner))
+		_out(Build.tub(node, bottom, top, h - 0.1, Vector3(0, 0.1, 0), blue))
+		# Rand oben, Kufen unten
 		for sz in [-1.0, 1.0]:
-			_out(Build.box(node, Vector3(size.x, size.y, 0.05), Vector3(0, size.y * 0.5, sz * size.z * 0.5), blue))
+			_out(Build.box(node, Vector3(top.x + 0.08, 0.07, 0.07), Vector3(0, h, sz * top.y * 0.5), rim))
+			_out(Build.box(node, Vector3(1.9, 0.1, 0.1), Vector3(0, 0.05, sz * 0.5), rim))
+			# Rippen und Griffleiste auf den Längsseiten
+			for x in [-1.05, -0.35, 0.35, 1.05]:
+				_out(Build.box(node, Vector3(0.05, h - 0.2, 0.03), Vector3(x * 0.92, h * 0.55, sz * (top.y * 0.5 - 0.085)), rim, false, Vector3(sz * 0.09, 0, 0)))
+			_out(Build.box(node, Vector3(2.6, 0.05, 0.05), Vector3(0, h - 0.33, sz * (top.y * 0.5 - 0.05)), rim))
 		for sx in [-1.0, 1.0]:
-			_out(Build.box(node, Vector3(0.05, size.y, size.z), Vector3(sx * size.x * 0.5, size.y * 0.5, 0), blue))
+			_out(Build.box(node, Vector3(0.07, 0.07, top.y + 0.08), Vector3(sx * top.x * 0.5, h, 0), rim))
+			_out(Build.cyl(node, 0.05, 0.14, Vector3(sx * (top.x * 0.5 - 0.1), h - 0.25, top.y * 0.5 + 0.03), rim, Build.AXIS_Z))
 		var chips: ChipTray = list[i]
 		if chips.kg > 0.001:
-			var h := (size.y - 0.2) * chips.fraction()
-			_out(Build.box(node, Vector3(size.x - 0.1, h, size.z - 0.1), Vector3(0, 0.15 + h * 0.5, 0), Build.mat(Color(0.6, 0.62, 0.66), 0.6, 0.2)))
-		var sign_text := "%s\n%d %%" % [str(ChipTray.SORT_TITLES.get(chips.only, "Späne")).to_upper(), int(chips.fraction() * 100.0)]
-		var l := Build.label(node, sign_text, Vector3(-size.x * 0.5 - 0.03, 0.75, 0), 0.004, Color.WHITE, 48, -PI / 2)
+			# Oberfläche der Späne, so groß wie die Mulde in dieser Höhe
+			var f := clampf(chips.fraction(), 0.02, 0.95)
+			var size := bottom.lerp(top, f) - Vector2(0.06, 0.06)
+			var chip_m := Build.mat(Color(0.6, 0.62, 0.66), 0.6, 0.2)
+			_out(Build.box(node, Vector3(size.x, 0.03, size.y), Vector3(0, 0.1 + (h - 0.1) * f, 0), chip_m))
+			_out(Build.sphere(node, 0.5, Vector3(0, 0.1 + (h - 0.1) * f, 0), chip_m)).scale = Vector3(size.x * 0.95, 0.3, size.y * 0.95)
+		# Schild: welcher Werkstoff hierher gehört, in Sortenfarbe
+		var sort := str(chips.only)
+		var sign_col: Color = {"stahl": Color(0.75, 0.77, 0.8), "aluminium": Color(0.95, 0.95, 0.95), "messing": Color(0.95, 0.8, 0.3)}.get(sort, Color.WHITE)
+		var title := str(ChipTray.SORT_TITLES.get(sort, "Späne")).to_upper()
+		var face := -(top.y * 0.5 + 0.09)
+		_out(Build.box(node, Vector3(1.5, 0.72, 0.03), Vector3(0, 0.98, face), Build.mat(sign_col, 0.6)))
+		_out(Build.box(node, Vector3(1.56, 0.78, 0.015), Vector3(0, 0.98, face + 0.02), Build.mat(Color(0.05, 0.05, 0.06), 0.6)))
+		var l := Build.label(node, "NUR %s-\nSPÄNE\n%d %% voll" % [title, int(chips.fraction() * 100.0)], Vector3(0, 0.98, face - 0.02), 0.0042, Color(0.04, 0.04, 0.06), 48, PI)
 		l.layers = OUTDOOR_LAYER
-		var hit := Build.collider(node, size, Vector3(0, size.y * 0.5, 0))
+		var hit := Build.collider(node, Vector3(top.x, h + 0.05, top.y + 0.2), Vector3(0, (h + 0.05) * 0.5, 0))
 		var t := ContainerTarget.new()
 		t.world = world
 		t.index = i
@@ -530,32 +575,77 @@ func show_containers(list: Array) -> void:
 		hit.set_meta("interact", t)
 
 
-## Platz der i-ten Lieferung: Reihen vor dem Lagertor, der Weg zum Werkstatttor bleibt frei.
+## Stücke mit gleichem Werkstoff und gleichen Maßen liegen auf einer Palette.
+static func delivery_key(it: Dictionary) -> String:
+	return "%s|%s|%s|%s|%s|%s|%s" % [it["material"], it["kind"], it.get("d", 0.0), it.get("w", 0.0), it.get("h", 0.0), it.get("l", 0.0), it.get("key", "")]
+
+
+## Paletten aus der Lieferliste: je {"index": erstes Stück, "items": Stücke}.
+static func delivery_groups(items: Array) -> Array:
+	var order := {}
+	var out := []
+	for i in items.size():
+		var k := delivery_key(items[i])
+		if not order.has(k):
+			order[k] = out.size()
+			out.append({"index": i, "items": []})
+		out[order[k]]["items"].append(items[i])
+	return out
+
+
+## Platz der i-ten Palette: im Osten des Hofs, die Wege zu beiden Toren bleiben frei.
 static func delivery_pos(i: int) -> Vector3:
-	var col := i % 8
-	var row := (i / 8) % 4
-	var stack := i / 32
-	return Vector3(14.2 + col * 1.1, 0.12 + stack * 0.3, LAGER_Z + 3.0 + row * 3.6)
+	var col := i % 5
+	var row := (i / 5) % 5
+	var stack := i / 25
+	return Vector3(21.6 + col * 1.7, 0.12 + stack * 1.0, LAGER_Z + 2.6 + row * 3.4)
 
 
 func show_deliveries(items: Array) -> void:
 	for c in _deliveries.get_children():
 		_deliveries.remove_child(c)
 		c.free()
-	for i in items.size():
-		var it: Dictionary = items[i]
+	var groups := delivery_groups(items)
+	for g in groups.size():
 		var node := Node3D.new()
-		node.position = delivery_pos(i)
+		node.position = delivery_pos(g)
 		_deliveries.add_child(node)
-		var len_z := _shown_length(it)
-		_out(Build.box(node, Vector3(0.8, 0.12, maxf(len_z, 0.6)), Vector3(0, -0.06, 0), Build.mat(Color(0.7, 0.58, 0.4), 0.9)))
-		var h := _add_item(node, it, Vector3.ZERO, OUTDOOR_LAYER)
-		var hit := Build.collider(node, Vector3(0.8, h + 0.12, maxf(len_z, 0.6)), Vector3(0, (h - 0.12) * 0.5, 0))
-		var d := Delivery.new()
-		d.world = world
-		d.index = i
-		node.add_child(d)
-		hit.set_meta("interact", d)
+		_pallet(node, groups[g]["items"], int(groups[g]["index"]))
+
+
+## Palette mit allen Stücken einer Sorte, in Lagen gestapelt. index = erstes Stück in der Lieferliste.
+func _pallet(node: Node3D, list: Array, index: int) -> void:
+	var first: Dictionary = list[0]
+	var wood := Build.mat(Color(0.7, 0.58, 0.4), 0.9)
+	var runner := Build.mat(Color(0.58, 0.46, 0.3), 0.9)
+	var length := _shown_length(first)
+	var round_bar := str(first["kind"]) == Materials.KIND_ROUND
+	var w := float(first["d"] if round_bar else first["w"]) * 0.001
+	var h := float(first["d"] if round_bar else first["h"]) * 0.001
+	var pallet_w := 1.0
+	var pallet_l := maxf(length + 0.1, 0.8)
+	_out(Build.box(node, Vector3(pallet_w, 0.03, pallet_l), Vector3(0, -0.015, 0), wood))
+	for x in [-0.42, 0.0, 0.42]:
+		_out(Build.box(node, Vector3(0.1, 0.09, pallet_l), Vector3(x, -0.075, 0), runner))
+	var gap := 0.008
+	var cols := maxi(int(pallet_w / (w + gap)), 1)
+	var rows := maxi(int(pallet_l / (length + gap)), 1)
+	var per := cols * rows
+	for i in list.size():
+		var layer := i / per
+		var k := i % per
+		var col := k % cols
+		var row := k / cols
+		var at := Vector3((col - (cols - 1) * 0.5) * (w + gap), layer * (h + 0.002), (row - (rows - 1) * 0.5) * (length + gap))
+		_add_item(node, list[i], at, OUTDOOR_LAYER)
+	var total := (list.size() - 1) / per + 1
+	var top := total * (h + 0.002)
+	var hit := Build.collider(node, Vector3(pallet_w, top + 0.12, pallet_l), Vector3(0, (top - 0.12) * 0.5, 0))
+	var d := Delivery.new()
+	d.world = world
+	d.index = index
+	node.add_child(d)
+	hit.set_meta("interact", d)
 
 
 func show_stock(items: Array) -> void:
@@ -588,6 +678,10 @@ func _update_signs(items: Array) -> void:
 			if here.is_empty():
 				continue
 			lines.append("Fach %d: %s" % [slot % SLOTS_PER_RACK + 1, sign_text(here)])
+		for slot in rack_slots(rack):
+			if _slot_signs.has(slot):
+				var here := Storage.on_board(items, slot)
+				(_slot_signs[slot] as Label3D).text = "Fach %d: %s" % [slot % SLOTS_PER_RACK + 1, sign_text(here) if not here.is_empty() else "leer"]
 		if lines.size() == 1:
 			lines.append("leer")
 		(_signs[rack] as Label3D).text = "\n".join(lines)

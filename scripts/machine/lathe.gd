@@ -64,6 +64,8 @@ const FEED_DIAL := [[0.03, 0.05, 0.08, 0.1, 0.12, 0.15, 0.2, 0.25], [0.06, 0.1, 
 var stock_d := 60.0
 var stock_len := 160.0
 var profile := PackedFloat32Array()
+var clamp_depth := 0.0            # so viele mm des Teils stecken im Futter, Z = 0 ist das linke Ende des Teils
+var flipped := false              # andersherum eingespannt, Aufträge prüfen immer in der Ausgangslage
 var machined := PackedByteArray()
 var rz := PackedFloat32Array()   # Rautiefe je Segment in µm
 var tool_z := 200.0
@@ -352,7 +354,55 @@ func load_part(d: Dictionary) -> void:
 
 
 func z_min() -> float:
-	return maxf(1.0, -float(tool()["zmin"]) + 0.5)
+	return clamp_depth + maxf(1.0, -float(tool()["zmin"]) + 0.5)
+
+
+## Teil lösen und neu spannen: mit anderer Spanntiefe, flip = umgedreht. Fehlertext, leer = gespannt.
+func reclamp(depth: float, flip: bool) -> String:
+	if not has_part:
+		return "Es ist kein Teil eingespannt."
+	if spindle_speed > 5.0:
+		return "Erst die Spindel stoppen, dann umspannen."
+	if flip:
+		_reverse_part()
+		flipped = not flipped
+	clamp_depth = clampf(depth, 0.0, maxf(stock_len - 10.0, 0.0))
+	auto_feed = false
+	auto_feed_x = false
+	tool_x = maxf(tool_x, stock_d * 0.5 + 10.0)
+	tool_z = minf(maxf(tool_z, part_length() + 15.0), Z_MAX)
+	_show_clamp()
+	return ""
+
+
+## Teil an seine Lage im Futter setzen.
+func _show_clamp() -> void:
+	if workpiece_mi:
+		workpiece_mi.position.x = -clamp_depth * 0.001
+		workpiece_mi.mesh = _make_mesh(0, profile.size() - 1, true)
+	_dirty = true
+	_sync_slides()
+
+
+## Teil umdrehen. Was am rechten Ende schon abgedreht ist, wird zum neuen linken Ende.
+func _reverse_part() -> void:
+	var n := profile.size()
+	var first := n - 1
+	while first > 0 and profile[first] <= 0.05:
+		first -= 1
+	var p := PackedFloat32Array()
+	p.resize(n)
+	var m := PackedByteArray()
+	m.resize(n)
+	var r := PackedFloat32Array()
+	r.resize(n)
+	for i in first + 1:
+		p[i] = profile[first - i]
+		m[i] = machined[first - i]
+		r[i] = rz[first - i]
+	profile = p
+	machined = m
+	rz = r
 
 
 # ======================================================================= Aufbau
@@ -1177,7 +1227,7 @@ func _sync_slides() -> void:
 	if carriage == null:
 		return
 	var tip := _head_pos() - _post_pos(tool())   # Schneide im Planschlitten (m)
-	carriage.position.x = tool_z * 0.001 - tip.x
+	carriage.position.x = (tool_z - clamp_depth) * 0.001 - tip.x
 	cross_slide.position.z = tool_x * 0.001 - tip.z
 	if chips:
 		chips.position.x = tip.x
@@ -1303,7 +1353,7 @@ func holder_clash(slots: Array, active: int, z: float, x: float, with_slot := fa
 
 func _slot_hit(id: String, s: int, active: int, z: float, x: float, active_id := "") -> String:
 	var rc := slot_rect(id, s, active, z, x, active_id)
-	if rc.position.x < 0.0 and rc.end.x > -CHUCK_DEPTH and rc.position.y < CHUCK_R and rc.end.y > -CHUCK_R:
+	if rc.position.x < clamp_depth and rc.end.x > clamp_depth - CHUCK_DEPTH and rc.position.y < CHUCK_R and rc.end.y > -CHUCK_R:
 		return "trifft das Futter"
 	var rr := max_radius(rc.position.x, rc.end.x)
 	if rr > 0.05 and rc.position.y < rr and rc.end.y > -rr:
@@ -1478,6 +1528,10 @@ func clear_workpiece() -> void:
 
 func new_workpiece(d: float, length: float) -> void:
 	has_part = true
+	clamp_depth = 0.0
+	flipped = false
+	if workpiece_mi:
+		workpiece_mi.position.x = 0.0
 	if workpiece_mi:
 		workpiece_mi.visible = true
 	stock_d = d
@@ -2602,7 +2656,17 @@ func _unhandled_input(event: InputEvent) -> void:
 
 # ======================================================================= Prüfung
 
+## Prüfung immer in der Ausgangslage, auch wenn das Teil gerade umgedreht ist.
 func evaluate(job: Dictionary) -> Dictionary:
+	if not flipped:
+		return _evaluate_now(job)
+	_reverse_part()
+	var res := _evaluate_now(job)
+	_reverse_part()
+	return res
+
+
+func _evaluate_now(job: Dictionary) -> Dictionary:
 	var lines: Array[String] = []
 	var ok := 0
 	var total := 0
@@ -2675,7 +2739,7 @@ func get_state() -> Dictionary:
 		"machined": mach, "rz": Array(rz), "tool_z": tool_z, "tool_x": tool_x, "tool": tool_idx,
 		"holder": holder.duplicate(), "active_slot": active_slot,
 		"rpm": rpm_set, "feed": feed_set, "css": css, "vc": vc_set, "rpm_limit": rpm_limit,
-		"material": material, "has_part": has_part, "semi_key": semi_key, "ceramic": ceramic_part, "tray": tray.to_state(), "coolant": coolant, "door": door_target >= 1.0, "programs": programs.duplicate(true), "prog_sel": prog_sel}
+		"material": material, "has_part": has_part, "semi_key": semi_key, "ceramic": ceramic_part, "tray": tray.to_state(), "coolant": coolant, "door": door_target >= 1.0, "programs": programs.duplicate(true), "prog_sel": prog_sel, "clamp_depth": clamp_depth, "flipped": flipped}
 
 
 func set_state(d: Dictionary) -> void:
@@ -2714,6 +2778,10 @@ func set_state(d: Dictionary) -> void:
 	coolant = bool(d.get("coolant", false))
 	semi_key = str(d.get("semi_key", ""))
 	ceramic_part = bool(d.get("ceramic", false))
+	clamp_depth = float(d.get("clamp_depth", 0.0))
+	flipped = bool(d.get("flipped", false))
+	if workpiece_mi:
+		workpiece_mi.position.x = -clamp_depth * 0.001
 	if _dial_panel:
 		_dial_panel.sync()
 	tray.load_state(d.get("tray", {}))

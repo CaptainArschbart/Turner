@@ -123,10 +123,6 @@ func tool_list() -> Array:
 	return MillTools.of_kind("drill")
 
 
-func bench_rows() -> Array:
-	return [{"depth": 0.5, "flat": false, "tools": MillTools.of_kind("drill")}]
-
-
 func machine_title() -> String:
 	return "Konventionelle Standbohrmaschine"
 

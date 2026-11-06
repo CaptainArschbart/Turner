@@ -35,7 +35,7 @@ func _initialize() -> void:
 	var pc = w.office_pc
 	var p = w.player
 	# Vom Büroeingang aus quer durch den Raum zum Monitor schauen
-	p.global_position = Vector3(10.5, 0.05, 6.0)
+	p.global_position = Vector3(9.3, 0.05, 10.2)
 	p.yaw = PI
 	p.pitch = -0.3
 	for i in 10:
@@ -74,5 +74,41 @@ func _initialize() -> void:
 	await press("pause")
 	ok(not pc.overlay.visible, "Esc schließt den PC")
 	ok(not w.pause_menu.visible, "Esc öffnet dabei nicht das Pause-Menü")
+	# Bürotür: von der Halle aus öffnen und hindurchgehen
+	var hit_door = null
+	for c in w.get_children():
+		if c.has_method("get_prompt") and c.get("opened") != null:
+			hit_door = c
+	ok(hit_door != null, "Bürotür gibt es")
+	p.velocity = Vector3.ZERO
+	p.global_position = Vector3(7.55, 0.05, 6.6)
+	p.yaw = PI
+	p.pitch = 0.0
+	for i in 10:
+		await physics_frame
+	ok(p._focus == hit_door, "Tür lässt sich anvisieren: %s" % str(p._focus))
+	ok(p._prompt.contains("Bürotür"), "Hinweis an der Tür: " + p._prompt)
+	var blocked_z: float = p.global_position.z
+	p.move_and_collide(Vector3(0, 0, 3.0))
+	ok(p.global_position.z < 8.0, "Geschlossene Tür sperrt: %.2f" % p.global_position.z)
+	p.global_position = Vector3(7.55, 0.05, blocked_z)
+	await press("interact")
+	ok(hit_door.opened, "E öffnet die Tür")
+	for i in 60:
+		await process_frame
+	await physics_frame
+	await physics_frame
+	p.move_and_collide(Vector3(0, 0, 3.0))
+	ok(p.global_position.z > 8.8, "Offene Tür: Spielfigur kommt ins Büro: %.2f" % p.global_position.z)
+	p.move_and_collide(Vector3(0, 0, -3.0))
+	ok(p.global_position.z < 7.0, "Und wieder hinaus: %.2f" % p.global_position.z)
+	# In der Türöffnung und im Büro steht keine Außenhaut mehr
+	var skin_in_room := false
+	var umgebung = w.find_child("Umgebung", true, false)
+	for m in umgebung.find_children("*", "MeshInstance3D", true, false):
+		var box: AABB = m.global_transform * m.get_aabb()
+		if box.end.y > 0.1 and box.position.z < 8.5 and box.end.z > 8.2 and box.position.y < 2.5 and box.position.x < 11.6 and box.end.x > 5.4 and box.size.y < 30.0:
+			skin_in_room = true
+	ok(not skin_in_room, "Keine Außenhaut im Büro oder vor der Tür")
 	print("CHECKS %d FAILS %d" % [checks, fails])
 	quit()

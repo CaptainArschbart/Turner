@@ -12,22 +12,25 @@ const CRATE_REACH := 1.2          # so weit darf eine Kiste von der Werkbank weg
 const CRATES_BENCH := 2           # Kisten neben einer Werkbank
 const CRATES_BIG := 4             # neben einer großen Werkbank
 ## area = Maschinenbereich, foot = die Maschine selbst, beide lokal zur Maschine.
+## Konventionelle Maschinen außer der Drehmaschine sind etwas größer.
+const MACHINE_SCALE := 1.12
+const SCALED := ["saw", "mill", "drill", "flat_grinder", "round_grinder"]
 const SPECS := {
-	"lathe": {"title": "Drehmaschine konventionell", "price": 0, "area": Rect2(-1.7, -1.4, 4.4, 4.4), "foot": Rect2(-1.7, -1.0, 4.4, 2.3), "pos": Vector2(0.0, -2.0)},
-	"saw": {"title": "Bandsäge mit Rollbahn", "price": 0, "area": Rect2(-2.3, -1.0, 4.6, 2.7), "foot": Rect2(-2.2, -0.6, 4.4, 1.3), "pos": Vector2(-6.0, 3.5)},
-	"mill": {"title": "Fräsmaschine", "price": 2400, "area": Rect2(-1.65, -1.4, 3.3, 4.2), "foot": Rect2(-0.95, -0.6, 1.9, 1.2), "pos": Vector2(6.85, -3.1)},
-	"cnc_lathe": {"title": "CNC-Drehmaschine", "price": 14000, "area": Rect2(-1.7, -1.4, 4.4, 4.4), "foot": Rect2(-1.7, -1.0, 4.4, 2.3)},
-	"round_grinder": {"title": "Rundschleifmaschine", "price": 12000, "area": Rect2(-1.7, -1.4, 4.4, 4.0), "foot": Rect2(-1.7, -1.0, 4.4, 2.3)},
-	"flat_grinder": {"title": "Flachschleifmaschine", "price": 9000, "area": Rect2(-1.7, -1.4, 3.4, 3.4), "foot": Rect2(-1.2, -0.8, 2.4, 1.4)},
-	"drill": {"title": "Standbohrmaschine", "price": 1500, "area": Rect2(-1.2, -1.0, 2.6, 3.0), "foot": Rect2(-0.5, -0.6, 1.0, 1.1)},
-	"edm": {"title": "Erodiermaschine", "price": 25000, "area": Rect2(-2.0, -1.7, 4.0, 4.0), "foot": Rect2(-1.2, -1.1, 2.4, 2.2)},
+	"lathe": {"title": "Drehmaschine konventionell", "price": 0, "area": Rect2(-1.9, -1.4, 4.8, 4.9), "foot": Rect2(-1.7, -1.0, 4.4, 2.3), "pos": Vector2(0.0, -2.0)},
+	"saw": {"title": "Bandsäge mit Rollbahn", "price": 0, "area": Rect2(-2.6, -1.2, 5.2, 3.2), "foot": Rect2(-2.5, -0.7, 5.0, 1.5), "pos": Vector2(-7.0, -5.0)},
+	"mill": {"title": "Fräsmaschine", "price": 2400, "area": Rect2(-1.9, -1.6, 3.8, 4.7), "foot": Rect2(-1.1, -0.7, 2.2, 1.4), "pos": Vector2(6.85, -3.1)},
+	"cnc_lathe": {"title": "CNC-Drehmaschine", "price": 14000, "area": Rect2(-1.9, -1.4, 4.8, 4.9), "foot": Rect2(-1.7, -1.0, 4.4, 2.3)},
+	"round_grinder": {"title": "Rundschleifmaschine", "price": 12000, "area": Rect2(-2.2, -1.8, 5.4, 5.2), "foot": Rect2(-2.0, -1.2, 5.0, 2.6)},
+	"flat_grinder": {"title": "Flachschleifmaschine", "price": 9000, "area": Rect2(-2.0, -1.7, 4.0, 4.3), "foot": Rect2(-1.5, -1.0, 3.0, 1.7)},
+	"drill": {"title": "Standbohrmaschine", "price": 1500, "area": Rect2(-1.4, -1.2, 3.0, 3.6), "foot": Rect2(-0.6, -0.7, 1.2, 1.3)},
+	"edm": {"title": "Erodiermaschine", "price": 25000, "area": Rect2(-2.2, -1.9, 4.4, 4.5), "foot": Rect2(-1.2, -1.1, 2.4, 2.2)},
 }
 ## Maschinen mit Werkzeugen auf der Werkbank
 const BENCH_MACHINES := ["lathe", "cnc_lathe", "mill", "drill", "flat_grinder", "round_grinder"]
 const DEFAULT_BENCH := {"lathe": [0.6, 0.35, 2], "mill": [6.85, -0.95, 2]}
-## Fest eingebaut: Büro und Weg zum Rolltor. x, z, Breite, Tiefe.
+## Frei bleiben der Weg zum Rolltor und der Platz vor der Bürotür. x, z, Breite, Tiefe.
 const OBSTACLES := [
-	Rect2(8.0, 4.0, 4.0, 4.0), Rect2(9.0, -4.25, 3.0, 4.5),
+	Rect2(9.0, 1.15, 3.0, 4.5), Rect2(6.4, 6.4, 2.3, 1.6),
 ]
 
 var machines: Dictionary = {}     # id -> {"pos": Vector2, "rot": int}

@@ -95,6 +95,9 @@ var _block_mi: MeshInstance3D
 var _block_mat: ShaderMaterial
 var _hmap: ImageTexture
 var _jaws: Array[Node3D] = []
+var clamp_depth := -1.0           # so viele mm stecken zwischen den Backen, negativ = Standard
+var flipped := false              # kopfüber eingespannt, Aufträge prüfen immer in der Ausgangslage
+var data_back := PackedFloat32Array()   # Höhenkarte der anderen Seite
 var _parallel: MeshInstance3D
 var _dirty := false
 var _rebuild_t := 0.0
@@ -457,15 +460,6 @@ func tool_list() -> Array:
 	return MillTools.TOOLS
 
 
-## Aufteilung auf der Werkbank, von hinten nach vorn. depth = Tiefe der Reihe, flat = liegt nicht auf der Seite.
-func bench_rows() -> Array:
-	return [
-		{"depth": 0.17, "flat": true, "tools": MillTools.of_kind("face_mill")},
-		{"depth": 0.32, "flat": false, "tools": MillTools.of_kind("drill")},
-		{"depth": 0.165, "flat": false, "tools": MillTools.of_kind("end_mill")},
-	]
-
-
 func make_bench_model(id: String) -> Node3D:
 	return MillTools.bench_model(MillTools.by_id(id))
 
@@ -590,6 +584,11 @@ func new_workpiece(length: float, width: float, height: float) -> void:
 	data = PackedFloat32Array()
 	data.resize(nx * ny * 2)
 	data.fill(0.0)
+	data_back = PackedFloat32Array()
+	data_back.resize(nx * ny * 2)
+	data_back.fill(0.0)
+	clamp_depth = -1.0
+	flipped = false
 	untouched = true
 	last_ap = 0.0
 	_stamp_z = INF
@@ -614,15 +613,68 @@ func _make_block() -> void:
 	_block_mat.set_shader_parameter("depth_mm", block_h)
 	_block_mat.set_shader_parameter("cell", CELL)
 	# Backen liegen in Y links und rechts am Rohteil
-	var half := block_w * 0.0005 + JAW_T * 0.0005
-	var jaw_y := MillModel.TOP_Y - MillModel.TABLE_Y - JAW_DROP * 0.001 - 0.025
-	_jaws[0].position = Vector3(0, jaw_y, -half)
-	_jaws[1].position = Vector3(0, jaw_y, half)
+	_place_jaws()
 	# Unterlage füllt den Platz zwischen Schraubstock und Rohteil
 	var bottom := MillModel.TOP_Y - MillModel.TABLE_Y - block_h * 0.001
 	var bm := _parallel.mesh as BoxMesh
 	bm.size = Vector3(block_l * 0.001, maxf(bottom - 0.03, 0.002), block_w * 0.001)
 	_parallel.position = Vector3(0, 0.03 + bm.size.y * 0.5, 0)
+
+
+func _place_jaws() -> void:
+	var half := block_w * 0.0005 + JAW_T * 0.0005
+	var jaw_y := MillModel.TOP_Y - MillModel.TABLE_Y - jaw_drop() * 0.001 - 0.025
+	_jaws[0].position = Vector3(0, jaw_y, -half)
+	_jaws[1].position = Vector3(0, jaw_y, half)
+
+
+## So weit liegt die Oberkante der Backen unter der Oberseite des Teils.
+func jaw_drop() -> float:
+	return JAW_DROP if clamp_depth < 0.0 else block_h - clamp_depth
+
+
+## Spanntiefe, die angezeigt wird.
+func grip_depth() -> float:
+	return block_h - jaw_drop()
+
+
+## Teil lösen und neu spannen: mit anderer Spanntiefe, flip = kopfüber. Fehlertext, leer = gespannt.
+func reclamp(depth: float, flip: bool) -> String:
+	if not has_part:
+		return "Es ist kein Teil eingespannt."
+	if spindle_speed > 5.0:
+		return "Erst die Spindel stoppen, dann umspannen."
+	if tool_z < 0.0:
+		return "Erst das Werkzeug über das Teil fahren (Z > 0)."
+	if flip:
+		_flip_maps()
+		flipped = not flipped
+	clamp_depth = clampf(depth, 0.0, block_h)
+	auto_axis = -1
+	_stamp_z = INF
+	_place_jaws()
+	if _hmap:
+		_hmap.update(_height_image())
+	return ""
+
+
+## Teil um die Längsachse drehen: Die andere Seite zeigt nach oben, vorne und hinten tauschen.
+func _flip_maps() -> void:
+	var a := data
+	data = _mirror_y(data_back)
+	data_back = _mirror_y(a)
+
+
+func _mirror_y(src: PackedFloat32Array) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	out.resize(src.size())
+	for j in ny:
+		for i in nx:
+			var a := (j * nx + i) * 2
+			var b := ((ny - 1 - j) * nx + i) * 2
+			out[a] = src[b]
+			out[a + 1] = src[b + 1]
+	return out
 
 
 func _height_image() -> Image:
@@ -699,7 +751,7 @@ func _step_tool(sx: float, sy: float, sz: float, speed: float) -> bool:
 func _clash(x: float, y: float, z: float) -> String:
 	var r := tool_radius()
 	var over_x := x + r > block_l * 0.5 - MillModel.VISE_L * 500.0 and x - r < block_l * 0.5 + MillModel.VISE_L * 500.0
-	if z < -JAW_DROP and over_x:
+	if z < -jaw_drop() and over_x:
 		if (y - r < 0.0 and y + r > -JAW_T) or (y + r > block_w and y - r < block_w + JAW_T):
 			return "KOLLISION! Werkzeug im Schraubstock - Not-Halt."
 	if has_part and z < -block_h and x + r > 0.0 and x - r < block_l and y + r > 0.0 and y - r < block_w:
@@ -1246,7 +1298,17 @@ func _unhandled_input(event: InputEvent) -> void:
 
 # ======================================================================= Prüfung
 
+## Prüfung immer in der Ausgangslage, auch wenn das Teil gerade kopfüber liegt.
 func evaluate(job: Dictionary) -> Dictionary:
+	if not flipped:
+		return _evaluate_now(job)
+	_flip_maps()
+	var res := _evaluate_now(job)
+	_flip_maps()
+	return res
+
+
+func _evaluate_now(job: Dictionary) -> Dictionary:
 	var lines: Array[String] = []
 	var ok := 0
 	var total := 0
@@ -1348,7 +1410,9 @@ func get_state() -> Dictionary:
 	var raw := data.to_byte_array()
 	return {"size": [block_l, block_w, block_h], "x": tool_x, "y": tool_y, "z": tool_z, "tool": tool_idx,
 		"rpm": rpm_set, "feed": feed_set, "coolant": coolant, "untouched": untouched, "material": material, "has_part": has_part, "tray": tray.to_state(), "spindle_empty": spindle_empty, "semi_key": semi_key, "ceramic": ceramic_part,
-		"data": Marshalls.raw_to_base64(raw.compress(FileAccess.COMPRESSION_ZSTD))}
+		"data": Marshalls.raw_to_base64(raw.compress(FileAccess.COMPRESSION_ZSTD)),
+		"back": Marshalls.raw_to_base64(data_back.to_byte_array().compress(FileAccess.COMPRESSION_ZSTD)),
+		"clamp_depth": clamp_depth, "flipped": flipped}
 
 
 func set_state(d: Dictionary) -> void:
@@ -1362,6 +1426,14 @@ func set_state(d: Dictionary) -> void:
 			data = raw.to_float32_array()
 			_hmap.update(_height_image())
 	semi_key = str(d.get("semi_key", ""))
+	var enc_back := str(d.get("back", ""))
+	if enc_back != "":
+		var raw_back := Marshalls.base64_to_raw(enc_back).decompress(nx * ny * 8, FileAccess.COMPRESSION_ZSTD)
+		if raw_back.size() == nx * ny * 8:
+			data_back = raw_back.to_float32_array()
+	clamp_depth = float(d.get("clamp_depth", -1.0))
+	flipped = bool(d.get("flipped", false))
+	_place_jaws()
 	ceramic_part = bool(d.get("ceramic", false))
 	if bool(d.get("spindle_empty", false)):
 		clear_spindle()

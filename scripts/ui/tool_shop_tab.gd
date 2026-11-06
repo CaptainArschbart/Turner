@@ -2,7 +2,7 @@ class_name ToolShopTab
 extends HBoxContainer
 ## Werkzeuge kaufen am Büro-PC: links die Maschine, rechts oben die Unterkategorien, darunter die Werkzeuge.
 ## Jedes gibt es als Hartmetall, als HSS erst nach dem Skill, von jedem bis zu 5 Stück. Ein gekauftes Werkzeug
-## liegt auf der Werkbank der Maschine.
+## steckt in einer Halterung unter der Werkbank der Maschine.
 
 const MACHINES := [
 	{"id": "lathe", "title": "Drehmaschine"},
@@ -190,7 +190,7 @@ func _row(id: String, title: String) -> void:
 
 func buy(id: String, grade: String) -> void:
 	var err: String = shop.buy_tool(machine, id, grade)
-	_result.text = "Gekauft: liegt auf der Werkbank der Maschine." if err == "" else err
+	_result.text = "Gekauft: steckt in einer Halterung unter der Werkbank der Maschine." if err == "" else err
 	_result.add_theme_color_override("font_color", Color(0.5, 0.9, 0.5) if err == "" else Color(1.0, 0.45, 0.35))
 	refresh()
 

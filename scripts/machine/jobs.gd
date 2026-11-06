@@ -7,6 +7,8 @@ extends RefCounted
 ##   point   - Durchmesser d an genau einer Stelle z (z.B. Nutgrund)
 ## rz = maximal zulässige gemittelte Rautiefe auf allen Durchmessern (µm).
 
+static var _all: Array = []
+
 const LIST := [
 	{
 		"title": "Auftrag 1: Rundmaterial überdrehen",
@@ -135,8 +137,16 @@ const LIST := [
 ]
 
 
+## Feste Aufträge und die generierten dahinter.
+static func all() -> Array:
+	if _all.is_empty():
+		_all = LIST + JobGen.lathe(LIST.size() + 1)
+	return _all
+
+
 static func get_job(i: int) -> Dictionary:
-	return LIST[posmod(i, LIST.size())]
+	var list := all()
+	return list[posmod(i, list.size())]
 
 
 ## Zielmaße als einzelne Zeilen.
@@ -159,7 +169,7 @@ static func target_lines(job: Dictionary) -> Array:
 
 ## grind: Die geschliffene Fläche nennen (nur wenn die Werkstatt die Schleifmaschine hat).
 static func describe(job: Dictionary, grind := false) -> String:
-	var t := "%s\n%s\n" % [job["title"], job["desc"]]
+	var t := "%s\n" % job["title"]
 	t += "\nWerkstoff: %s" % Materials.label(str(job.get("material", Materials.DEFAULT)))
 	t += "\nRohteil: Ø%d x %d mm" % [int(job["stock_d"]), int(job["stock_len"])]
 	if job.has("length"):

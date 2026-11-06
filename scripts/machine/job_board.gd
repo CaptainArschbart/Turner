@@ -19,7 +19,8 @@ const GRIND_NAMES := {"round": "Rundfläche", "flat": "ebene Fläche"}
 const MACHINE_NAMES := {"lathe": "Drehauftrag", "mill": "Fräsauftrag", "drill": "Bohrauftrag", "ceramic": "Kundenauftrag"}
 ## Maschinenarten mit eigenen Aufträgen
 const JOB_MACHINES := ["lathe", "mill", "drill"]
-const MAX_PER_MACHINE := 5
+const MAX_PER_MACHINE := 2
+const MAX_TOTAL := 9
 
 
 ## Auftrag als Schlüssel "lathe:2". Den speichern die Liste der angenommenen Aufträge und die Anzeige.
@@ -30,12 +31,12 @@ static func key(machine: String, index: int) -> String:
 static func list_of(machine: String) -> Array:
 	match machine:
 		"lathe":
-			return Jobs.LIST
+			return Jobs.all()
 		"drill":
-			return DrillJobs.LIST
+			return DrillJobs.all()
 		"ceramic":
 			return CeramicJobs.LIST
-	return MillJobs.LIST
+	return MillJobs.all()
 
 
 static func key_machine(k: String) -> String:

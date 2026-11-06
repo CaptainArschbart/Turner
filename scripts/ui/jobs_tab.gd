@@ -57,9 +57,9 @@ static func summary(key: String, factor := 1.0, frist := "") -> String:
 	else:
 		var s: Array = job["size"]
 		part = "%d x %d x %d mm" % [int(s[0]), int(s[1]), int(s[2])]
-	var text := "%s\n%s\nWerkstoff: %s   %s: %s\nVergütung: bis %d EUR   Erfahrung: %d" % [
-		job["title"], job["desc"], Materials.label(str(job["material"])), "Kundenteil" if JobBoard.key_machine(key) == "ceramic" else "Rohteil", part,
-		int(round(float(job["reward"]) * factor)), JobBoard.xp_for(job)]
+	var text := "%s\nWerkstoff: %s   %s: %s\n%s\nVergütung: bis %d EUR   Erfahrung: %d" % [
+		job["title"], Materials.label(str(job["material"])), "Kundenteil" if JobBoard.key_machine(key) == "ceramic" else "Rohteil", part,
+		"\n".join(PackedStringArray(JobBoard.target_lines(job))), int(round(float(job["reward"]) * factor)), JobBoard.xp_for(job)]
 	return text if frist == "" else "%s\n%s" % [text, frist]
 
 

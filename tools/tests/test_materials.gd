@@ -134,7 +134,10 @@ func _initialize() -> void:
 	ok(pr.fields.keys() == ["d"], "Rundstange: nur Durchmesser einstellbar")
 	ok(pq.fields.has("w") and pq.fields.has("h") and pq.fields.size() == 2, "Vierkant: nur Breite und Höhe einstellbar")
 	ok(pc.fields.has("l") and pc.fields.has("w") and pc.fields.has("h"), "Fertigschnitt: alle Maße frei")
-	ok(pr.spec()["l"] == 3000.0 and pq.spec()["l"] == 3000.0, "Stangen sind immer 3 m lang")
+	pr.length_opt.select(0)
+	ok(pr.spec()["l"] == 1000.0, "Auch 1 m wählbar")
+	pr.length_opt.select(1)
+	ok(pr.spec()["l"] == 2000.0 and pq.spec()["l"] == 2000.0, "Voreingestellt 2 m")
 	pc.fields["l"].value = 77.0
 	ok(pc.spec()["l"] == 77.0, "Fertigschnitt-Länge frei")
 	for g in Materials.GROUPS:
@@ -169,7 +172,7 @@ func _initialize() -> void:
 	# Abschnitt sägen
 	ok(w.load_stock(0, 160.0) == "", "Abschnitt eingespannt")
 	ok(l.stock_d == 60.0 and l.stock_len == 160.0 and l.material == "S235", "Drehmaschine hat den Abschnitt")
-	ok(w.stock[0]["l"] == 3000.0 - 160.0 - Materials.KERF, "Stange um Abschnitt und Sägeschnitt kürzer")
+	ok(w.stock[0]["l"] == 2000.0 - 160.0 - Materials.KERF, "Stange um Abschnitt und Sägeschnitt kürzer")
 	ok(w.load_stock(0, 900.0) != "", "Zu langer Abschnitt abgelehnt")
 	l.spindle_speed = 500.0
 	ok(w.load_stock(0, 160.0) != "", "Nicht bei laufender Spindel")
@@ -226,7 +229,7 @@ func _initialize() -> void:
 	pc.order()
 	deliver(w)
 	ok(w.money < start_money and w.stock.size() == 2, "Gekauft")
-	ok(str(w._lathe_take_part()).contains("Lager") and not l.has_part and w.stock[0]["l"] == 3000.0, "Taste lädt nichts aus dem Lager")
+	ok(str(w._lathe_take_part()).contains("Lager") and not l.has_part and w.stock[0]["l"] == 2000.0, "Taste lädt nichts aus dem Lager")
 	ok(str(w._mill_take_part()).contains("Lager") and not m.has_part, "An der Fräse ebenso")
 	ok(w.take_from_stock(0) == "" and w.clamp_carried(l).contains("Bandsäge") and not l.has_part, "Ganze Stange passt nicht in die Maschine")
 	var rest_bar: Dictionary = w.player.carry.duplicate()
@@ -234,7 +237,7 @@ func _initialize() -> void:
 	ok(w.clamp_carried(l) == "" and l.has_part and l.stock_d == 60.0 and l.stock_len == 160.0, "Abgesägtes Stück einspannen gibt das Rohteil")
 	ok(l.workpiece_mi.visible, "Rohteil sichtbar")
 	var rest0: float = rest_bar["l"]
-	ok(rest0 == 3000.0 - 160.0 - Materials.KERF, "Stange gekürzt")
+	ok(rest0 == 2000.0 - 160.0 - Materials.KERF, "Stange gekürzt")
 	w.player.set_carry(rest_bar)
 	w.store_carried()
 	var cut_i: int = w._find_mill_stock()

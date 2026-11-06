@@ -17,7 +17,8 @@ extends RefCounted
 
 const DEFAULT := "S235"
 const KERF := 3.0                # Schnittbreite der Säge (mm)
-const BAR_LEN := 3000.0          # Stangenmaterial ist immer 3 m lang
+const BAR_LENGTHS := [1000.0, 2000.0]   # Stangenmaterial gibt es 1 m oder 2 m lang
+const BAR_LEN := 2000.0          # voreingestellt
 const ROUND_SURCHARGE := 1.15    # Rundstangen kosten je kg mehr als Vierkant, sonst wären sie bei gleichem Maß viel billiger
 const CUT_SURCHARGE := 1.6       # Fertigschnitt kostet mehr je kg
 const CUT_FEE := 8.0             # und einen festen Betrag je Stück

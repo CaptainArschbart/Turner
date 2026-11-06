@@ -10,6 +10,8 @@ var tabs: TabContainer
 var pages: Dictionary = {}
 var _money: Label
 var _pitch := 0.0
+var show_tips := false            # Tipps zu den Aufträgen, standardmäßig aus
+var tips_button: Button
 
 
 func _ready() -> void:
@@ -41,6 +43,10 @@ func _ready() -> void:
 	_money.add_theme_font_size_override("font_size", 18)
 	_money.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
 	head.add_child(_money)
+	tips_button = UITheme.button("Tipps: aus", toggle_tips, 160)
+	tips_button.custom_minimum_size.y = 36
+	tips_button.focus_mode = Control.FOCUS_NONE
+	head.add_child(tips_button)
 	tabs = TabContainer.new()
 	tabs.custom_minimum_size = Vector2(1120, 520)
 	tabs.focus_mode = Control.FOCUS_NONE
@@ -95,6 +101,12 @@ func _input(event: InputEvent) -> void:
 		open()
 
 
+func toggle_tips() -> void:
+	show_tips = not show_tips
+	tips_button.text = "Tipps: an" if show_tips else "Tipps: aus"
+	refresh()
+
+
 ## Aufträge neu aufbauen.
 func refresh() -> void:
 	_money.text = "Werkstattkasse: %d EUR" % int(world.money)
@@ -110,7 +122,10 @@ func refresh() -> void:
 				list.add_child(_empty(c))
 			for k in keys:
 				var due := "Frist: %s\n" % JobsTab.days_text(int(world.deadlines.get(k, world.day)) - int(world.day))
-				list.add_child(_card({"text": JobBoard.describe_key(k, world.company)}, due + world.job_status_of(k), k))
+				var text := JobBoard.describe_key(k, world.company)
+				if show_tips:
+					text += "\nTipp: %s" % str(JobBoard.job_of(k).get("desc", "")).replace("Tipp: ", "")
+				list.add_child(_card({"text": text}, due + world.job_status_of(k), k))
 			continue
 		var jobs := []
 		for k in world.accepted + world.grind_jobs:

@@ -23,6 +23,7 @@ class OrderPage extends HBoxContainer:
 	var groups: TabContainer
 	var fields: Dictionary = {}
 	var qty: SpinBox
+	var length_opt: OptionButton
 	var buttons: Dictionary = {}
 	var _pick := ButtonGroup.new()
 	var _photo: TextureRect
@@ -144,10 +145,18 @@ class OrderPage extends HBoxContainer:
 		form.add_child(s)
 
 	func _fixed(form: GridContainer) -> void:
-		form.add_child(_form_label("Länge"))
-		var l := _form_label("3000 mm (Stange)")
-		l.add_theme_color_override("font_color", UITheme.MUTED)
-		form.add_child(l)
+		form.add_child(_form_label("Stangenlänge"))
+		length_opt = OptionButton.new()
+		length_opt.focus_mode = Control.FOCUS_NONE
+		for mm in Materials.BAR_LENGTHS:
+			length_opt.add_item("%d m" % int(float(mm) * 0.001))
+		length_opt.select(Materials.BAR_LENGTHS.find(Materials.BAR_LEN))
+		length_opt.item_selected.connect(func(_i: int): refresh())
+		form.add_child(length_opt)
+
+	## Gewählte Stangenlänge in mm.
+	func bar_len() -> float:
+		return float(Materials.BAR_LENGTHS[length_opt.selected]) if length_opt else Materials.BAR_LEN
 
 	func material_id() -> String:
 		return mat_id
@@ -189,9 +198,9 @@ class OrderPage extends HBoxContainer:
 		var s := {"material": mat_id, "kind": kind, "qty": int(qty.value)}
 		match kind:
 			Materials.KIND_ROUND:
-				s.merge({"d": fields["d"].value, "w": 0.0, "h": 0.0, "l": Materials.BAR_LEN})
+				s.merge({"d": fields["d"].value, "w": 0.0, "h": 0.0, "l": bar_len()})
 			Materials.KIND_SQUARE:
-				s.merge({"d": 0.0, "w": fields["w"].value, "h": fields["h"].value, "l": Materials.BAR_LEN})
+				s.merge({"d": 0.0, "w": fields["w"].value, "h": fields["h"].value, "l": bar_len()})
 			_:
 				s.merge({"d": 0.0, "w": fields["w"].value, "h": fields["h"].value, "l": fields["l"].value})
 		return s

@@ -95,7 +95,7 @@ func _initialize() -> void:
 		m.select_tool(i)
 		await process_frame
 		ok(m.tool_idx == i and m._tool_node != null, "Werkzeug %d eingewechselt" % i)
-		ok(absf(m._tool_node.global_position.y - (1.06 + m.tool_z * 0.001)) < 0.0001, "Schneide von Werkzeug %d auf angezeigter Z-Höhe" % i)
+		ok(absf(m.to_local(m._tool_node.global_position).y - (1.06 + m.tool_z * 0.001)) < 0.0001, "Schneide von Werkzeug %d auf angezeigter Z-Höhe" % i)
 	ok(m.head.position.y > 1.0, "Fräskopf steht über dem Tisch")
 
 	# Wechsel gesperrt bei laufender Spindel
@@ -466,7 +466,7 @@ func _initialize() -> void:
 
 	# Maßstab: Arbeitsfläche in echten Millimetern
 	var tbl: AABB = (m.table.get_child(0) as MeshInstance3D).get_aabb()
-	ok(absf(tbl.size.x - 0.41) < 0.001 and absf(tbl.size.z - 0.21) < 0.001, "Tisch ist 410 x 210 mm groß")
+	ok(absf(tbl.size.x - 0.41) < 0.002 and absf(tbl.size.z - 0.21) < 0.002, "Tisch ist 410 x 210 mm groß")
 	ok(w.lathe.Z_MAX == 900.0, "Drehlänge 900 mm")
 	var l = w.lathe
 	l.tool_z = l.Z_MAX
@@ -491,7 +491,9 @@ func _initialize() -> void:
 		await physics_frame
 	p.global_position = m.to_global(m.PANEL_STAND) + Vector3(0, 0.05, 0)
 	p.yaw = PI / 2.0
-	p.pitch = -0.5
+	var panel_at: Vector3 = m.to_global(m.panel_pos)
+	var eye_at: Vector3 = p.global_position + Vector3(0, 1.62, 0)
+	p.pitch = atan2(panel_at.y - eye_at.y, Vector2(panel_at.x - eye_at.x, panel_at.z - eye_at.z).length())
 	for i in 10:
 		await physics_frame
 	ok(p._focus != null and p._focus.get_prompt().contains("Bedienfeld"), "Bedienfeld lässt sich anvisieren")

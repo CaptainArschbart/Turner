@@ -8,7 +8,7 @@ var drawing: PartDrawing
 
 
 func _ready() -> void:
-	layer = 12
+	layer = 20
 	visible = false
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -17,6 +17,13 @@ func _ready() -> void:
 	drawing = PartDrawing.new()
 	drawing.custom_minimum_size = Vector2(1120, 660)
 	center.add_child(drawing)
+
+
+## Eine bestimmte Zeichnung zeigen, zum Beispiel aus dem Entwicklerprogramm.
+func show_job(job: Dictionary) -> void:
+	drawing.job = job
+	drawing.queue_redraw()
+	visible = true
 
 
 func toggle() -> void:
@@ -38,6 +45,10 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if not event.is_action_pressed("show_drawing"):
+		return
+	if visible:
+		visible = false
+		get_viewport().set_input_as_handled()
 		return
 	# Beim Eintippen und am Bedienpult ist die Taste ein Buchstabe
 	if get_viewport().gui_get_focus_owner() is LineEdit:

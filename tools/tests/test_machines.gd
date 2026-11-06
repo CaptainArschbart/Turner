@@ -169,7 +169,7 @@ func _initialize() -> void:
 	ok(w.buy_equipment("drill") == "", "Standbohrmaschine kaufen")
 	ok(w.place_machine("drill", Vector2(-9.0, 5.0), 0) == "", "Aufstellen: " + w.layout.check_machine("drill", Vector2(-9.0, 5.0), 0))
 	var dr = w.extra_machines["drill"]
-	ok(dr.has_method("bench_rows") and dr.MACHINE_ID == "drill", "Echte Bohrmaschine, kein Platzhalter")
+	ok(dr.has_method("make_bench_model") and dr.MACHINE_ID == "drill", "Echte Bohrmaschine, kein Platzhalter")
 	ok(dr.spindle_empty and dr.tool_stock == co.tools["drill"], "Startet ohne Bohrer")
 	ok(not dr.has_part, "Ohne Teil")
 	ok(dr.get_prompt().contains("Standbohrmaschine"), "Hinweis: " + dr.get_prompt())
@@ -180,16 +180,12 @@ func _initialize() -> void:
 	w.inventory["bench"] = 1
 	ok(w.place_bench("", Vector2(-8.9, 6.6), 2) == "", "Werkbank: " + w.layout.check_bench(Vector2(-8.9, 6.6), 2))
 	var db = w.bench_nodes["drill"]
-	ok(db._slots.size() == 12, "Werkbank mit zwölf Plätzen")
+	ok(db.holders.size() == 36, "Werkbank mit Halterungen")
 	ok(w.buy_tool("drill", "B8", "hm") == "", "Bohrer kaufen")
 	db.refresh()
-	var slot8 = null
-	for s in db._slots:
-		if s.tool_id == "B8":
-			slot8 = s
-	ok(slot8.model.visible, "Gekaufter Bohrer liegt auf der Werkbank")
+	ok(db.holder_of("B8") >= 0, "Gekaufter Bohrer steckt in einer Halterung")
 	p.clear_held()
-	db.click_on("B8", p)
+	db.holder_click(db.holder_of("B8"), p)
 	ok(p.held.get("machine", "") == "drill", "Bohrer in die Hand")
 	dr.hand_click(p)
 	ok(dr.has_cutter() and dr.tool()["id"] == "B8" and p.held.is_empty(), "Bohrer in die Spindel")
@@ -384,7 +380,7 @@ func _initialize() -> void:
 
 	# ---------------------------------------------------- Rundschleifmaschine
 	ok(w.buy_equipment("round_grinder") == "", "Rundschleifmaschine kaufen")
-	ok(w.place_machine("round_grinder", Vector2(-4.0, -5.0) if false else Vector2(5.0, 4.0), 0) == "", "Aufstellen: " + w.layout.check_machine("round_grinder", Vector2(5.0, 4.0), 0))
+	ok(w.place_machine("round_grinder", Vector2(-4.0, -5.0) if false else Vector2(5.3, 2.8), 0) == "", "Aufstellen: " + w.layout.check_machine("round_grinder", Vector2(5.3, 2.8), 0))
 	var rg = w.extra_machines["round_grinder"]
 	ok(rg.grinder_type == "round" and rg.conventional, "Echte Rundschleifmaschine")
 	ok(not rg.has_cutter() and rg.tool_list().size() == 9, "Startet ohne Scheibe, neun Scheiben im Angebot")
@@ -393,7 +389,6 @@ func _initialize() -> void:
 	p.set_held(rg, "K30")
 	rg.hand_click(p)
 	ok(rg.has_cutter() and rg.tool()["id"] == "K30" and p.held.is_empty(), "Scheibe aufziehen")
-	ok(rg.bench_rows().size() == 3, "Werkbank mit drei Reihen")
 	ok(rg.screen_vp == null, "Ohne Pult")
 	ok(JobBoard.grind_active(Jobs.LIST[4], co), "Rundfläche wird verlangt")
 	ok(not JobBoard.grind_active(Jobs.LIST[0], co), "Auftrag 1 hat keine Schleifanforderung")
@@ -481,11 +476,11 @@ func _initialize() -> void:
 	ok(w.money == cash7 and not rg.has_part and w.grind_jobs.is_empty(), "Falsche Maße: Ausschuss, keine Vergütung")
 
 	# ---------------------------------------------------- Kundenaufträge mit Keramik
-	ok(not w.offers().has("ceramic:0"), "Kundenaufträge erst mit Diamant-Skill")
+	ok(w.offers().filter(func(k): return k.begins_with("ceramic")).is_empty(), "Kundenaufträge erst mit Diamant-Skill")
 	w.set_free_mode(true)
 	ok(w.unlock_skill("wheel_cbn") == "" and w.unlock_skill("wheel_diamond") == "", "Skills freigeschaltet")
 	w.set_free_mode(false)
-	ok(w.offers().has("ceramic:0"), "Jetzt im Angebot")
+	ok(not w.offers().filter(func(k): return k.begins_with("ceramic")).is_empty(), "Jetzt im Angebot")
 	var d_before: int = w.deliveries.size()
 	var stock_before: int = w.stock.size()
 	ok(w.accept_job("ceramic:0") == "", "Kundenauftrag annehmen")
@@ -549,7 +544,7 @@ func _initialize() -> void:
 		var mk: String = JobBoard.machine_of(k)
 		by_machine[mk] = int(by_machine.get(mk, 0)) + 1
 	for mk in by_machine:
-		ok(by_machine[mk] <= JobBoard.MAX_PER_MACHINE, "Höchstens 5 Angebote: " + mk)
+		ok(by_machine[mk] <= JobBoard.MAX_PER_MACHINE, "Höchstens 2 Angebote: " + mk)
 	ok(by_machine.has("lathe") and by_machine.has("mill") and by_machine.has("drill"), "Angebote je Maschine")
 	co.skills.unlocked = {}
 	ok(w.offers().filter(func(k): return k.begins_with("mill") or k.begins_with("drill")).is_empty(), "Gesperrte Maschinen: keine Angebote")
@@ -558,10 +553,10 @@ func _initialize() -> void:
 	co.skills.unlock_basics()
 	co.skills.unlocked["wheel_cbn"] = true
 	co.skills.unlocked["wheel_diamond"] = true
-	# Fünf laufen: mehr geht nicht
-	for i in 5:
+	# Zwei laufen: mehr geht nicht
+	for i in 2:
 		ok(w.accept_job("lathe:%d" % i) == "", "Annehmen %d" % i)
-	ok(w.accept_job("lathe:5") != "", "Der sechste nicht")
+	ok(w.accept_job("lathe:5") != "", "Der dritte nicht")
 	ok(w.offers().filter(func(k): return k.begins_with("lathe")).is_empty(), "Kein weiteres Angebot für die Drehmaschine")
 	for k in w.accepted.duplicate():
 		w.return_job(k)
@@ -594,8 +589,14 @@ func _initialize() -> void:
 	ok(w.buy_tool("lathe", "T7", "hm") == "", "Testmodus: Feierabend sperrt nichts")
 	w.set_free_mode(false)
 	# Nächster Tag über den PC
-	o2.day_button.pressed.emit()
-	ok(w.day == day0 + 1 and not w.day_over and w.day_time == 0.0, "Nächster Tag")
+	o2.day_app.end_button.pressed.emit()
+	ok(w.day == day0 + 1 and not w.day_over and w.day_time == 0.0 and not w.day_started, "Nächster Tag wartet auf den Start")
+	ok(w.accept_job("lathe:0").contains("nicht begonnen"), "Vor Tagesbeginn kein Auftrag")
+	ok(w.buy_tool("lathe", "T7", "hm").contains("nicht begonnen"), "Vor Tagesbeginn kein Einkauf")
+	ok(w._work_blocked(w.lathe, true), "Vor Tagesbeginn wird nichts bearbeitet")
+	ok(not w._work_blocked(w.office_pc, true), "Der PC geht immer")
+	o2.day_app.start_button.pressed.emit()
+	ok(w.day_started and not w._work_blocked(w.lathe, true), "Tag gestartet")
 	# Frist
 	ok(JobBoard.days_for("lathe:0") == 2 and JobBoard.days_for("lathe:3") == 5, "Aufträge haben verschiedene Fristen")
 	var rep0: float = co.reputation
@@ -603,9 +604,12 @@ func _initialize() -> void:
 	var due: int = w.deadlines["lathe:0"]
 	ok(due == w.day + 2, "Frist 2 Tage")
 	w.next_day()
+	w.start_day()
 	w.next_day()
+	w.start_day()
 	ok(w.accepted.has("lathe:0") and co.reputation == rep0, "Am letzten Tag noch nichts passiert")
 	w.next_day()
+	w.start_day()
 	ok(not w.accepted.has("lathe:0") and not w.deadlines.has("lathe:0"), "Frist abgelaufen: Auftrag weg")
 	ok(co.reputation == rep0 + w.REP_LATE, "Ansehen sinkt")
 	ok(str(co.rep_log[-1]["text"]).contains("Frist"), "Vermerkt")
@@ -614,6 +618,7 @@ func _initialize() -> void:
 	ok(not w.deliveries.is_empty(), "Teil im Hof")
 	w.deadlines["ceramic:1"] = w.day
 	w.next_day()
+	w.start_day()
 	ok(not w.grind_jobs.has("ceramic:1") and w.deliveries.filter(func(x): return str(x.get("key", "")) == "ceramic:1").is_empty(), "Kundenteil geht zurück")
 	# Ansehen und Vergütung
 	co.reputation = 50.0

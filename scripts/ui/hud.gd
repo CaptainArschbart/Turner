@@ -473,7 +473,8 @@ func _refresh_pages() -> void:
 			{"title": "Sonstiges", "rows": [
 				[b.call("door_toggle"), "Schutztür auf / zu, auch per Griff mit der linken Maus" if not _is_conv() else "Nur an der CNC-Drehmaschine: Schutztür"],
 				[b.call("emergency_stop"), "Not-Halt / quittieren"],
-				["Linksklick", "Material aus den Händen einspannen, von außerhalb der Maschine"],
+				["Linksklick", "Einspannen und Spanntiefe angeben, von außerhalb der Maschine"],
+				["Rechtsklick", "Teil umgedreht einspannen, von außerhalb der Maschine"],
 				[b.call("new_workpiece"), "Rohteil anfordern: Hinweis, im Testmodus gratis"],
 				[b.call("submit_part"), "Teil prüfen und abgeben"],
 				[b.call("show_drawing"), "Werkstückzeichnung ein / aus"],
@@ -585,6 +586,7 @@ func _conv_lines(t: Dictionary, vc: float) -> Array[String]:
 		"vc %d m/min %s  Soll %d-%d   KSS: %s" % [int(vc), _vc_hint(vc), int(win.x), int(win.y), "EIN" if lathe.coolant else "aus"],
 		"Schneide: %d %% Hitze, %d %% Verschleiß   Spänewanne: %d %%" % [int(lathe.tool_heat * 100.0), int(lathe.tool_wear() * 100.0), int(lathe.tray.fraction() * 100.0)],
 		"Handrad: %s   Schritt %s / Raste" % [lathe.hw_axis_name(), Settings.handwheel_step_name()],
+		"Spanntiefe: %d mm%s" % [int(lathe.clamp_depth), ", umgedreht" if lathe.flipped else ""],
 		"Rz letzter Schnitt: %.1f µm%s" % [lathe.last_rz, ("  - " + lathe.last_rz_hint) if lathe.last_rz_hint != "" else ""],
 	]
 	if lathe.grinder_type != "" and lathe.tool_stock != null:

@@ -470,12 +470,12 @@ func _initialize() -> void:
 	ok(not menu.confirm() and menu.placing, "Falscher Platz: Vorschau bleibt")
 	ok(absf(w.mill.position.x - 6.85) < 0.001, "Maschine bleibt stehen")
 	menu.ghost_rot = 0
-	menu.ghost_pos = Vector2(-1.0, 3.0)
+	menu.ghost_pos = Vector2(-2.5, 3.5)
 	menu._update_ghost()
 	ok(menu.error == "", "Freier Platz: " + menu.error)
 	ok(menu._ghost_area.material_override.albedo_color == menu.GOOD, "Vorschau ist grün")
 	ok(menu.confirm() and not menu.placing, "Aufgestellt")
-	ok(absf(w.mill.position.x + 1.0) < 0.001, "Fräse steht am neuen Platz")
+	ok(absf(w.mill.position.x + 2.5) < 0.001, "Fräse steht am neuen Platz")
 	ok(w.mill.visible, "Und ist wieder zu sehen")
 	ok(menu.active, "Baumodus läuft weiter")
 	await process_frame
@@ -487,7 +487,7 @@ func _initialize() -> void:
 	cancel_ev.pressed = true
 	menu._input(cancel_ev)
 	ok(not menu.placing, "Rechtsklick bricht ab")
-	ok(absf(w.mill.position.x + 1.0) < 0.001, "Nichts verändert")
+	ok(absf(w.mill.position.x + 2.5) < 0.001, "Nichts verändert")
 	# Laufende Spindel
 	w.mill.spindle_speed = 500.0
 	menu.start("machine", "mill")

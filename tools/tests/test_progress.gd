@@ -112,8 +112,8 @@ func _initialize() -> void:
 	var jt = o.jobs_tab
 	jt.refresh()
 	var offer := text_of(jt.offers)
-	ok(offer.contains("Auftrag 1") and offer.contains("Frist"), "Angebote stehen am PC, mit Frist")
-	ok(not offer.contains("Fräsauftrag") and not offer.contains("Auftrag 3"), "Gesperrte Maschinen und Werkstoffe tauchen nicht auf")
+	ok(offer.contains("Auftrag") and offer.contains("Frist"), "Angebote stehen am PC, mit Frist")
+	ok(not offer.contains("Fräsauftrag") and not offer.contains("C45"), "Gesperrte Maschinen und Werkstoffe tauchen nicht auf")
 	ok(w.accept_job("mill:0") != "", "Fräsauftrag ohne Fräsmaschine geht nicht")
 	ok(w.accept_job("lathe:2") != "", "C45 ist noch gesperrt")
 	jt.accept("lathe:0")

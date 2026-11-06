@@ -34,7 +34,15 @@ var money: int:
 	get:
 		return company.balance
 	set(v):
+		# Der Tagesbericht zählt jede Bewegung der Kasse
+		if v > company.balance:
+			day_stats["earned"] = int(day_stats.get("earned", 0)) + v - company.balance
+		else:
+			day_stats["spent"] = int(day_stats.get("spent", 0)) + company.balance - v
 		company.balance = v
+var day_started := true           # Jeder Tag muss am PC im Programm Tagesbericht gestartet werden
+var day_stats: Dictionary = {}    # {"accepted", "done", "earned", "spent"} des laufenden Tages
+var last_day_stats: Dictionary = {}
 var job_index := 0
 var mill_job_index := 0
 var drill_job_index := 0
@@ -60,10 +68,11 @@ var layout := Layout.new()        # Stellplan: Maschinen, Bereiche, Werkbänke
 var inventory: Dictionary = {}    # gekauft, aber noch nicht aufgestellt
 var extra_machines: Dictionary = {}
 var drawing: DrawingOverlay
+var clamp_dialog: ClampDialog
 const STARTER_MACHINES := ["lathe", "saw"]
 const STARTER_TOOLS := ["T1", "T3", "T5"]     # Schruppen, Schlichten, Fasen
 const STARTER_RACK := Vector2(14.0, -12.0)
-const STARTER_BAR := {"material": "S235", "kind": "round", "d": 60.0, "w": 0.0, "h": 0.0, "l": 3000.0}
+const STARTER_BAR := {"material": "S235", "kind": "round", "d": 60.0, "w": 0.0, "h": 0.0, "l": 2000.0}
 const LATHE_MAX_LEN := 800.0       # längstes Stück im Futter
 const MILL_MAX_LEN := 300.0        # längstes Stück im Schraubstock
 var accepted: Array = []          # angenommene Aufträge als Schlüssel, siehe JobBoard.key
@@ -94,7 +103,7 @@ func _ready() -> void:
 	add_child(mill)
 
 	office_pc = OfficePC.new()
-	office_pc.position = Vector3(10.5, 1.05, 7.54)
+	office_pc.position = Workshop.OFFICE_PC_POS
 	add_child(office_pc)
 
 	player = Player.new()
@@ -130,6 +139,10 @@ func _ready() -> void:
 	pause_menu.world = self
 	add_child(pause_menu)
 
+	clamp_dialog = ClampDialog.new()
+	clamp_dialog.world = self
+	add_child(clamp_dialog)
+
 	drawing = DrawingOverlay.new()
 	drawing.world = self
 	add_child(drawing)
@@ -149,7 +162,10 @@ func _ready() -> void:
 	office_pc.overlay.skill_app.shop = self
 	office_pc.overlay.reputation_app.shop = self
 	office_pc.overlay.world = self
-	player.material_to_machine.connect(clamp_carried)
+	player.material_to_machine.connect(ask_clamp)
+	player.gate = _work_blocked
+	office_pc.overlay.day_app.shop = self
+	office_pc.overlay.dev_app.shop = self
 	Settings.changed.connect(_apply_quality)
 
 	_apply_pending(GameState.pending)
@@ -157,7 +173,7 @@ func _ready() -> void:
 	_setup_ambient()
 	restore_mouse()
 	if company.owns("lathe"):
-		hud.show_message("Willkommen in der Werkstatt, %s! Drehmaschine, Werkbank mit Grundwerkzeugen, Bandsäge und ein Regal mit einer Stange stehen bereit. Aufträge gibt es am PC im Büro." % save_name, Color(0.9, 0.95, 1.0))
+		hud.show_message("Willkommen in der Werkstatt, %s! Drehmaschine, Werkbank mit Grundwerkzeugen, Bandsäge und ein Regal mit einer Stange stehen bereit. Starte den Tag am PC im Büro, im Programm Tagesbericht." % save_name, Color(0.9, 0.95, 1.0))
 	else:
 		hud.show_message("Willkommen in der Werkstatt, %s! Die Halle ist leer: Am PC im Büro gibt es die erste Drehmaschine und die Bandsäge gratis, dazu Werkbank, Werkzeuge und Aufträge." % save_name, Color(0.9, 0.95, 1.0))
 
@@ -281,7 +297,7 @@ func mill_job() -> Dictionary:
 # ------------------------------------------------------------ Tage und Ansehen
 
 func _advance_day(delta: float) -> void:
-	if not day_over:
+	if day_started and not day_over:
 		day_time += delta
 		if day_time >= DAY_SECONDS:
 			end_day()
@@ -299,7 +315,9 @@ func clock_text() -> String:
 
 func _show_clock() -> void:
 	var text := clock_text()
-	if day_over:
+	if not day_started:
+		text += "   Tag noch nicht gestartet: am PC im Programm Tagesbericht"
+	elif day_over:
 		text += "   FEIERABEND: am PC den Tag beenden"
 	hud.set_clock(text, day_over)
 
@@ -314,15 +332,37 @@ func end_day() -> void:
 	office_pc.overlay.refresh_all()
 
 
-## Nächster Tag: Abgelaufene Fristen kosten Ansehen.
+## Tag starten: Erst jetzt lässt sich arbeiten und bestellen, die Uhr läuft.
+func start_day() -> void:
+	day_started = true
+	_show_clock()
+	_jobs_changed()
+	hud.show_message("Tag %d beginnt." % day, Color(0.9, 0.95, 1.0))
+
+
+## Nächster Tag: Abgelaufene Fristen kosten Ansehen. Der neue Tag wartet, bis er gestartet wird.
 func next_day() -> void:
 	day += 1
 	day_time = 0.0
 	day_over = false
+	day_started = false
+	last_day_stats = day_stats
+	day_stats = {}
 	_check_deadlines()
 	_show_clock()
 	_jobs_changed()
-	hud.show_message("Tag %d beginnt." % day, Color(0.9, 0.95, 1.0))
+	hud.show_message("Tag %d: am PC im Programm Tagesbericht starten." % day, Color(0.9, 0.95, 1.0))
+
+
+## Darf der Spieler dieses Ziel gerade benutzen? Vor Tagesbeginn wird nichts bearbeitet. silent: nur prüfen.
+func _work_blocked(target: Node, silent: bool) -> bool:
+	if day_started or free_mode or target == null:
+		return false
+	if not (target is Lathe or target is Mill or target is BandSaw or target is ToolMount or target is Lathe.LeverTarget or target is MillLeverPanel):
+		return false
+	if not silent:
+		hud.show_message("Der Tag hat noch nicht begonnen: am PC im Programm Tagesbericht starten.", Color(1, 0.75, 0.2))
+	return true
 
 
 func _check_deadlines() -> void:
@@ -353,7 +393,11 @@ func _job_late(key: String) -> void:
 
 ## Einkaufen und Annehmen sind am Feierabend gesperrt, außer im Testmodus.
 func _closed_error() -> String:
-	return "Feierabend: Erst morgen wieder. Tag am PC beenden." if day_over and not free_mode else ""
+	if free_mode:
+		return ""
+	if not day_started:
+		return "Der Tag hat noch nicht begonnen: am PC im Programm Tagesbericht starten."
+	return "Feierabend: Erst morgen wieder. Tag am PC beenden." if day_over else ""
 
 
 ## Vergütung nach Ansehen.
@@ -361,8 +405,8 @@ func _pay(base: float) -> int:
 	return int(round(base * company.pay_factor()))
 
 
-## Aufträge im System: nur freigeschaltete Maschinen und Werkstoffe, je Maschine höchstens 5 zusammen mit
-## den schon angenommenen. Die Auswahl wechselt mit dem Tag.
+## Aufträge im System: nur freigeschaltete Maschinen und Werkstoffe, je Maschine höchstens 2 zusammen mit
+## den schon angenommenen, insgesamt höchstens 9. Auswahl und Reihenfolge sind zufällig und wechseln mit dem Tag.
 func offers() -> Array:
 	var out := []
 	var taken := {}
@@ -378,10 +422,23 @@ func offers() -> Array:
 			groups[mk] = []
 		groups[mk].append(k)
 	for mk in groups:
-		var list: Array = groups[mk]
+		var list := _shuffled(groups[mk], "%d|%s" % [day, mk])
 		var room := mini(JobBoard.MAX_PER_MACHINE - int(taken.get(mk, 0)), list.size())
 		for i in maxi(room, 0):
-			out.append(list[(day - 1 + i) % list.size()])
+			out.append(list[i])
+	return _shuffled(out, str(day)).slice(0, maxi(JobBoard.MAX_TOTAL - (accepted.size() + grind_jobs.size()), 0))
+
+
+## Zufällige Reihenfolge, die innerhalb eines Tages gleich bleibt.
+static func _shuffled(list: Array, salt: String) -> Array:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(salt)
+	var out := list.duplicate()
+	for i in range(out.size() - 1, 0, -1):
+		var k := rng.randi_range(0, i)
+		var t = out[i]
+		out[i] = out[k]
+		out[k] = t
 	return out
 
 
@@ -399,6 +456,8 @@ func accept_error(key: String) -> String:
 			count += 1
 	if count >= JobBoard.MAX_PER_MACHINE:
 		return "Für diese Maschine laufen schon %d Aufträge." % JobBoard.MAX_PER_MACHINE
+	if accepted.size() + grind_jobs.size() >= JobBoard.MAX_TOTAL:
+		return "Es laufen schon %d Aufträge." % JobBoard.MAX_TOTAL
 	return JobBoard.lock_reason(key, company)
 
 
@@ -428,6 +487,7 @@ func accept_job(key: String) -> String:
 	if reason != "":
 		return reason
 	deadlines[key] = day + JobBoard.days_for(key)
+	day_stats["accepted"] = int(day_stats.get("accepted", 0)) + 1
 	# Kundenauftrag: Das Teil kommt mit und steht gleich vor dem Lagertor
 	if JobBoard.key_machine(key) == "ceramic":
 		grind_jobs.append(key)
@@ -488,6 +548,7 @@ func _job_gone(key: String) -> void:
 
 ## Erfolgreich abgegeben: Erfahrung gutschreiben, Auftrag ist erledigt. Gibt den Text fürs Protokoll zurück.
 func _finish_job(key: String) -> String:
+	day_stats["done"] = int(day_stats.get("done", 0)) + 1
 	var skills := company.skills
 	var before := skills.free_points()
 	var xp := JobBoard.xp_for(JobBoard.job_of(key))
@@ -869,6 +930,9 @@ func buy_tool(machine: String, id: String, grade: String) -> String:
 		return "HSS erst im Skilltree freischalten."
 	if company.tools[machine].count(id) >= ToolStore.MAX_COPIES:
 		return "Mehr als %d Stück von einem Werkzeug passen nicht." % ToolStore.MAX_COPIES
+	var bench := _bench_of(machine)
+	if bench != null and company.tools[machine].total() >= bench.holders.size():
+		return "Alle %d Halterungen der Werkbank sind voll." % bench.holders.size()
 	var cost: int = 0 if free_mode else tool_price(machine, id, grade)
 	if cost > money:
 		return "Nicht genug Geld: %d EUR nötig, %d EUR vorhanden." % [cost, money]
@@ -1096,6 +1160,12 @@ func delivery_prompt(i: int) -> String:
 		return ""
 	var it: Dictionary = deliveries[i]
 	var what := "%s  %s" % [Materials.label(str(it["material"])), RawMaterialTab.describe(it)]
+	var same := 0
+	for other in deliveries:
+		if Site.delivery_key(other) == Site.delivery_key(it):
+			same += 1
+	if same > 1:
+		what += "    |    %d Stück auf der Palette" % same
 	if not player.hands_free():
 		return "%s    |    Hände voll" % what
 	return "[Linksklick] %s aufheben" % what
@@ -1242,6 +1312,72 @@ func clamp_carried(machine: Node) -> String:
 	_stock_changed()
 	hud.show_message("Eingespannt.", Color(0.7, 0.95, 1.0))
 	return ""
+
+
+# ------------------------------------------------------------ Einspannen
+
+## Klick auf eine Maschine mit Teil in der Hand oder im Futter. flip: andersherum spannen.
+func ask_clamp(machine: Node, flip: bool) -> void:
+	if player.carrying_bin() or machine is BandSaw:
+		if not flip:
+			clamp_carried(machine)
+		return
+	if not machine is Lathe and not machine is Mill:
+		clamp_carried(machine)
+		return
+	# Was gar nicht passt, gibt sofort den Hinweis
+	var err := _clamp_precheck(machine)
+	if err != "":
+		hud.show_message(err, Color(1, 0.75, 0.2))
+		return
+	clamp_dialog.open(machine, flip)
+
+
+## Fehler, die schon vor der Frage nach der Spanntiefe feststehen.
+func _clamp_precheck(machine: Node) -> String:
+	if player.carry.is_empty():
+		return "Erst die Spindel stoppen, dann umspannen." if machine.spindle_speed > 5.0 else ""
+	if player.carrying_semi():
+		return ""
+	var round_bar := str(player.carry["kind"]) == Materials.KIND_ROUND
+	if machine.grinder_type != "":
+		return "Schleifmaschinen spannen nur vorbearbeitete Teile."
+	if machine is Lathe and not round_bar:
+		return "Die Drehmaschine spannt nur Rundmaterial."
+	if machine is Mill and round_bar:
+		return "Der Schraubstock spannt nur eckiges Material."
+	if str(player.carry["kind"]) != Materials.KIND_CUT and float(player.carry["l"]) > (LATHE_MAX_LEN if machine is Lathe else MILL_MAX_LEN):
+		return "Zu lang zum Einspannen (%d mm): Erst an der Bandsäge absägen." % int(player.carry["l"])
+	return ""
+
+
+## Kleinste und größte Spanntiefe für das Teil in der Hand oder in der Maschine.
+func clamp_limit(machine: Node) -> Vector2:
+	var size := 0.0
+	var item: Dictionary = player.carry
+	if machine is Lathe:
+		size = float(item.get("l", machine.stock_len)) if not player.carrying_semi() else float(machine.stock_len)
+		if player.carrying_semi():
+			size = float(item["part"].get("stock_len", 100.0))
+		return Vector2(3.0, maxf(minf(size - 10.0, 200.0), 3.0))
+	size = float(item.get("h", machine.block_h)) if not player.carrying_semi() else float(machine.block_h)
+	if player.carrying_semi():
+		var s = item["part"].get("size", [0.0, 0.0, 40.0])
+		size = float(s[2]) if s is Array and s.size() > 2 else 40.0
+	return Vector2(5.0, maxf(size - 3.0, 5.0))
+
+
+## Antwort aus dem Fenster: einspannen und auf die gewählte Spanntiefe setzen.
+func finish_clamp(machine: Node, flip: bool, depth: float) -> String:
+	if not player.carry.is_empty():
+		var err := clamp_carried(machine)
+		if err != "":
+			return err
+	var res: String = machine.reclamp(depth, flip)
+	if res == "":
+		var text := "Kopfüber eingespannt" if flip and machine is Mill else ("Umgedreht eingespannt" if flip else "Eingespannt")
+		hud.show_message("%s, Spanntiefe %d mm." % [text, int(depth)], Color(0.7, 0.95, 1.0))
+	return res
 
 
 # ------------------------------------------------------------ Bandsäge
@@ -1804,6 +1940,7 @@ func _put_machine(id: String) -> void:
 	var n := _machine_node(id)
 	var at: Dictionary = layout.machines[id]
 	n.visible = true
+	n.scale = Vector3.ONE * (Layout.MACHINE_SCALE if Layout.SCALED.has(id) else 1.0)
 	n.position = Vector3(at["pos"].x, 0, at["pos"].y)
 	n.rotation.y = int(at["rot"]) * PI / 2.0
 
@@ -2072,6 +2209,11 @@ func _apply_pending(d: Dictionary) -> void:
 	day = int(d.get("day", 1))
 	day_time = float(d.get("day_time", 0.0))
 	day_over = bool(d.get("day_over", false))
+	day_started = bool(d.get("day_started", not bool(d.get("starter", false))))
+	var saved_stats = d.get("day_stats", {})
+	day_stats = saved_stats.duplicate() if saved_stats is Dictionary else {}
+	var saved_last = d.get("last_day_stats", {})
+	last_day_stats = saved_last.duplicate() if saved_last is Dictionary else {}
 	company.reputation = float(d.get("reputation", 50.0))
 	var saved_log = d.get("rep_log", [])
 	company.rep_log = saved_log.duplicate(true) if saved_log is Array else []
@@ -2175,7 +2317,7 @@ func save_game() -> bool:
 		"mill_job": mill_job_index, "mill": mill.get_state(), "stock": stock, "deliveries": deliveries, "site": _site_state(),
 		"layout": layout.to_state(), "inventory": inventory, "skills": company.skills.to_state(),
 		"tools": _tool_states(), "machine_states": _machine_states(), "drill_job": drill_job_index, "grind_jobs": grind_jobs,
-		"day": day, "day_time": day_time, "day_over": day_over, "deadlines": deadlines,
+		"day": day, "day_time": day_time, "day_over": day_over, "day_started": day_started, "day_stats": day_stats, "last_day_stats": last_day_stats, "deadlines": deadlines,
 		"reputation": company.reputation, "rep_log": company.rep_log,
 		"accepted": accepted, "tracked": tracked, "containers": containers.map(func(c: ChipTray) -> Dictionary: return c.to_state()),
 	}

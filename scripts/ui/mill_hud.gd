@@ -317,7 +317,8 @@ func _refresh_pages() -> void:
 		]},
 		{"title": "Sonstiges", "rows": [
 			[b.call("emergency_stop"), "Not-Halt / quittieren"],
-			["Linksklick", "Material aus den Händen einspannen, von außerhalb der Maschine"],
+			["Linksklick", "Einspannen und Spanntiefe angeben, von außerhalb der Maschine"],
+			["Rechtsklick", "Teil kopfüber einspannen, von außerhalb der Maschine"],
 			[b.call("new_workpiece"), "Rohteil anfordern: Hinweis, im Testmodus gratis"],
 			[b.call("submit_part"), "Teil prüfen und abgeben"],
 			[b.call("show_drawing"), "Werkstückzeichnung ein / aus"],
@@ -354,6 +355,7 @@ func _process(_delta: float) -> void:
 		"Schneide: %d %% Hitze, %d %% Verschleiß   Spänewanne: %d %%" % [int(mill.tool_heat * 100.0), int(mill.tool_wear() * 100.0), int(mill.tray.fraction() * 100.0)],
 		"Handrad: %s   Schritt %s / Raste" % [mill.axis_name(mill.hw_axis), Settings.handwheel_step_name()],
 		"Letzte Schnitttiefe: %.2f mm" % mill.last_ap,
+		"Spanntiefe: %d mm%s" % [int(mill.grip_depth()), ", kopfüber" if mill.flipped else ""],
 	]
 	if mill.grinder_type != "" and mill.tool_stock != null:
 		lines.append("Scheibe %d %% unrund    Abziehwerkzeug: X %d  Y %d  bis Z %d anfahren" % [

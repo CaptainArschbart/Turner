@@ -7,6 +7,8 @@ extends RefCounted
 ##   hole - Bohrung Ø d bei cx, cy bis Tiefe z, around = Höhe der Fläche um die Bohrung
 ## rest = Höhe aller Flächen, die zu keinem Merkmal gehören.
 
+static var _all: Array = []
+
 const LIST := [
 	{
 		"title": "Fräsauftrag 1: Planfräsen",
@@ -107,8 +109,16 @@ const LIST := [
 ]
 
 
+## Feste Aufträge und die generierten dahinter.
+static func all() -> Array:
+	if _all.is_empty():
+		_all = LIST + JobGen.mill(LIST.size() + 1)
+	return _all
+
+
 static func get_job(i: int) -> Dictionary:
-	return LIST[posmod(i, LIST.size())]
+	var list := all()
+	return list[posmod(i, list.size())]
 
 
 ## Zielmaße als einzelne Zeilen.
@@ -127,7 +137,7 @@ static func target_lines(job: Dictionary) -> Array:
 ## grind: Die geschliffene Fläche nennen (nur wenn die Werkstatt die Schleifmaschine hat).
 static func describe(job: Dictionary, grind := false) -> String:
 	var s: Array = job["size"]
-	var t := "%s\n%s\n" % [job["title"], job["desc"]]
+	var t := "%s\n" % job["title"]
 	t += "\nWerkstoff: %s" % Materials.label(str(job.get("material", Materials.DEFAULT)))
 	t += "\nRohteil: %d x %d x %d mm" % [int(s[0]), int(s[1]), int(s[2])]
 	for f in job["features"]:

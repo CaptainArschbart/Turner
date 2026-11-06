@@ -21,7 +21,11 @@ var jobs_tab: JobsTab
 var waste_tab: WasteTab
 var skill_app: SkillTreeApp
 var reputation_app: ReputationApp
-var day_button: Button
+var dev_app: DevApp
+var dev_win: Control
+var dev_icon: Button
+var day_app: DayApp
+var day_win: Control
 var desktop: Control
 var shop_win: Control
 var skill_win: Control
@@ -47,7 +51,21 @@ class ProgramIcon extends Control:
 
 	func _draw() -> void:
 		var c := size * 0.5
-		if kind == "stock":
+		if kind == "dev":
+			# Spitze Klammern
+			var d := Color(0.6, 0.95, 0.75)
+			draw_polyline(PackedVector2Array([c + Vector2(-14, -24), c + Vector2(-36, 0), c + Vector2(-14, 24)]), d, 6.0, true)
+			draw_polyline(PackedVector2Array([c + Vector2(14, -24), c + Vector2(36, 0), c + Vector2(14, 24)]), d, 6.0, true)
+			draw_line(c + Vector2(8, -28), c + Vector2(-8, 28), d, 5.0, true)
+		elif kind == "day":
+			# Kalenderblatt
+			var page := Color(0.9, 0.92, 0.95)
+			draw_rect(Rect2(c + Vector2(-34, -30), Vector2(68, 66)), page)
+			draw_rect(Rect2(c + Vector2(-34, -36), Vector2(68, 16)), Color(0.85, 0.3, 0.25))
+			for row in 3:
+				for col in 4:
+					draw_rect(Rect2(c + Vector2(-26 + col * 14, -12 + row * 14), Vector2(9, 9)), Color(0.35, 0.4, 0.48))
+		elif kind == "stock":
 			# Regal mit Stangen
 			var s := Color(0.6, 0.7, 0.85)
 			draw_rect(Rect2(c + Vector2(-38, -36), Vector2(6, 74)), s)
@@ -139,8 +157,6 @@ func _ready() -> void:
 	_title.add_theme_color_override("font_color", UITheme.ACCENT)
 	_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(_title)
-	day_button = UITheme.button("Tag beenden", _end_day, 200)
-	head.add_child(day_button)
 	_back = UITheme.button("Zum Desktop", show_desktop, 180)
 	head.add_child(_back)
 	head.add_child(UITheme.button("PC verlassen", close, 180))
@@ -168,6 +184,16 @@ func _ready() -> void:
 	shop_tab = ShopTab.new()
 	shop_tab.name = "Einkauf"
 	tabs.add_child(shop_tab)
+
+	dev_app = DevApp.new()
+	dev_app.custom_minimum_size = SIZE
+	dev_win = dev_app
+	v.add_child(dev_app)
+
+	day_app = DayApp.new()
+	day_app.custom_minimum_size = SIZE
+	day_win = day_app
+	v.add_child(day_app)
 
 	stock_view = StockView.new()
 	stock_view.custom_minimum_size = SIZE
@@ -217,6 +243,9 @@ func _build_desktop() -> Control:
 	h.add_child(_desktop_icon("skills", "Skilltree", "Maschinen, Werkstoffe\nund Werkzeuge"))
 	h.add_child(_desktop_icon("overview", "Maschinen", "Alle Maschinen, die es\nim Spiel gibt"))
 	h.add_child(_desktop_icon("reputation", "Ansehen", "Ruf der Werkstatt,\nFristen, Vergütung"))
+	dev_icon = _desktop_icon("dev", "Entwickler", "Alle Aufträge prüfen,\nnur im Testmodus")
+	h.add_child(dev_icon)
+	h.add_child(_desktop_icon("day", "Tagesbericht", "Tag starten und beenden,\nGewinn und Verlust"))
 	h.add_child(_desktop_icon("stock", "Lager", "Was in den Regalen\nliegt und wo"))
 	h.add_child(_desktop_icon("waste", "Entsorgung", "Spänecontainer im Hof\nabholen lassen"))
 	return d
@@ -277,6 +306,8 @@ func show_desktop() -> void:
 	overview_win.visible = false
 	reputation_win.visible = false
 	stock_win.visible = false
+	day_win.visible = false
+	dev_win.visible = false
 	waste_win.visible = false
 	_back.visible = false
 	_title.text = "Werkstatt-PC"
@@ -292,15 +323,24 @@ func open_program(kind: String) -> void:
 	overview_win.visible = kind == "overview"
 	reputation_win.visible = kind == "reputation"
 	stock_win.visible = kind == "stock"
+	day_win.visible = kind == "day"
+	dev_win.visible = kind == "dev"
 	waste_win.visible = kind == "waste"
 	_back.visible = true
-	_title.text = {"shop": "Shop", "jobs": "Aufträge", "skills": "Skilltree", "overview": "Maschinenübersicht", "reputation": "Ansehen", "stock": "Lager", "waste": "Entsorgung"}[kind]
+	_title.text = {"shop": "Shop", "jobs": "Aufträge", "skills": "Skilltree", "overview": "Maschinenübersicht", "reputation": "Ansehen", "stock": "Lager", "waste": "Entsorgung", "day": "Tagesbericht", "dev": "Entwickler"}[kind]
 	refresh_all()
 
 
 func refresh_all() -> void:
 	raw.refresh()
 	stock_view.refresh()
+	day_app.refresh()
+	# Das Entwicklerprogramm gibt es nur im Testmodus
+	var dev_on: bool = world != null and world.free_mode
+	dev_icon.visible = dev_on
+	if program == "dev" and not dev_on:
+		show_desktop()
+	dev_app.refresh()
 	site_tab.refresh()
 	shop_tab.refresh()
 	machines_tab.refresh()
@@ -315,12 +355,6 @@ func refresh_all() -> void:
 func stock_changed() -> void:
 	raw.refresh()
 	stock_view.refresh()
-
-
-func _end_day() -> void:
-	if world:
-		world.next_day()
-	refresh_all()
 
 
 func _input(event: InputEvent) -> void:

@@ -1,5 +1,5 @@
 extends SceneTree
-## Werkbänke: Werkzeug per Linksklick nehmen, von Hand einsetzen, zurücklegen, Speichern und Laden.
+## Werkbänke: Werkzeuge stecken nur in den Halterungen, nehmen, von Hand einsetzen, zurückstecken, Laden.
 var checks := 0
 var fails := 0
 func ok(c: bool, w: String) -> void:
@@ -17,11 +17,6 @@ func aim(p, from: Vector3, target: Vector3) -> void:
 	p.pitch = atan2(d.y, Vector2(d.x, d.z).length())
 	for i in 6:
 		await physics_frame
-func slot_of(bench, id: String):
-	for s in bench._slots:
-		if s.tool_id == id:
-			return s
-	return null
 ## Linksklick auf das anvisierte Ziel. Headless lässt sich die Maus nicht fangen, deshalb direkt.
 func click(p) -> void:
 	p.click_focus()
@@ -41,36 +36,37 @@ func _initialize() -> void:
 	await process_frame
 	var mb = w.mill_bench
 	var lb = w.lathe_bench
+	mb.refresh()
+	lb.refresh()
 
-	# An jedem Arbeitsplatz eine Werkbank mit allen Werkzeugen der Maschine
-	ok(mb._slots.size() == MillTools.TOOLS.size(), "Fräs-Werkbank hat alle Werkzeuge")
-	ok(lb._slots.size() == LatheTools.count(), "Dreh-Werkbank hat alle Werkzeuge")
-	ok(not slot_of(mb, "F6").model.visible, "F6 steckt in der Spindel und fehlt auf der Bank")
-	ok(slot_of(mb, "F10").model.visible, "F10 liegt auf der Bank")
-	ok(not slot_of(lb, "T1").model.visible and not slot_of(lb, "T3").model.visible, "T1 und T3 stecken im Halter")
-	# Drei Reihen, alles bleibt auf der Platte
-	for s in mb._slots:
-		var box: AABB = Build.bounds(s.model)
-		var c: Vector3 = mb.to_local(box.get_center())
-		ok(absf(c.x) < mb.width * 0.5 and absf(c.z) < mb.depth * 0.5, "%s liegt auf der Werkbank" % s.tool_id)
-		ok(box.position.y >= mb.TOP_Y - 0.01, "%s liegt auf der Platte" % s.tool_id)
+	# Alles steckt in den Halterungen, was nicht an der Maschine ist
+	ok(mb.holders.size() == 36 and lb.holders.size() == 36, "36 Halterungen")
+	ok(mb.holder_of("F6") < 0, "F6 steckt in der Spindel und nicht in einer Halterung")
+	ok(mb.holder_of("F10") >= 0, "F10 steckt in einer Halterung")
+	ok(lb.holder_of("T1") < 0 and lb.holder_of("T3") < 0, "T1 und T3 stecken im Halter")
+	ok(lb.holder_of("T5") >= 0, "T5 steckt in einer Halterung")
 	for id in ["F25", "B25", "MK125", "MK32", "F3"]:
-		var mdl = slot_of(mb, id).model
-		ok(mdl.visible and mb.is_available(id), "%s liegt bereit" % id)
-	ok(slot_of(lb, "T5").model.visible, "T5 liegt auf der Bank")
+		var i: int = mb.holder_of(id)
+		ok(i >= 0 and mb.holders[i].model != null, "%s ist zu sehen" % id)
+		if i >= 0:
+			var box: AABB = Build.bounds(mb.holders[i].model)
+			ok(box.position.y < mb.TOP_Y - 0.01, "%s steckt unter der Platte" % id)
+	# Auf der Platte liegt nichts und steht nichts
+	for c in mb.find_children("*", "Label3D", true, false):
+		ok(false, "Keine Beschriftung auf der Werkbank: " + c.text)
 
-	# Fräsmaschine: Werkzeug nehmen
-	var stand: Vector3 = Vector3(6.85, 0.05, -1.75)
-	var f10_pos: Vector3 = slot_of(mb, "F10").model.global_transform * Vector3.ZERO
-	await aim(p, stand, Build.bounds(slot_of(mb, "F10").model).get_center())
-	ok(p._focus == slot_of(mb, "F10"), "F10 auf der Bank lässt sich anvisieren")
-	ok(p._prompt.contains("Linksklick") and p._prompt.contains("nehmen"), "Hinweis zum Nehmen: " + p._prompt)
+	# Fräsmaschine: Werkzeug aus der Halterung nehmen
+	var stand: Vector3 = Vector3(6.85, 0.05, -2.0)
+	var f10: int = mb.holder_of("F10")
+	await aim(p, stand, mb.to_global(mb.holders[f10].at + Vector3(0, 0, 0.1)))
+	ok(p._focus == mb.holders[f10], "Halterung lässt sich anvisieren")
+	ok(p._prompt.contains("nehmen"), "Hinweis zum Nehmen: " + p._prompt)
 	click(p)
 	ok(p.held.get("id", "") == "F10", "Linksklick nimmt F10 in die Hand")
 	ok(p._hand.get_child_count() == 1, "Werkzeug ist in der Hand sichtbar")
 	ok(w.hud._held.text.contains("Schaftfräser Ø10"), "HUD zeigt das Werkzeug in der Hand")
 	mb.refresh()
-	ok(not slot_of(mb, "F10").model.visible, "F10 fehlt jetzt auf der Bank")
+	ok(mb.holder_of("F10") < 0, "Die Halterung ist leer")
 
 	# An der Spindel einsetzen
 	var from_op: Vector3 = m.to_global(Vector3(0, 0, 0.85)) + Vector3(0, 0.05, 0)
@@ -78,7 +74,6 @@ func _initialize() -> void:
 	await aim(p, from_op, tip)
 	ok(p._focus == m.tool_mount, "Spindel lässt sich anvisieren")
 	ok(p._prompt.contains("einsetzen"), "Hinweis zum Einsetzen: " + p._prompt)
-	# Bei laufender Spindel gesperrt
 	m.spindle_on = true
 	m.spindle_speed = 500.0
 	click(p)
@@ -89,52 +84,38 @@ func _initialize() -> void:
 	ok(m.tool()["id"] == "F10", "F10 sitzt in der Spindel")
 	ok(p.held.get("id", "") == "F6", "F6 kommt in die Hand")
 	mb.refresh()
-	ok(not slot_of(mb, "F10").model.visible and not slot_of(mb, "F6").model.visible, "Beide fehlen auf der Bank")
+	ok(mb.holder_of("F10") < 0 and mb.holder_of("F6") < 0, "Beide stecken nicht in einer Halterung")
 
-	# Zurücklegen
-	await aim(p, stand, Build.bounds(slot_of(mb, "F12").model).get_center())
-	ok(p._prompt.contains("zurücklegen"), "Hinweis zum Zurücklegen: " + p._prompt)
-	click(p)
-	ok(p.held.is_empty() and p._hand.get_child_count() >= 0, "F6 zurückgelegt")
+	# Frei wählbar: in eine bestimmte Halterung stecken
+	var free: int = mb.free_holder()
+	ok(free >= 0, "Es ist eine Halterung frei")
+	mb.holder_click(free, p)
+	ok(p.held.is_empty() and mb.machine.tool_stock.holder_id(free) == "F6", "F6 steckt in der gewählten Halterung")
 	mb.refresh()
-	ok(slot_of(mb, "F6").model.visible, "F6 liegt wieder auf der Bank")
+	ok(mb.holders[free].model != null, "Modell in der Halterung")
 	ok(w.hud._held.text == "", "HUD zeigt freie Hand")
 
-	# Freie Hand an der Spindel: E bedient weiter die Maschine, Klick tut nichts
+	# Klick auf die Bank: nächste freie Halterung
 	await aim(p, from_op, tip)
-	ok(p._focus == m.tool_mount and p._prompt.contains("Fräsmaschine bedienen"), "Freie Hand: Maschine bedienen")
 	click(p)
 	ok(m.spindle_empty and p.held.get("id", "") == "F10", "Freie Hand nimmt das Werkzeug aus der Spindel")
-	click(p)
-	ok(m.tool()["id"] == "F10" and not m.spindle_empty and p.held.is_empty(), "In die leere Spindel einsetzen, kein Tausch")
-
-	# Messerkopf: alle Werkzeuge lassen sich von Hand wechseln
-	await aim(p, stand, Build.bounds(slot_of(mb, "MK63").model).get_center())
-	click(p)
-	ok(p.held.get("id", "") == "MK63", "Messerkopf in der Hand")
-	await aim(p, from_op, tip)
-	click(p)
-	ok(m.tool()["id"] == "MK63" and p.held.get("id", "") == "F10", "Messerkopf eingesetzt, F10 in der Hand")
+	ok(mb.body_prompt().contains("nächste freie"), "Hinweis auf die Bank: " + mb.body_prompt())
+	mb.body_click(p)
+	ok(p.held.is_empty() and mb.holder_of("F10") >= 0, "Bank steckt F10 in eine freie Halterung")
 
 	# Fremdes Werkzeug passt nicht
-	await aim(p, Vector3(0.6, 0.05, -0.5), Build.bounds(slot_of(lb, "T5").model).get_center())
-	ok(p._prompt.contains("gehört nicht"), "Fräser gehört nicht auf die Dreh-Werkbank: " + p._prompt)
-	click(p)
+	p.set_held(m, "F10")
+	ok(lb.body_prompt().contains("gehört nicht"), "Fräser gehört nicht auf die Dreh-Werkbank: " + lb.body_prompt())
+	lb.body_click(p)
 	ok(p.held.get("id", "") == "F10", "Fräser bleibt in der Hand")
-	# Wieder zurück an die Fräs-Werkbank
-	await aim(p, stand, Build.bounds(slot_of(mb, "F12").model).get_center())
-	click(p)
-	ok(p.held.is_empty(), "F10 zurückgelegt")
+	p.clear_held()
 
 	# Drehmaschine: nehmen und in freien Platz einspannen
 	l.tool_z = 300.0
 	l.tool_x = 100.0
 	l._sync_slides()
 	ok(l.holder == ["T1", "", "T3", ""] and l.active_slot == 0, "Grundbestückung")
-	var bench_from: Vector3 = Vector3(0.6, 0.05, -0.5)
-	await aim(p, bench_from, Build.bounds(slot_of(lb, "T5").model).get_center())
-	ok(p._focus == slot_of(lb, "T5"), "T5 lässt sich anvisieren")
-	click(p)
+	lb.holder_click(lb.holder_of("T5"), p)
 	ok(p.held.get("id", "") == "T5", "T5 in der Hand")
 	ok(p._hand.get_child_count() >= 1 and Build.bounds(p._hand).size.length() > 0.02, "T5 sichtbar in der Hand")
 	var lathe_stand: Vector3 = l.to_global(Vector3(0.25, 0, 1.05)) + Vector3(0, 0.05, 0)
@@ -145,7 +126,7 @@ func _initialize() -> void:
 	ok(l.holder[1] == "T5" and p.held.is_empty(), "T5 in Platz 2 eingespannt")
 	ok(l.active_slot == 0, "Einspannen schwenkt nicht ein")
 	lb.refresh()
-	ok(not slot_of(lb, "T5").model.visible, "T5 fehlt auf der Bank")
+	ok(lb.holder_of("T5") < 0, "T5 fehlt in den Halterungen")
 
 	# Freie Hand nimmt ein nicht eingeschwenktes Werkzeug heraus
 	await aim(p, lathe_stand, l._post_center())
@@ -158,7 +139,6 @@ func _initialize() -> void:
 	ok(p._prompt.contains("kommt in die Hand"), "Hinweis auf Tausch: " + p._prompt)
 	click(p)
 	ok(l.holder[0] == "T5" and p.held.get("id", "") == "T1" and str(l.tool()["id"]) == "T5", "T5 gegen T1 getauscht")
-	# Spindel läuft: gesperrt
 	l.spindle_speed = 500.0
 	l.spindle_on = true
 	click(p)
@@ -174,8 +154,6 @@ func _initialize() -> void:
 	w._apply_pending({"player": st, "mill": m.get_state(), "lathe": l.get_state(), "name": "T"})
 	ok(p.held.get("id", "") == "T1" and p._hand.get_child_count() >= 1, "Hand wiederhergestellt")
 	ok(l.holder[0] == "T5", "Halter wiederhergestellt")
-	lb.refresh()
-	ok(not slot_of(lb, "T1").model.visible, "T1 in der Hand fehlt auf der Bank")
 	p.clear_held()
 	await process_frame
 

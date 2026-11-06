@@ -123,14 +123,6 @@ func make_bench_model(id: String) -> Node3D:
 	return _bench_wheel(Wheels.by_id("round_grinder", id))
 
 
-## Je Schleifmittel eine Reihe auf der Werkbank.
-func bench_rows() -> Array:
-	var rows := []
-	for type_id in Wheels.TYPES:
-		rows.append({"depth": 0.2, "flat": true, "tools": Wheels.list("round_grinder").filter(func(w): return w["type"] == type_id)})
-	return rows
-
-
 func _bench_wheel(w: Dictionary) -> Node3D:
 	var n := Node3D.new()
 	Build.cyl(n, WHEEL_R * 0.6, float(w["d"]) * 0.001, Vector3.ZERO, Build.mat(Wheels.TYPES[w["type"]]["color"], 0.9), Build.AXIS_Z, false, 40)
@@ -149,29 +141,110 @@ func machine_title() -> String:
 	return "Konventionelle Rundschleifmaschine"
 
 
-## Schleifkopf statt Werkzeughalter: Der tiefste Punkt der Scheibe ist die Schneide. Dazu das Abziehwerkzeug.
+## Die Scheibe sitzt nach dem Vorbild hinter dem Werkstück: X+ fährt vom Bediener weg.
+func _sync_slides() -> void:
+	super._sync_slides()
+	if cross_slide == null:
+		return
+	cross_slide.position.z = -tool_x * 0.001
+	if chips:
+		chips.position.z = -0.002
+
+
+func _post_center() -> Vector3:
+	return _wheel.global_position if _wheel else super._post_center()
+
+
+## Eigenes Aussehen statt des Drehmaschinen-Körpers. Die Technik bleibt: Futter, Schlitten, Bedienfeld.
 func _build_extra() -> void:
+	for parent in [self, carriage, cross_slide, ts_node()]:
+		for c in parent.get_children():
+			if c is MeshInstance3D and c != _chip_heap and c != spindle_led:
+				c.visible = false
 	super._build_extra()
+	_build_body()
+	_build_wheel_head()
+
+
+## Reitstock: das Node3D bei x = 1.73.
+func ts_node() -> Node3D:
+	for c in get_children():
+		if c is Node3D and not c is MeshInstance3D and absf(c.position.x - 1.73) < 0.001:
+			return c
+	return self
+
+
+func _build_body() -> void:
+	var white := Build.mat(Color(0.9, 0.91, 0.89), 0.5)
+	var blue := Build.mat(Color(0.14, 0.32, 0.52), 0.45, 0.1)
+	var dark := Build.mat(Color(0.12, 0.13, 0.15), 0.55, 0.2)
+	var steel := Build.mat(Color(0.72, 0.73, 0.75), 0.28, 1.0)
+	var top_y := 0.88
+	# Langes Bett: heller Körper, blauer Tisch mit Führung vorne, dahinter das Bett des Schleifkopfs
+	Build.box(self, Vector3(3.3, 0.06, 0.96), Vector3(0.5, 0.03, -0.07), dark)
+	Build.box(self, Vector3(3.24, 0.66, 0.9), Vector3(0.5, 0.39, -0.07), white)
+	Build.box(self, Vector3(3.24, 0.16, 0.6), Vector3(0.5, 0.8, 0.08), blue)
+	Build.box(self, Vector3(3.24, 0.022, 0.03), Vector3(0.5, top_y, 0.37), steel)
+	Build.box(self, Vector3(3.24, 0.02, 0.05), Vector3(0.5, top_y - 0.05, 0.37), steel)
+	Build.box(self, Vector3(1.5, 0.72, 0.62), Vector3(0.65, 0.36, -0.75), white)
+	Build.box(self, Vector3(1.5, 0.14, 0.62), Vector3(0.65, 0.79, -0.75), blue)
+	Build.box(self, Vector3(1.5, 0.14, 0.32), Vector3(0.65, 0.79, -0.32), blue)
+	# Schaltfeld vorn rechts, Typenschild links
+	Build.box(self, Vector3(0.5, 0.26, 0.012), Vector3(1.55, 0.5, 0.384), Build.mat(Color(0.78, 0.8, 0.82), 0.5))
+	var cols := [Color(0.85, 0.1, 0.06), Color(0.1, 0.6, 0.2), Color(0.1, 0.1, 0.12), Color(0.95, 0.75, 0.05)]
+	for i in 8:
+		Build.cyl(self, 0.016, 0.014, Vector3(1.37 + (i % 4) * 0.12, 0.56 - (i / 4) * 0.12, 0.396), Build.mat(cols[i % 4], 0.5), Build.AXIS_Z)
+	Build.box(self, Vector3(0.22, 0.1, 0.008), Vector3(-0.55, 0.2, 0.384), Build.mat(Color(0.95, 0.75, 0.05), 0.5))
+	# Spindelstock auf dem Tisch
+	Build.box(self, Vector3(0.86, 1.0, 0.76), Vector3(-0.62, 1.22, -0.02), blue)
+	Build.box(self, Vector3(0.87, 0.03, 0.77), Vector3(-0.62, 1.725, -0.02), white)
+	Build.cyl(self, 0.085, 0.07, Vector3(-0.155, AXIS_H, 0), steel, Build.AXIS_X, false, 32)
+	# Reitstock mit Pinole
+	var ts := ts_node()
+	Build.box(ts, Vector3(0.36, AXIS_H - top_y + 0.09, 0.32), Vector3(0, (AXIS_H + top_y + 0.09) * 0.5, 0), white)
+	Build.cyl(ts, 0.045, 0.3, Vector3(-0.2, AXIS_H, 0), steel, Build.AXIS_X)
+	Build.cyl(ts, 0.03, 0.05, Vector3(-0.375, AXIS_H, 0), steel, Build.AXIS_X, false, 16, 0.002)
+	# Schlitten: Schürze vorn mit den Handrädern
+	Build.box(carriage, Vector3(0.66, 0.38, 0.1), Vector3(0.1, 0.72, 0.44), blue)
+	Build.box(carriage, Vector3(0.66, 0.04, 0.5), Vector3(0.1, top_y + 0.02, 0.18), white)
+	if hw_x:
+		hw_x.reparent(carriage, false)
+		hw_x.position = Vector3(0.28, 0.74, 0.5)
+	if _chip_heap:
+		_chip_heap.position = Vector3(1.3, top_y, 0.2)
+
+
+func _build_wheel_head() -> void:
+	var white := Build.mat(Color(0.9, 0.91, 0.89), 0.5)
+	var blue := Build.mat(Color(0.14, 0.32, 0.52), 0.45, 0.1)
+	var dark := Build.mat(Color(0.12, 0.13, 0.15), 0.55, 0.2)
+	var steel := Build.mat(Color(0.72, 0.73, 0.75), 0.28, 1.0)
 	var tip := _head_pos() - _post_pos(tool())
-	var c := Vector3(tip.x, AXIS_H, tip.z + WHEEL_R)
+	var c := Vector3(tip.x, AXIS_H, -WHEEL_R)
 	_wheel = Node3D.new()
 	_wheel.position = c
 	cross_slide.add_child(_wheel)
-	Build.cyl(_wheel, WHEEL_R, 0.03, Vector3.ZERO, Build.mat(Color(0.72, 0.68, 0.6), 0.9), Build.AXIS_X, false, 64)
+	Build.cyl(_wheel, WHEEL_R, 0.03, Vector3.ZERO, Build.mat(Color(0.62, 0.32, 0.5), 0.9), Build.AXIS_X, false, 64)
 	Build.cyl(_wheel, 0.05, 0.038, Vector3.ZERO, Build.mat(Color(0.3, 0.32, 0.35), 0.4, 0.8), Build.AXIS_X, false, 32)
-	Build.box(_wheel, Vector3(0.04, 0.04, 0.015), Vector3(0, 0.09, 0), Build.mat(Color(0.1, 0.1, 0.12), 0.7))
-	# Haube über der Scheibe, Motor dahinter
-	var cover := Build.mat(Color(0.72, 0.1, 0.08), 0.5)
-	Build.box(cross_slide, Vector3(0.06, 0.05, WHEEL_R * 2.1), c + Vector3(0, WHEEL_R + 0.03, 0), cover)
-	Build.box(cross_slide, Vector3(0.06, WHEEL_R + 0.02, 0.05), c + Vector3(0, WHEEL_R * 0.5, WHEEL_R + 0.03), cover)
-	Build.box(cross_slide, Vector3(0.3, 0.14, 0.32), c + Vector3(0, -0.13, WHEEL_R - 0.04), Build.mat(Color(0.2, 0.32, 0.46), 0.5, 0.1))
-	Build.cyl(cross_slide, 0.08, 0.24, c + Vector3(0.2, 0.0, WHEEL_R - 0.04), Build.mat(Color(0.12, 0.13, 0.15), 0.55, 0.2), Build.AXIS_X)
-	# Abziehwerkzeug am Bett neben dem Werkstück: Halter und Diamantspitze bei DRESS_X
-	var dark := Build.mat(Color(0.12, 0.13, 0.15), 0.55, 0.2)
+	Build.box(_wheel, Vector3(0.042, 0.04, 0.015), Vector3(0, 0.08, 0), Build.mat(Color(0.1, 0.1, 0.12), 0.7))
+	# Blaue Haube über der Scheibe, die Vorderseite zum Werkstück bleibt offen
+	var hood_w := 0.09
+	Build.box(cross_slide, Vector3(hood_w, 0.04, WHEEL_R * 2.05), c + Vector3(0, WHEEL_R + 0.04, -0.03), blue)
+	Build.box(cross_slide, Vector3(hood_w, WHEEL_R * 2.0, 0.04), c + Vector3(0, 0.0, -WHEEL_R - 0.05), blue)
+	Build.cyl(cross_slide, WHEEL_R + 0.03, 0.012, c + Vector3(-hood_w * 0.5 - 0.006, 0, 0), blue, Build.AXIS_X, false, 48)
+	# Spindellager, Sockel und Motor dahinter
+	Build.cyl(cross_slide, 0.075, 0.3, c + Vector3(0.2, 0, 0), steel, Build.AXIS_X, false, 24)
+	Build.box(cross_slide, Vector3(0.5, AXIS_H - 0.9, 0.5), Vector3(c.x + 0.16, (AXIS_H - 0.08 + 0.87) * 0.5, c.z - 0.13), white)
+	Build.box(cross_slide, Vector3(0.36, 0.28, 0.3), c + Vector3(0.24, 0.08, -0.26), white)
+	Build.box(cross_slide, Vector3(0.3, 0.2, 0.26), c + Vector3(0.24, 0.32, -0.3), Build.mat(Color(0.8, 0.82, 0.82), 0.5, 0.2))
+	Build.cyl(cross_slide, 0.008, 0.32, c + Vector3(0.0, WHEEL_R + 0.24, -0.1), steel, Build.AXIS_Y, false, 10)
+	Build.cyl(cross_slide, 0.006, 0.2, c + Vector3(0.0, WHEEL_R + 0.08, 0.05), Build.mat(Color(0.15, 0.4, 0.8), 0.5), Build.AXIS_Z, false, 10)
+	# Abziehwerkzeug am Bett hinter dem Werkstück: Halter und Diamantspitze bei DRESS_X
 	var dz := DRESS_Z * 0.001
-	var tip_z := DRESS_X * 0.001
-	Build.box(self, Vector3(0.05, AXIS_H - 0.93, 0.05), Vector3(dz, (AXIS_H + 0.93) * 0.5 - 0.02, tip_z - 0.05), dark)
+	var tip_z := -DRESS_X * 0.001
+	Build.box(self, Vector3(0.05, AXIS_H - 0.9, 0.05), Vector3(dz, (AXIS_H + 0.9) * 0.5, tip_z - 0.05), dark)
 	Build.cyl(self, 0.008, 0.05, Vector3(dz, AXIS_H, tip_z - 0.025), Build.mat(Color(0.9, 0.92, 0.95), 0.15, 0.4), Build.AXIS_Z, false, 12, 0.001)
+	Build.collider(self, Vector3(1.5, 1.0, 0.62), Vector3(0.65, 0.5, -0.75))
 
 
 func _process(delta: float) -> void:
@@ -236,6 +309,13 @@ func _rz_for(_t: Dictionary, f: float, ap: float, _vc: float, kss: bool, manual:
 
 ## Schleifprüfung: Alle Maße wie beim Drehen, dazu muss der geforderte Bereich fein genug sein.
 func evaluate_grind(job: Dictionary) -> Dictionary:
+	if flipped:
+		_reverse_part()
+		flipped = false
+		var turned := evaluate_grind(job)
+		_reverse_part()
+		flipped = true
+		return turned
 	var res := evaluate(job)
 	var g: Dictionary = job["grind"]
 	var a := clampi(int(ceil((float(g["z0"]) + 1.0) / SEG)), 0, profile.size() - 1)

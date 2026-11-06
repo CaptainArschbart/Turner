@@ -42,12 +42,12 @@ func _initialize() -> void:
 	var ld = site.door_lager
 	ok(wd.target == 0.0 and ld.target == 0.0, "Tore sind anfangs zu")
 	# Wand: Durch das geschlossene Tor kommt man nicht, durch das offene schon
-	var in_w := Vector3(11.0, 1.0, -2.0)
-	var out_w := Vector3(13.5, 1.0, -2.0)
+	var in_w := Vector3(11.0, 1.0, 3.4)
+	var out_w := Vector3(13.5, 1.0, 3.4)
 	ok(ray_blocked(in_w, out_w), "Geschlossenes Werkstatttor sperrt")
-	ok(ray_blocked(Vector3(11.0, 1.0, 3.0), Vector3(13.5, 1.0, 3.0)), "Wand neben dem Tor sperrt")
+	ok(ray_blocked(Vector3(11.0, 1.0, -2.0), Vector3(13.5, 1.0, -2.0)), "Wand neben dem Tor sperrt")
 	# Knopf innen neben dem Tor
-	await aim(p, Vector3(10.4, 0.05, -4.75), wd.to_global(Vector3(wd.WIDTH * 0.5 + 0.5, 1.35, -0.3)))
+	await aim(p, Vector3(10.4, 0.05, 0.65), wd.to_global(Vector3(wd.WIDTH * 0.5 + 0.5, 1.35, -0.3)))
 	ok(p._focus != null and p._focus.get_prompt().contains("Werkstatt-Rolltor"), "Knopf innen lässt sich anvisieren")
 	if p._focus:
 		ok(p._focus.get_prompt().contains("öffnen"), "Hinweis öffnen: " + p._focus.get_prompt())
@@ -68,7 +68,7 @@ func _initialize() -> void:
 	ok(ray_blocked(in_w, out_w), "Beim Schließen sofort wieder fest")
 	wd.set_open(true, true)
 	# Knopf außen, per Linksklick
-	await aim(p, Vector3(13.8, 0.05, -4.75), wd.to_global(Vector3(wd.WIDTH * 0.5 + 0.5, 1.35, 0.3)))
+	await aim(p, Vector3(13.8, 0.05, 0.65), wd.to_global(Vector3(wd.WIDTH * 0.5 + 0.5, 1.35, 0.3)))
 	ok(p._focus != null and p._focus.get_prompt().contains("Werkstatt-Rolltor"), "Knopf außen lässt sich anvisieren")
 	if p._focus:
 		p.click_focus()
@@ -99,7 +99,7 @@ func _initialize() -> void:
 	ok(w.order_material(spec) == "", "Bestellt")
 	ok(w.stock.is_empty() and w.deliveries.size() == 2, "Liegt vor dem Tor, nicht im Lager")
 	await process_frame
-	ok(site._deliveries.get_child_count() == 2, "Lieferungen sichtbar")
+	ok(site._deliveries.get_child_count() == 1, "Beide liegen auf einer Palette")
 	var pos: Vector3 = site.delivery_pos(0)
 	ok(pos.x > 12.0 and pos.x < 34.0 and pos.z > -8.0, "Lieferung steht im Hof")
 	ok(absf(site.delivery_pos(0).z - site.LAGER_Z) < 4.0, "Direkt vor dem Lagertor")

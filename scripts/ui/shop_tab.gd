@@ -56,8 +56,8 @@ func _ready() -> void:
 
 
 func _fill_items(grid: GridContainer) -> void:
-	grid.add_child(_card("bench", "Werkbank", "Hält die Werkzeuge einer Maschine. Steht im gelben Maschinenbereich, neben ihr haben 2 Kisten Platz."))
-	grid.add_child(_card("bench_big", "Große Werkbank", "2,6 m lang. Neben ihr haben 4 Kisten Platz."))
+	grid.add_child(_card("bench", "Werkbank", "36 Halterungen für die Werkzeuge einer Maschine. Steht im gelben Maschinenbereich, neben ihr haben 2 Kisten Platz."))
+	grid.add_child(_card("bench_big", "Große Werkbank", "2,6 m lang, 54 Halterungen. Neben ihr haben 4 Kisten Platz."))
 	grid.add_child(_card("rack", "Lagerregal", "6 Fächer für Stangen und Fertigschnitte. Jede Lagerkachel hat Platz für eines."))
 	for id in Crate.SIZES:
 		var c: Dictionary = Crate.SIZES[id]
