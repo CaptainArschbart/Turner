@@ -294,11 +294,15 @@ func close() -> void:
 	if not visible:
 		return
 	visible = false
+	if world != null and world.drawing != null:
+		world.drawing.close()
 	closed.emit()
 
 
 func show_desktop() -> void:
 	program = ""
+	if world != null and world.drawing != null:
+		world.drawing.close()
 	desktop.visible = true
 	shop_win.visible = false
 	skill_win.visible = false

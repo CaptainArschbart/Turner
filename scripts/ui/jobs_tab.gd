@@ -83,7 +83,23 @@ func _card(key: String, frist := "") -> PanelContainer:
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	l.add_theme_font_size_override("font_size", 14)
 	v.add_child(l)
+	var row := HBoxContainer.new()
+	row.name = "Knoepfe"
+	row.add_theme_constant_override("separation", 8)
+	v.add_child(row)
+	row.add_child(_button("Zeichnung", show_drawing.bind(key)))
 	return card
+
+
+func _button(text: String, cb: Callable) -> Button:
+	var b := UITheme.button(text, cb, 180)
+	b.custom_minimum_size.y = 36
+	b.focus_mode = Control.FOCUS_NONE
+	return b
+
+
+func show_drawing(key: String) -> void:
+	shop.drawing.toggle_job(JobBoard.job_of(key))
 
 
 func refresh() -> void:
@@ -100,12 +116,11 @@ func refresh() -> void:
 		var reason: String = shop.accept_error(key)
 		var card := _card(key, "Frist: %d Tage ab Annahme" % JobBoard.days_for(key))
 		var v: VBoxContainer = card.get_child(0)
-		var b := UITheme.button("Annehmen", accept.bind(key), 180)
-		b.custom_minimum_size.y = 36
-		b.focus_mode = Control.FOCUS_NONE
+		var b := _button("Annehmen", accept.bind(key))
 		b.disabled = reason != ""
-		b.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		v.add_child(b)
+		var row: HBoxContainer = v.get_node("Knoepfe")
+		row.add_child(b)
+		row.move_child(b, 0)
 		if reason != "":
 			v.add_child(_small(reason, Color(0.95, 0.7, 0.35)))
 		offers.add_child(card)
@@ -117,11 +132,10 @@ func refresh() -> void:
 	for key in shop.accepted:
 		var card := _card(key, "Frist: %s" % days_text(int(shop.deadlines.get(key, shop.day)) - int(shop.day)))
 		var v: VBoxContainer = card.get_child(0)
-		var b := UITheme.button("Zurückgeben", return_job.bind(key), 180)
-		b.custom_minimum_size.y = 36
-		b.focus_mode = Control.FOCUS_NONE
-		b.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		v.add_child(b)
+		var row: HBoxContainer = v.get_node("Knoepfe")
+		var b := _button("Zurückgeben", return_job.bind(key))
+		row.add_child(b)
+		row.move_child(b, 0)
 		taken.add_child(card)
 	taken.add_child(_small("Mit der Taste Tab wählst du außerhalb des PCs aus, welcher Auftrag oben rechts steht.", UITheme.MUTED))
 

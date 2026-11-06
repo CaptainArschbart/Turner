@@ -597,7 +597,7 @@ func _material_status(clamped: bool, stored: bool, need: String) -> String:
 	if clamped:
 		return "Material: Rohteil ist eingespannt."
 	if stored:
-		return "Material: liegt bereit. Am Regal oder aus der Kiste nehmen und mit Linksklick an der Maschine einspannen."
+		return "Material: liegt bereit. Am Regal oder aus der Kiste nehmen, ganze Stangen an der Bandsäge absägen und mit Linksklick an der Maschine einspannen."
 	if not deliveries.is_empty():
 		return "Material: Lieferungen stehen vor dem Lager-Rolltor, erst einlagern. Benötigt: %s." % need
 	return "Material fehlt, am PC im Büro kaufen: %s." % need

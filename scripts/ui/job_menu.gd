@@ -87,6 +87,7 @@ func close() -> void:
 	if not visible:
 		return
 	visible = false
+	world.drawing.close()
 	world.player.stop_operating()
 	world.player.pitch = _pitch
 
@@ -125,7 +126,7 @@ func refresh() -> void:
 				var text := JobBoard.describe_key(k, world.company)
 				if show_tips:
 					text += "\nTipp: %s" % str(JobBoard.job_of(k).get("desc", "")).replace("Tipp: ", "")
-				list.add_child(_card({"text": text}, due + world.job_status_of(k), k))
+				list.add_child(_card({"text": text, "job": JobBoard.job_of(k)}, due + world.job_status_of(k), k))
 			continue
 		var jobs := []
 		for k in world.accepted + world.grind_jobs:
@@ -180,15 +181,27 @@ func _card(entry: Dictionary, status: String, key: String) -> Control:
 		s.add_theme_font_size_override("font_size", 15)
 		s.add_theme_color_override("font_color", Color(0.95, 0.85, 0.55))
 		v.add_child(s)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
 	if key != "":
 		var shown: bool = world.tracked == key
 		var b := UITheme.button("Steht oben rechts" if shown else "Oben rechts anzeigen", select.bind(key), 260)
 		b.custom_minimum_size.y = 38
 		b.focus_mode = Control.FOCUS_NONE
 		b.disabled = shown
-		b.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		v.add_child(b)
+		row.add_child(b)
+	if entry.has("job"):
+		var d := UITheme.button("Zeichnung", show_drawing.bind(entry["job"]), 180)
+		d.custom_minimum_size.y = 38
+		d.focus_mode = Control.FOCUS_NONE
+		row.add_child(d)
+	if row.get_child_count() > 0:
+		v.add_child(row)
 	return card
+
+
+func show_drawing(job: Dictionary) -> void:
+	world.drawing.toggle_job(job)
 
 
 func select(key: String) -> void:

@@ -142,9 +142,9 @@ static func entries(category: String, lathe_job: Dictionary, mill_job: Dictionar
 		return []
 	match category:
 		"lathe":
-			return [{"title": lathe_job["title"], "text": Jobs.describe(lathe_job, grind_active(lathe_job, company))}]
+			return [{"title": lathe_job["title"], "job": lathe_job, "text": Jobs.describe(lathe_job, grind_active(lathe_job, company))}]
 		"mill":
-			return [{"title": mill_job["title"], "text": MillJobs.describe(mill_job, grind_active(mill_job, company))}]
+			return [{"title": mill_job["title"], "job": mill_job, "text": MillJobs.describe(mill_job, grind_active(mill_job, company))}]
 		"round_grinder", "flat_grinder":
 			return grind_entries(category, [lathe_job, mill_job], company)
 	return []

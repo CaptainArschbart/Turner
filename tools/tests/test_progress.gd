@@ -126,7 +126,7 @@ func _initialize() -> void:
 	# ---------------------------------------------------- Taste Tab wählt aus
 	var menu = w.job_menu
 	menu.open()
-	var btns: Array = menu.pages["lathe"].find_children("*", "Button", true, false)
+	var btns: Array = menu.pages["lathe"].find_children("*", "Button", true, false).filter(func(b): return b.text != "Zeichnung")
 	ok(btns.size() == 2, "Beide angenommenen Aufträge im Menü")
 	ok(btns[0].disabled and not btns[1].disabled, "Der angezeigte ist markiert")
 	btns[1].pressed.emit()

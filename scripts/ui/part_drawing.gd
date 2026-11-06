@@ -27,7 +27,7 @@ func _draw() -> void:
 	_text(Vector2(24, 36), str(job["title"]), 20)
 	_text(Vector2(24, 58), "Werkstoff: %s    Maße in mm" % Materials.label(str(job.get("material", Materials.DEFAULT))), SMALL)
 	var key: String = Settings.binding_text("show_drawing")
-	_text(Vector2(size.x - SIDE_W + 8, 36), "[%s] schließen" % key, SMALL)
+	_text(Vector2(size.x - SIDE_W + 8, 36), "[%s] oder Esc" % key, SMALL)
 	var area := Rect2(24, 76, size.x - SIDE_W - 48, size.y - 100)
 	if job.has("stock_d"):
 		_draw_turned(area)

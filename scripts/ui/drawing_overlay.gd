@@ -5,6 +5,7 @@ extends CanvasLayer
 ## Spielwelt: drawing_job(), office_pc, pause_menu, player, hud
 var world: Node
 var drawing: PartDrawing
+var close_button: Button
 
 
 func _ready() -> void:
@@ -17,6 +18,14 @@ func _ready() -> void:
 	drawing = PartDrawing.new()
 	drawing.custom_minimum_size = Vector2(1120, 660)
 	center.add_child(drawing)
+	# Das Blatt liegt auch über Menüs: Klicks dürfen nicht zu den verdeckten Knöpfen durchgehen
+	drawing.mouse_filter = Control.MOUSE_FILTER_STOP
+	close_button = UITheme.button("Schließen", close, 150)
+	close_button.theme = UITheme.build()
+	close_button.custom_minimum_size.y = 36
+	close_button.focus_mode = Control.FOCUS_NONE
+	close_button.position = Vector2(drawing.custom_minimum_size.x - 170.0, 16.0)
+	drawing.add_child(close_button)
 
 
 ## Eine bestimmte Zeichnung zeigen, zum Beispiel aus dem Entwicklerprogramm.
@@ -24,6 +33,18 @@ func show_job(job: Dictionary) -> void:
 	drawing.job = job
 	drawing.queue_redraw()
 	visible = true
+
+
+func close() -> void:
+	visible = false
+
+
+## Knopf in den Auftragsmenüs: Zeichnung dieses Auftrags zeigen, ein zweiter Druck schließt sie.
+func toggle_job(job: Dictionary) -> void:
+	if visible and drawing.job == job:
+		close()
+	else:
+		show_job(job)
 
 
 func toggle() -> void:
