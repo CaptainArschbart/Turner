@@ -138,6 +138,17 @@ static func _fix_materials(root: Node, blank: Array = []) -> void:
 				(mi as MeshInstance3D).set_surface_override_material(s, Build.mat(v[0], v[1], v[2]))
 
 
+## Material eines Modellteils, auch wenn es nur in der Mesh-Oberfläche steckt.
+static func _surface_mat(mi: MeshInstance3D) -> Material:
+	var m := mi.get_active_material(0)
+	if m == null and mi.mesh and mi.mesh.get_surface_count() > 0:
+		m = mi.mesh.surface_get_material(0)
+	# Im Export fehlerhafte Materialien (ohne gültige RID) nicht übernehmen
+	if m == null or not m.get_rid().is_valid():
+		return null
+	return m
+
+
 ## Die Pflanze ist in Blender ein Geometry-Nodes-Aufbau, im Export kommen nur zwei Stiele mit je einem
 ## Blatt an. Aus Stiel und Blatt des Modells wird hier ein voller Busch: fünf Stiele, je fünf Blätter.
 static func _grow_plant(inner: Node3D) -> void:
@@ -150,13 +161,13 @@ static func _grow_plant(inner: Node3D) -> void:
 	var base_y := stem.position.y
 	var stem_len := stem.mesh.get_aabb().size.y * s
 	var leaf_mesh := leaf.mesh
-	var leaf_mat := leaf.get_active_material(0)
-	var stem_mat := stem.get_active_material(0)
+	var leaf_mat := _surface_mat(leaf)
+	var stem_mat := _surface_mat(stem)
 	for nm in ["tIGE_003", "FEUILLE", "FEUILLE_003"]:
 		var old := plant.find_child(nm, true, false)
 		if old and old != stem:
 			old.get_parent().remove_child(old)
-			old.free()
+			old.queue_free()
 	var heights := [1.0, 0.8, 0.92, 0.7, 0.86]
 	var k := 0
 	for i in 5:
@@ -169,7 +180,8 @@ static func _grow_plant(inner: Node3D) -> void:
 		var len_i: float = stem_len * heights[i]
 		var st := MeshInstance3D.new()
 		st.mesh = stem.mesh
-		st.material_override = stem_mat
+		if stem_mat:
+			st.material_override = stem_mat
 		st.transform = Transform3D(b.scaled(Vector3(s, s * heights[i], s)), root_p)
 		plant.add_child(st)
 		var up := b * Vector3.UP
@@ -177,7 +189,8 @@ static func _grow_plant(inner: Node3D) -> void:
 			var f := 0.35 + j * 0.15
 			var lf := MeshInstance3D.new()
 			lf.mesh = leaf_mesh
-			lf.material_override = leaf_mat
+			if leaf_mat:
+				lf.material_override = leaf_mat
 			var yaw := a + k * 2.4                # Goldener Winkel, damit sich die Blätter nicht decken
 			k += 1
 			var ls := s * (0.85 - j * 0.07)

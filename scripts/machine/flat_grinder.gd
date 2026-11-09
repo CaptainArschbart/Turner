@@ -275,7 +275,7 @@ func _build_model() -> Dictionary:
 	Build.box(self, Vector3(0.38, 0.1, 0.46), Vector3(1.28, 0.3, 0.0), red)
 	Build.box(self, Vector3(0.4, 0.12, 0.48), Vector3(1.28, 0.85, 0.0), red, false, Vector3(0.3, 0, 0))
 	for i in 8:
-		Build.cyl(self, 0.012, 0.012, Vector3(1.16 + (i % 4) * 0.08, 0.92 - (i / 4) * 0.03, 0.02 + (i / 4) * 0.09), black if i % 3 else Build.mat(Color(0.2, 0.6, 0.25), 0.5), Build.AXIS_Y)
+		Build.cyl(self, 0.012, 0.012, Vector3(1.16 + (i % 4) * 0.08, 0.92 - floorf(i / 4.0) * 0.03, 0.02 + floorf(i / 4.0) * 0.09), black if i % 3 else Build.mat(Color(0.2, 0.6, 0.25), 0.5), Build.AXIS_Y)
 	return {"saddle": saddle_n, "table": table_n, "vise": vise, "head": head_n, "spindle": spindle_n,
 		"hw_x": wheel_x, "hw_y": wheel_y, "hw_z": wheel_z, "screen": screen, "led": led, "lamp": lamp_n,
 		"panel": p["panel"], "dials": p["dials"]}

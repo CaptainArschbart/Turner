@@ -107,14 +107,7 @@ static func build(root: Node3D) -> Dictionary:
 	# Kranbahn + Brücke (gelb)
 	for z in [-7.4, 7.4]:
 		Build.box(root, Vector3(W, 0.35, 0.3), Vector3(0, 5.3, z), steel_blue)
-	var crane := Node3D.new()
-	crane.position = Vector3(-6.0, 0, 0)      # unter dem Dachträger, zwischen den Leuchtenseilen
-	root.add_child(crane)
-	Build.box(crane, Vector3(0.5, 0.6, 15.0), Vector3(0, 5.6, 0), yellow)
-	Build.box(crane, Vector3(0.6, 0.45, 0.6), Vector3(0, 5.1, -1.5), anth)
-	Build.cyl(crane, 0.015, 2.0, Vector3(0, 3.9, -1.5), Build.mat(Color(0.3, 0.3, 0.3), 0.4, 1.0))
-	Build.box(crane, Vector3(0.12, 0.18, 0.06), Vector3(0, 2.85, -1.5), yellow)
-	Build.label(crane, "5 t", Vector3(0.26, 5.6, 2.0), 0.01, Color(0.1, 0.1, 0.1), 64, PI / 2)
+	# Brücke, Katze und Haken fahren: HallCrane (world.gd)
 
 	# ---------------- Hallenleuchten aus models/non_machine_parts.glb: Röhre mit Schutzgitter, an zwei
 	# Seilpaaren von der Decke. Mittig zwischen den Dachträgern, damit die Seile (±0,83 m) frei hängen.

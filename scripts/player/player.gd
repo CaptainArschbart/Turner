@@ -10,6 +10,7 @@ signal pin_requested(collider: Object, point: Vector3, normal: Vector3)
 const WALK := 3.2
 const SPRINT := 5.8
 const CROUCH := 1.6
+const BIN_SPEED := 2.0
 const JUMP := 4.2
 const GRAVITY := 9.81
 const REACH := 2.6               # so weit reicht der Sichtstrahl
@@ -52,6 +53,12 @@ var drawing_texture: Callable     # Spielwelt: Bild der Zeichnung zu einem Auftr
 var cigarette: Cigarette          # Zigarette im Mundwinkel, die Hände bleiben frei
 var machine_lookup: Callable      # Spielwelt: Maschinen-id -> Maschine
 var pallet_drop: Callable         # Spielwelt: getragene Palette bei (x, z) abstellen -> Fehlertext
+var bin_drop: Callable            # Spielwelt: geschobenen Spänebehälter vor der Figur abstellen
+var crane_click: Callable         # Spielwelt: Linksklick mit dem Kran-Hängetaster (Last ein-/aushängen)
+var crane_release: Callable       # Spielwelt: Kran-Fernbedienung in die Halterung legen
+var crane_drop_hint: Callable     # Spielwelt: Hinweis, wohin die Fernbedienung gehört
+var crane_bench: Callable         # Spielwelt: (Collider, Punkt, Normale) -> Werkbank unter dem Blick oder ""
+var crane_put: Callable           # Spielwelt: (Collider, Punkt, Normale) -> Fernbedienung dort ablegen, true = abgelegt
 var jack_lift: Callable           # Spielwelt: Leertaste mit Hubwagen (Palette anheben oder absenken)
 var jack_drop: Callable           # Spielwelt: Hubwagen loslassen und abstellen (E oder Q)
 var jack_abandon: Callable        # Spielwelt: Hubwagen sofort an seiner Stelle abstellen (Figur zu weit weg)
@@ -161,6 +168,16 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("toggle_view"):
 		third_person = not third_person
 		_update_camera()
+	elif event.is_action_pressed("interact") and carrying_pendant() and not build_mode:
+		# Fernbedienung: E legt sie nur an der Halterung ab, sonst bleibt sie in der Hand
+		get_viewport().set_input_as_handled()
+		if _focus and _focus.has_method("remote_holder"):
+			if crane_release.is_valid():
+				crane_release.call()
+		elif ray.is_colliding() and crane_put.is_valid() and crane_put.call(ray.get_collider(), ray.get_collision_point(), ray.get_collision_normal()):
+			_focus = null
+		elif crane_drop_hint.is_valid():
+			crane_drop_hint.call()
 	elif event.is_action_pressed("interact") and driving_jack() and not build_mode:
 		get_viewport().set_input_as_handled()
 		if jack_drop.is_valid():
@@ -200,6 +217,14 @@ func right_click_focus() -> bool:
 func click_focus() -> bool:
 	# Hubwagen: Linksklick tut nichts, E nimmt Paletten auf und setzt sie ab, Q stellt den Hubwagen ab
 	if driving_jack():
+		return true
+	# Kran-Fernbedienung in der Hand: Linksklick hängt die Last ein oder aus, an der Halterung legt er sie ab
+	if carrying_pendant():
+		if _focus and _focus.has_method("remote_holder"):
+			if crane_release.is_valid():
+				crane_release.call()
+		elif crane_click.is_valid():
+			crane_click.call()
 		return true
 	# Palette in den Händen: Linksklick tut nichts, abgestellt wird mit Q, aufgelegt mit E
 	if carrying_pallet():
@@ -266,6 +291,8 @@ func _physics_process(delta: float) -> void:
 		speed = JACK_SPEED_LOADED if jack_load() > 0 else JACK_SPEED
 	elif crouch:
 		speed = CROUCH
+	elif carrying_bin():
+		speed = BIN_SPEED          # voller Spänebehälter auf Rollen: langsam schieben
 	elif Input.is_action_pressed("sprint") and not cigarette.craving:
 		speed = SPRINT
 	speed *= cigarette.work_factor()
@@ -375,6 +402,13 @@ func _update_focus() -> void:
 			_set_prompt("[%s] Palette am Zielpunkt abstellen" % Settings.binding_text("drop"))
 		return
 	_focus = target
+	# Fernbedienung in der Hand: an der Halterung oder auf einer Werkbankplatte ablegen
+	if carrying_pendant() and not (target and target.has_method("remote_holder")):
+		if ray.is_colliding() and crane_bench.is_valid() and str(crane_bench.call(ray.get_collider(), ray.get_collision_point(), ray.get_collision_normal())) != "":
+			_set_prompt("[%s] Fernbedienung auf die Werkbank legen    [Linksklick] Kranlast ein- / aushängen" % Settings.binding_text("interact"))
+		else:
+			_set_prompt("[Pfeiltasten] Kran fahren    [%s / %s] Haken    [Linksklick] Last ein- / aushängen" % [Settings.binding_text("crane_up"), Settings.binding_text("crane_down")])
+		return
 	if carrying_drawing():
 		var where := "an diese Fläche" if ray.is_colliding() else "(auf eine Fläche zielen)"
 		_set_prompt("[Linksklick] Zeichnung %s pinnen    [Rechtsklick] Weglegen" % where)
@@ -386,7 +420,11 @@ func _update_focus() -> void:
 	if target and carrying_part() and target.has_method("get_machine") and not target.has_method("carry_prompt"):
 		text = "[Linksklick] Teil wieder einspannen    [Rechtsklick] Andersherum    |    %s" % text
 	elif target and not carry.is_empty() and target.has_method("get_machine"):
-		if target.has_method("carry_prompt") and not carrying_bin():
+		if carrying_bin():
+			text = "[Linksklick] Spänewanne in den Behälter leeren    |    %s" % text
+		elif carrying_pendant():
+			pass
+		elif target.has_method("carry_prompt"):
 			text = target.carry_prompt(carry)
 		elif carrying_semi():
 			text = "[Linksklick] Zum Schleifen einspannen    |    %s" % text
@@ -474,6 +512,11 @@ func _mount_tool(holder: Node3D, model: Node3D, upright: bool) -> float:
 ## Trägt die Spielfigur gerade einen Spänebehälter?
 func carrying_bin() -> bool:
 	return str(carry.get("kind", "")) == "chip_bin"
+
+
+## Hält die Spielfigur den Hängetaster des Hallenkrans?
+func carrying_pendant() -> bool:
+	return str(carry.get("kind", "")) == "pendant"
 
 
 ## Trägt die Spielfigur eine leere Europalette?
@@ -690,6 +733,15 @@ func set_carry(item: Dictionary) -> void:
 	if str(item.get("kind", "")) == "pallet":
 		_set_carry_pallet(item)
 		return
+	if str(item.get("kind", "")) == "pendant":
+		clear_held()
+		carry = item
+		for holder in _carry_holders():
+			item_model(holder, item)
+		arms.set_mode("box", {"half": 0.05, "top": 0.13})
+		body.set_holding("carry", 0.07)
+		held_changed.emit("In der Hand: Kran-Fernbedienung")
+		return
 	if str(item.get("kind", "")) == "jack":
 		_set_carry_jack(item)
 		return
@@ -729,6 +781,8 @@ func item_model(holder: Node3D, item: Dictionary, full := false) -> void:
 	match str(item.get("kind", "")):
 		"chip_bin":
 			_bin_model(holder, item)
+		"pendant":
+			HallCrane.remote_model(holder)
 		"pallet":
 			_pallet_model(holder)
 		"drawing":
@@ -773,6 +827,16 @@ func drop() -> DroppedItem:
 	if driving_jack():
 		if jack_drop.is_valid():
 			jack_drop.call()
+		return null
+	# Die Kran-Fernbedienung fällt nicht, sie gehört in ihre Halterung
+	if carrying_pendant():
+		if crane_drop_hint.is_valid():
+			crane_drop_hint.call()
+		return null
+	# Spänebehälter rollen, sie werden vor der Figur abgestellt
+	if carrying_bin():
+		if bin_drop.is_valid():
+			bin_drop.call()
 		return null
 	# Paletten fallen nicht, sie werden vor der Figur abgestellt
 	if carrying_pallet():
@@ -893,7 +957,8 @@ func set_state(d: Dictionary) -> void:
 	player_id = str(d.get("id", player_id))
 	location = str(d.get("location", "site"))
 	var c = d.get("carry", {})
-	if c is Dictionary and not c.is_empty():
+	# Kran-Hängetaster und Spänebehälter bleiben beim Laden an ihrem Platz
+	if c is Dictionary and not c.is_empty() and not str(c.get("kind", "")) in ["pendant", "chip_bin"]:
 		set_carry(c)
 	var cig = d.get("cigarette", {})
 	if cig is Dictionary:

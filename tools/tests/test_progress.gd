@@ -337,7 +337,7 @@ func _initialize() -> void:
 	ok(w.place_crate(-1, "crate_m", Vector2(1.9, 0.4), 0) == "", "Zweite Kiste")
 	ok(w.place_crate(-1, "crate_s", Vector2(-1.5, 1.0), 0) != "", "Neben einer normalen Werkbank haben nur 2 Platz")
 	ok(w.place_crate(-1, "crate_s", Vector2(0.6, 0.35), 0) == "", "Auf der Platte zählt die Grenze nicht")
-	ok(w.layout.crate_is_on_top(w.layout.crates[2]) and is_equal_approx(w.crate_nodes[2].position.y, ToolBench.TOP_Y), "Kiste steht auf der Werkbank")
+	ok(w.layout.crate_is_on_top(w.layout.crates[2]) and is_equal_approx(w.crate_nodes[2].position.y, load("res://scripts/world/tool_bench.gd").TOP_Y), "Kiste steht auf der Werkbank")
 	var piece := {"material": "S235", "kind": "cut", "d": 0.0, "w": 60.0, "h": 40.0, "l": 100.0}
 	var bar := {"material": "S235", "kind": "round", "d": 60.0, "w": 0.0, "h": 0.0, "l": 3000.0}
 	var sawn := {"material": "S235", "kind": "round", "d": 60.0, "w": 0.0, "h": 0.0, "l": 160.0, "sawn": true}
@@ -415,14 +415,20 @@ func _initialize() -> void:
 	ok(l.spindle_on, "Volle Wanne stoppt die Spindel nicht")
 	l.spindle_on = false
 	l.spindle_speed = 0.0
-	# Behälter kaufen und aufstellen: Er ist zu groß und zu schwer zum Tragen
+	# Behälter kaufen und aufstellen: Er rollt, die Figur schiebt ihn zur Maschine
 	ok(w.buy_equipment("bin_s") == "", "Spänebehälter gekauft")
 	ok(w.place_bin(-1, "bin_s", Vector2(0, -2), 0) != "", "Nicht auf der Drehmaschine")
 	ok(w.place_bin(-1, "bin_s", Vector2(4.0, 5.0), 0) == "", "Aufgestellt: " + w.layout.check_bin(Vector2(4.0, 5.0), 0))
 	var bin: Dictionary = w.layout.bins[0]
-	ok(w.bin_prompt(0).contains("zu schwer") and not w.bin_prompt(0).contains("Aufnehmen"), "Hinweis am Behälter: zu schwer")
+	ok(w.bin_prompt(0).contains("schieben"), "Hinweis am Behälter: schieben")
 	w.bin_click(0)
-	ok(p.carry.is_empty() and not p.carrying_bin() and not bin["out"], "Behälter lässt sich nicht aufheben")
+	ok(p.carrying_bin() and bin["out"], "Behälter wird geschoben")
+	l.tray.clear()
+	l.tray.add("baustahl", 4.0)
+	ok(w.clamp_carried(l) == "" and l.tray.is_empty() and is_equal_approx(bin["chips"].kg, 4.0), "Spänewanne in den Behälter geleert")
+	w.bin_click(0)
+	ok(p.carry.is_empty() and not bin["out"], "Zurück an den Stellplatz")
+	bin["chips"].clear()
 	ok(not l.has_chip_bin_spot and l.find_child("Spaenekiste", true, false) == null, "Konventionelle Drehmaschine hat keine eigene Spänekiste")
 	# Container
 	ok(w.containers.size() == 3, "Container für Stahl, Aluminium und Messing")

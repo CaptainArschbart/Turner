@@ -67,4 +67,5 @@ func delete_slot(i: int) -> void:
 
 static func format_time(sec: float) -> String:
 	var s := int(sec)
+	@warning_ignore("integer_division")
 	return "%d:%02d h" % [s / 3600, (s / 60) % 60]

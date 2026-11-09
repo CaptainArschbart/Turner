@@ -32,6 +32,7 @@ const DEFAULT_BENCH := {"lathe": [0.6, 0.35, 2], "mill": [6.85, -0.95, 2]}
 const OBSTACLES := [
 	Rect2(9.0, 1.15, 3.0, 4.5), Rect2(6.4, 6.4, 2.3, 1.6),
 	Rect2(2.4, 7.55, 2.0, 0.45),     # Durchgang zum Qualitätsmanagement
+	Rect2(8.75, 7.2, 1.0, 0.8),      # vor der Halterung der Kran-Fernbedienung
 ]
 
 var machines: Dictionary = {}     # id -> {"pos": Vector2, "rot": int}
@@ -281,6 +282,7 @@ func to_state() -> Dictionary:
 		var e := {"size": b["size"], "pos": [b["pos"].x, b["pos"].y], "rot": b["rot"], "chips": b["chips"].to_state(), "out": b["out"]}
 		if b.has("machine"):
 			e["machine"] = b["machine"]
+			e["away"] = bool(b.get("away", false)) or bool(b.get("hooked", false))
 		ch.append(e)
 	var sh := []
 	for s in shelves:

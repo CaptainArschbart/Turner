@@ -160,7 +160,7 @@ func _initialize() -> void:
 			ok(c.chip_bin == eb["chips"] and c.chip_bin_node == w.bin_nodes[bi], "Förderer füllt genau diesen Behälter")
 			var spot: Vector3 = (c.transform * c.chip_bin_spot).origin
 			ok(w.bin_nodes[bi].position.distance_to(Vector3(spot.x, 0, spot.z)) < 0.01, "Behälter steht unter dem Abwurf")
-			ok(w.bin_prompt(bi).contains("zu schwer") and w.bin_prompt(bi).contains("Späneförderer"), "Hinweis am Behälter")
+			ok(w.bin_prompt(bi).contains("kran") and w.bin_prompt(bi).contains("Späneförderer"), "Hinweis am Behälter: " + w.bin_prompt(bi))
 			w.bin_click(bi)
 			ok(p.carry.is_empty() or not p.carrying_bin(), "Lässt sich nicht aufheben")
 			ok(w.place_bin(bi, "", Vector2(6.0, 6.0), 0) == w.MACHINE_BIN_FIXED, "Steht fest unter dem Förderer")
@@ -180,6 +180,45 @@ func _initialize() -> void:
 			ok(w.layout.check_machine("cnc_lathe", Vector2(-1.0, 4.0), 0) == "", "Eigene Kiste blockiert die Maschine nicht")
 			w._sync_machine_bins()
 			ok(w.layout.bins.filter(func(b): return str(b.get("machine", "")) == "cnc_lathe").size() == 1, "Kiste nicht doppelt")
+			# Hallenkran: Kiste herausheben, beiseitestellen (der Förderer staut), wieder darunterstellen
+			var cr = w.crane
+			var bh: float = w.crane_bin_height(bi)
+			cr.bridge_x = spot.x
+			cr.trolley_z = spot.z
+			cr.hook_y = cr.SLING + bh + 0.2
+			cr.hook_click()
+			ok(cr.hooked == bi and c.chip_bin_away, "Kran hebt die Spänekiste unter dem Förderer heraus")
+			var free := Vector2.INF
+			for cand in [Vector2(spot.x, spot.z - 3.5), Vector2(spot.x, spot.z + 3.5), Vector2(spot.x - 3.5, spot.z), Vector2(spot.x + 3.5, spot.z), Vector2(spot.x + 3.5, spot.z - 3.5)]:
+				if free == Vector2.INF and w.layout.check_bin(cand, int(eb["rot"]), bi, "bin_l") == "":
+					free = cand
+			ok(free != Vector2.INF, "Freier Platz neben der E50")
+			if free != Vector2.INF:
+				cr.bridge_x = free.x
+				cr.trolley_z = free.y
+				cr.hook_y = 0.0
+				cr._physics_process(0.016)
+				cr.hook_click()
+				ok(cr.hooked < 0 and bool(eb.get("away", false)) and c.chip_bin_away, "Kiste steht beiseite")
+				ok(w.bin_prompt(bi).contains("schieben"), "Beiseite lässt sie sich schieben: " + w.bin_prompt(bi))
+				c.tray.add("baustahl", 2.0)
+				c._physics_process(0.016)
+				ok(is_equal_approx(eb["chips"].kg, 3.0) and c.tray.kg > 1.9, "Ohne Kiste trägt der Förderer nichts ab")
+				var away_saved: Dictionary = JSON.parse_string(JSON.stringify(w.layout.to_state()))
+				ok(away_saved["bins"].any(func(b): return str(b.get("machine", "")) == "cnc_lathe" and bool(b.get("away", false))), "Beiseite gestellt gespeichert")
+				cr.hook_y = cr.SLING + bh + 0.2
+				cr.hook_click()
+				ok(cr.hooked == bi, "Wieder eingehängt")
+				cr.bridge_x = spot.x + 0.3
+				cr.trolley_z = spot.z
+				cr.hook_y = 0.0
+				cr._physics_process(0.016)
+				cr.hook_click()
+				ok(cr.hooked < 0 and not bool(eb.get("away", false)) and not c.chip_bin_away, "Kiste rastet unter dem Förderer ein")
+				ok(w.bin_nodes[bi].position.distance_to(Vector3(spot.x, 0, spot.z)) < 0.01, "Wieder genau unter dem Abwurf")
+				c._physics_process(0.016)
+				ok(is_equal_approx(eb["chips"].kg, 5.0), "Förderer trägt wieder ab")
+				c.tray.clear()
 			c.powered = was_on
 			c.conveyor_on = true
 			eb["chips"].clear()
@@ -200,7 +239,9 @@ func _initialize() -> void:
 	ok(w.clamp_carried(c) == "" and c.has_part and not l.has_part, "Rundmaterial landet in der CNC-Maschine")
 	p.clear_carry()
 	c.clear_workpiece()
-	# HUD folgt der Maschine
+	# HUD folgt der Maschine (die CNC-Maschine muss dafür hochgefahren sein)
+	c.powered = true
+	c.booting = 0.0
 	c.interact(p)
 	for i in 3:
 		await process_frame
@@ -424,7 +465,19 @@ func _initialize() -> void:
 
 	# ---------------------------------------------------- Rundschleifmaschine
 	ok(w.buy_equipment("round_grinder") == "", "Rundschleifmaschine kaufen")
-	ok(w.place_machine("round_grinder", Vector2(-4.0, -5.0) if false else Vector2(5.3, 2.8), 0) == "", "Aufstellen: " + w.layout.check_machine("round_grinder", Vector2(5.3, 2.8), 0))
+	# Freien Platz suchen: Die Hallenbelegung ändert sich mit den Maschinenmodellen
+	var rg_at := Vector2.INF
+	# Die Grundhalle ist mit sechs Maschinen voll: zwei Hallenreihen im Westen dazukaufen
+	w.money += 100000
+	for cx in [-4, -5]:
+		for cz in range(-5, 4):
+			w.buy_tile("workshop", Vector2i(cx, cz))
+	for gx in range(-80, 41):
+		for gz in range(-24, 25):
+			var q := Vector2(gx * 0.25, gz * 0.25)
+			if rg_at == Vector2.INF and w.layout.check_machine("round_grinder", q, 0) == "":
+				rg_at = q
+	ok(rg_at != Vector2.INF and w.place_machine("round_grinder", rg_at, 0) == "", "Rundschleifmaschine aufstellen: %s / %s" % [rg_at, w.layout.check_machine("round_grinder", Vector2(5.3, 2.8), 0)])
 	var rg = w.extra_machines["round_grinder"]
 	ok(rg.grinder_type == "round" and rg.conventional, "Echte Rundschleifmaschine")
 	ok(not rg.has_cutter() and rg.tool_list().size() == 9, "Startet ohne Scheibe, neun Scheiben im Angebot")

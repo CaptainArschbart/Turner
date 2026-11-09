@@ -193,7 +193,7 @@ func _build_body() -> void:
 	Build.box(self, Vector3(0.5, 0.26, 0.012), Vector3(1.55, 0.5, 0.384), Build.mat(Color(0.78, 0.8, 0.82), 0.5))
 	var cols := [Color(0.85, 0.1, 0.06), Color(0.1, 0.6, 0.2), Color(0.1, 0.1, 0.12), Color(0.95, 0.75, 0.05)]
 	for i in 8:
-		Build.cyl(self, 0.016, 0.014, Vector3(1.37 + (i % 4) * 0.12, 0.56 - (i / 4) * 0.12, 0.396), Build.mat(cols[i % 4], 0.5), Build.AXIS_Z)
+		Build.cyl(self, 0.016, 0.014, Vector3(1.37 + (i % 4) * 0.12, 0.56 - floorf(i / 4.0) * 0.12, 0.396), Build.mat(cols[i % 4], 0.5), Build.AXIS_Z)
 	Build.box(self, Vector3(0.22, 0.1, 0.008), Vector3(-0.55, 0.2, 0.384), Build.mat(Color(0.95, 0.75, 0.05), 0.5))
 	# Spindelstock auf dem Tisch
 	Build.box(self, Vector3(0.86, 1.0, 0.76), Vector3(-0.62, 1.22, -0.02), blue)

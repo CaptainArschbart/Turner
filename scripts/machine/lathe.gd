@@ -97,6 +97,8 @@ var chip_bin_node: ChipBin
 ## E50: Stellplatz der Spänekiste unter dem Abwurf in Maschinenkoordinaten, has_chip_bin_spot = es gibt ihn.
 var chip_bin_spot := Transform3D()
 var has_chip_bin_spot := false
+## E50: Spänekiste mit dem Kran herausgehoben, der Förderer wirft ins Leere (die Späne stauen sich).
+var chip_bin_away := false
 var conveyor_on := true
 var _conv_led: MeshInstance3D
 var _conv_led_on: Material
@@ -2603,7 +2605,10 @@ func _check_tray() -> void:
 	if _cut_t <= 0.0:
 		return
 	if e50:
-		if chip_bin.is_full():
+		if chip_bin_away:
+			if tray.fraction() >= 0.5:
+				_warn("Keine Spänekiste unter dem Förderer: Die Späne stauen sich in der Maschine. Kiste mit dem Kran zurückstellen.")
+		elif chip_bin.is_full():
 			_warn("Spänekiste unter dem Förderer voll: Die Späne stauen sich in der Maschine.")
 		elif not conveyor_on and tray.fraction() >= 0.5:
 			_warn("Späneförderer ist aus: Die Späne stauen sich in der Maschine. Förderer am Schaltkasten einschalten.")
@@ -3212,7 +3217,7 @@ func _physics_process(delta: float) -> void:
 		refresh_tray()
 	# E50: Der laufende Späneförderer trägt die Wanne in die Spänekiste ab (passt nichts mehr hinein
 	# oder liegt dort eine andere Spänesorte, stauen sich die Späne in der Wanne)
-	if e50 and conveyor_on and powered and not tray.is_empty() and chip_bin.take_from(tray) > 0.0:
+	if e50 and conveyor_on and powered and not chip_bin_away and not tray.is_empty() and chip_bin.take_from(tray) > 0.0:
 		refresh_tray()
 	_check_tray()
 	coolant_fx.emitting = coolant and spindle_speed > 10.0

@@ -66,8 +66,8 @@ const NIGHT_SECONDS := 720.0      # die Nacht nach Feierabend (18 bis 6 Uhr) dau
 const REP_DONE := 2.0             # Ansehen für einen erfolgreichen Auftrag
 const REP_LATE := -8.0            # Ansehen für eine verpasste Frist
 const REP_SCRAP := -3.0           # Ansehen für Ausschuss beim Schleifen
-## Die Spänekiste unter dem Späneförderer steht fest, sie wird später mit dem Kran gewechselt.
-const MACHINE_BIN_FIXED := "Die Spänekiste steht fest unter dem Späneförderer."
+## Die Spänekiste unter dem Späneförderer steht fest, sie wird mit dem Hallenkran herausgehoben.
+const MACHINE_BIN_FIXED := "Die Spänekiste steht unter dem Späneförderer: mit dem Hallenkran herausheben."
 var play_time := 0.0
 var stock: Array = []             # bestelltes Rohmaterial im Lager
 var free_mode := false            # Testmodus: alles gratis, wird nicht gespeichert
@@ -75,6 +75,7 @@ var time_scale := 1.0             # Zeitraffer aus dem Debug-Menü, wird nicht g
 var debug_menu: DebugMenu
 var deliveries: Array = []        # bestellt, steht noch vor dem Lagertor
 var site: Site
+var crane: HallCrane              # Hallenkran mit Funkfernbedienung
 var job_menu: JobMenu
 var rack_menu: RackMenu
 var places: Places                # Orte außerhalb des Geländes: Supermarkt, je Spieler ein Zuhause
@@ -116,6 +117,9 @@ const CONTAINER_SORTS := ["stahl", "aluminium", "messing"]
 func _ready() -> void:
 	_build_environment()
 	_lights = Workshop.build(self)
+	crane = HallCrane.new()
+	crane.world = self
+	add_child(crane)
 	site = Site.new()
 	site.world = self
 	add_child(site)
@@ -229,6 +233,12 @@ func _ready() -> void:
 	player.material_to_machine.connect(ask_clamp)
 	player.gate = _work_blocked
 	player.pallet_drop = put_pallet
+	player.bin_drop = bin_set_down
+	player.crane_click = crane.hook_click
+	player.crane_release = crane.release
+	player.crane_drop_hint = crane.drop_hint
+	player.crane_bench = crane_bench_at
+	player.crane_put = crane_put_on_bench
 	player.jack_lift = jack_lift
 	player.jack_drop = jack_park
 	player.jack_abandon = jack_abandon
@@ -504,6 +514,7 @@ func sky_hour() -> float:
 ## Uhrzeit: Tagsüber läuft sie von 6 bis 18 Uhr, nach Feierabend weiter durch die Nacht.
 func clock_text() -> String:
 	var minutes := int(sky_hour() * 60.0) % (24 * 60) if day_started else 6 * 60
+	@warning_ignore("integer_division")
 	return "Tag %d   %02d:%02d" % [day, minutes / 60, minutes % 60]
 
 
@@ -1801,6 +1812,10 @@ func take_from_stock(i: int) -> String:
 func clamp_carried(machine: Node) -> String:
 	if player.carry.is_empty():
 		return ""
+	if player.carrying_bin():
+		return pour_tray(machine)
+	if player.carrying_pendant():
+		return ""
 	if machine is BandSaw:
 		return saw_load(machine)
 	if player.carrying_semi():
@@ -2383,6 +2398,11 @@ func _rebuild_stands() -> void:
 	player._focus = null
 	# Nicht sofort free(): der Aufruf kommt oft aus click() genau eines dieser Knoten (Palettenstapel),
 	# der dann gesperrt ist und als Geist mit veraltetem Index stehen bliebe. Aus dem Baum nehmen, später löschen.
+	# Die Nummern der Behälter können sich ändern: Der Kran hängt seine Last aus, sie bleibt am Stellplatz
+	if crane and crane.hooked >= 0:
+		for b in layout.bins:
+			b.erase("hooked")
+		crane.drop_hook()
 	for n in crate_nodes + bin_nodes + shelf_nodes:
 		if is_instance_valid(n):
 			if n.get_parent():
@@ -2441,14 +2461,190 @@ func bin_prompt(i: int) -> String:
 	var what := "%s: %d von %d kg" % [title, int(b["chips"].kg), int(b["chips"].capacity)]
 	if not b["chips"].is_empty():
 		what += " %sspäne" % ChipTray.SORT_TITLES[b["chips"].sort()]
+	if bool(b.get("hooked", false)):
+		return "%s    |    Hängt am Hallenkran" % what
+	if b["out"]:
+		if player.carrying_bin() and int(player.carry["bin"]) == i:
+			return "[Linksklick] Zurück an den Stellplatz    |    %s" % what
+		return what
+	if _bin_under_conveyor(b):
+		return "%s    |    Unter dem Späneförderer der %s: zum Leeren mit dem Hallenkran herausheben" % [what, Layout.SPECS[str(b["machine"])]["title"]]
 	if str(b.get("machine", "")) != "":
-		what += "    |    Unter dem Späneförderer der %s" % Layout.SPECS[str(b["machine"])]["title"]
-	return "%s    |    Zu groß und zu schwer zum Tragen" % what
+		what += "    |    Spänekiste der %s, mit dem Kran wieder unter den Förderer stellen" % Layout.SPECS[str(b["machine"])]["title"]
+	if player.hands_free():
+		return "[Linksklick] Auf den Rollen schieben    |    %s" % what
+	return what
 
 
-## Linksklick auf einen Spänebehälter: Er ist zu groß und zu schwer zum Aufheben.
-func bin_click(_i: int) -> void:
-	pass
+## Steht der Behälter als Spänekiste unter dem Förderer seiner Maschine?
+func _bin_under_conveyor(b: Dictionary) -> bool:
+	return str(b.get("machine", "")) != "" and not bool(b.get("away", false))
+
+
+## Linksklick auf einen Spänebehälter: Er rollt, die Figur schiebt ihn zur Maschine und zum Container.
+## Die Spänekiste unter dem Förderer ist eingebaut, sie kommt nur mit dem Hallenkran heraus.
+func bin_click(i: int) -> void:
+	var b: Dictionary = layout.bins[i]
+	if bool(b.get("hooked", false)):
+		return
+	if b["out"]:
+		if player.carrying_bin() and int(player.carry["bin"]) == i:
+			_bin_back(i)
+		return
+	if _bin_under_conveyor(b):
+		hud.show_message(MACHINE_BIN_FIXED, Color(1, 0.75, 0.2))
+		return
+	if not player.hands_free():
+		return
+	b["out"] = true
+	player.set_carry({"kind": "chip_bin", "bin": i, "title": ChipBin.SIZES[b["size"]]["title"]})
+	bin_nodes[i].show_state(b["chips"].fraction(), true)
+	hud.show_message("Behälter zur Maschine schieben und die Spänewanne hineinleeren, voll im Hof in den Container kippen. [%s] stellt ihn ab." % Settings.binding_text("drop"), Color(0.7, 0.95, 1.0))
+
+
+func _bin_back(i: int) -> void:
+	var b: Dictionary = layout.bins[i]
+	b["out"] = false
+	if player.carrying_bin() and int(player.carry["bin"]) == i:
+		player.clear_carry()
+	bin_nodes[i].position = Vector3(b["pos"].x, 0, b["pos"].y)
+	bin_nodes[i].show_state(b["chips"].fraction(), false)
+	_sync_machine_bins()
+
+
+## Q mit dem Behälter: vor der Figur abstellen, das ist dann sein neuer Stellplatz.
+func bin_set_down() -> void:
+	if not player.carrying_bin():
+		return
+	var i := int(player.carry["bin"])
+	var b: Dictionary = layout.bins[i]
+	var fwd := -player.global_basis.z
+	var foot := ChipBin.foot(str(b["size"]))
+	var at := Vector2(player.global_position.x, player.global_position.z) + Vector2(fwd.x, fwd.z).normalized() * (maxf(foot.x, foot.y) * 0.5 + 0.5)
+	var err := layout.check_bin(at, int(b["rot"]), i, str(b["size"]))
+	if err != "":
+		hud.show_message("Hier lässt sich der Behälter nicht abstellen: %s" % err, Color(1, 0.75, 0.2))
+		return
+	b["pos"] = at
+	if b.has("machine"):
+		b["away"] = true
+	_bin_back(i)
+
+
+## Spänewanne der Maschine in den geschobenen Behälter leeren.
+func pour_tray(machine: Node) -> String:
+	if machine.get("tray") == null:
+		return "Diese Maschine hat keine Spänewanne."
+	var rpm = machine.get("spindle_speed")
+	if rpm != null and float(rpm) > 5.0:
+		var busy := "Erst die Spindel stoppen."
+		hud.show_message(busy, Color(1, 0.75, 0.2))
+		return busy
+	var i := int(player.carry["bin"])
+	var chips: ChipTray = layout.bins[i]["chips"]
+	var moved := chips.take_from(machine.tray)
+	if machine.has_method("refresh_tray"):
+		machine.refresh_tray()
+	if moved <= 0.0:
+		var why := "Die Spänewanne ist leer."
+		if chips.is_full():
+			why = "Der Behälter ist voll: im Hof in den passenden Container kippen."
+		elif not machine.tray.is_empty():
+			why = "Im Behälter liegen %sspäne: erst in den Container leeren, nicht mischen." % ChipTray.SORT_TITLES[chips.sort()]
+		hud.show_message(why, Color(1, 0.75, 0.2))
+		return why
+	bin_nodes[i].show_state(chips.fraction(), true)
+	hud.show_message("%d kg Späne im Behälter, jetzt %d von %d kg." % [int(round(moved)), int(chips.kg), int(chips.capacity)], Color(0.7, 0.95, 1.0))
+	return ""
+
+
+# ------------------------------------------------------------ Hallenkran
+
+## Werkbank unter dem Blick (Maschinen-id), wenn der Strahl oben auf ihre Platte trifft, sonst "".
+func crane_bench_at(collider: Object, point: Vector3, normal: Vector3) -> String:
+	if normal.y < 0.7 or absf(point.y - ToolBench.TOP_Y) > 0.1:
+		return ""
+	var n := collider as Node
+	while n != null and n != self:
+		if n is ToolBench:
+			var id = bench_nodes.find_key(n)
+			return str(id) if id != null else ""
+		n = n.get_parent()
+	return ""
+
+
+## E mit der Fernbedienung auf eine Werkbankplatte: dort ablegen. true = abgelegt.
+func crane_put_on_bench(collider: Object, point: Vector3, normal: Vector3) -> bool:
+	var id := crane_bench_at(collider, point, normal)
+	if id == "":
+		return false
+	crane.put_on_bench(id, bench_nodes[id], point, player.yaw)
+	hud.show_message("Fernbedienung auf der Werkbank abgelegt.", Color(0.7, 0.95, 1.0))
+	return true
+
+
+## Behälter, den der Haken bei hook greifen kann: genau darüber und bis kurz über die Oberkante gesenkt.
+func crane_find_bin(hook: Vector3) -> int:
+	var best := -1
+	var best_d := 0.9
+	for i in layout.bins.size():
+		var b: Dictionary = layout.bins[i]
+		if b["out"] or bool(b.get("hooked", false)):
+			continue
+		var gap := hook.y - HallCrane.SLING - ChipBin.height(str(b["size"]))
+		if gap < -0.15 or gap > 0.5:
+			continue
+		var d := Vector2(hook.x, hook.z).distance_to(b["pos"])
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
+func crane_bin_height(i: int) -> float:
+	return ChipBin.height(str(layout.bins[i]["size"])) if i >= 0 and i < layout.bins.size() else 0.0
+
+
+func crane_hook(i: int) -> void:
+	layout.bins[i]["hooked"] = true
+	_sync_machine_bins()
+	request_reflections()
+
+
+## Der Behälter hängt am Haken: Knoten mitführen (bottom = Mitte der Unterkante).
+func crane_carry(i: int, bottom: Vector3) -> void:
+	if i < 0 or i >= bin_nodes.size() or not is_instance_valid(bin_nodes[i]):
+		return
+	bin_nodes[i].global_position = bottom
+
+
+## Behälter am Boden aushängen. Fehlertext, leer = abgesetzt. Die Spänekiste einer Maschine rastet unter
+## dem Förderer ein, wenn sie nahe genug an ihrem Platz steht.
+func crane_set_down(i: int, at: Vector2) -> String:
+	var b: Dictionary = layout.bins[i]
+	var mid := str(b.get("machine", ""))
+	var m: Node3D = _machine_node(mid) if mid != "" and layout.machines.has(mid) else null
+	if m is Lathe and m.has_chip_bin_spot:
+		var t: Transform3D = m.transform * m.chip_bin_spot
+		if at.distance_to(Vector2(t.origin.x, t.origin.z)) < 0.8:
+			b.erase("hooked")
+			b["away"] = false
+			_sync_machine_bins()
+			bin_nodes[i].position = Vector3(b["pos"].x, 0, b["pos"].y)
+			bin_nodes[i].rotation.y = int(b["rot"]) * PI / 2.0
+			hud.show_message("Spänekiste steht wieder unter dem Förderer.", Color(0.7, 0.95, 1.0))
+			return ""
+	var err := layout.check_bin(at, int(b["rot"]), i, str(b["size"]))
+	if err != "":
+		return "Hier lässt sich der Behälter nicht absetzen: %s" % err
+	b.erase("hooked")
+	b["pos"] = at
+	if mid != "":
+		b["away"] = true
+	bin_nodes[i].position = Vector3(at.x, 0, at.y)
+	_sync_machine_bins()
+	request_reflections()
+	return ""
 
 
 ## Die Spänekiste unter dem Späneförderer (E50) ist ein normaler großer Spänebehälter der Werkstatt. Jede
@@ -2474,11 +2670,15 @@ func _sync_machine_bins() -> void:
 			# Neu unter dem Förderer: übernimmt, was schon in der Kiste der Maschine liegt (alte Spielstände)
 			b = {"size": "bin_l", "chips": m.chip_bin, "out": false, "machine": id}
 			layout.bins.append(b)
+		m.chip_bin = b["chips"]
+		# Mit dem Kran herausgehoben: Der Förderer hat keine Kiste, bis sie wieder darunter steht
+		m.chip_bin_away = bool(b.get("away", false)) or bool(b.get("hooked", false)) or bool(b.get("out", false))
+		if bool(b.get("away", false)) or bool(b.get("hooked", false)):
+			continue
 		var t: Transform3D = m.transform * m.chip_bin_spot
 		b["pos"] = Vector2(t.origin.x, t.origin.z)
 		b["rot"] = posmod(roundi(t.basis.get_euler().y / (PI / 2.0)), 4)
 		b["out"] = false
-		m.chip_bin = b["chips"]
 
 
 func container_prompt(i: int) -> String:
@@ -2802,6 +3002,8 @@ func take_down_bench(id: String) -> String:
 
 
 func _remove_bench(id: String) -> void:
+	if crane:
+		crane.bench_gone(id)
 	layout.benches.erase(id)
 	var b := _bench_of(id)
 	if b:
@@ -2938,6 +3140,9 @@ func _apply_layout(d: Dictionary) -> void:
 				"chips": chips, "out": false})
 			if str(b.get("machine", "")) != "":
 				layout.bins[-1]["machine"] = str(b["machine"])
+				# Mit dem Kran beiseitegestellt: bleibt dort stehen
+				if bool(b.get("away", false)):
+					layout.bins[-1]["away"] = true
 	# Paletten, Hubwagen und Sackkarre stehen von Anfang an im Lager, auch in älteren Spielständen
 	if not (saved is Dictionary and bool(saved.get("starter_transport", false))):
 		for st in Shelf.STARTER:
@@ -3017,7 +3222,11 @@ func _apply_pending(d: Dictionary) -> void:
 	# Spielstände von vor dem Skilltree behalten, was sie schon hatten
 	var veteran := bool(d.get("unlock_all", false)) or (d.has("lathe") and not d.has("skills"))
 	var starter := bool(d.get("starter", false)) and not d.has("layout")
-	var first_machines = ["lathe", "mill"] if veteran else (STARTER_MACHINES if starter else null)
+	var first_machines: Variant = null
+	if veteran:
+		first_machines = ["lathe", "mill"]
+	elif starter:
+		first_machines = STARTER_MACHINES
 	company.load_state(int(d.get("money", GameState.START_MONEY)), d.get("machines", first_machines))
 	company.skills = Skills.new()
 	if d.get("skills", null) is Dictionary:
@@ -3047,6 +3256,9 @@ func _apply_pending(d: Dictionary) -> void:
 	day_time = float(d.get("day_time", 0.0))
 	day_over = bool(d.get("day_over", false))
 	day_started = bool(d.get("day_started", not bool(d.get("starter", false))))
+	var saved_crane = d.get("crane", {})
+	if saved_crane is Dictionary:
+		crane.set_state(saved_crane)
 	var saved_stats = d.get("day_stats", {})
 	day_stats = saved_stats.duplicate() if saved_stats is Dictionary else {}
 	var saved_last = d.get("last_day_stats", {})
@@ -3181,7 +3393,7 @@ func save_game() -> bool:
 		"day": day, "day_time": day_time, "day_over": day_over, "day_started": day_started, "day_stats": day_stats, "last_day_stats": last_day_stats, "deadlines": deadlines,
 		"reputation": company.reputation, "rep_log": company.rep_log,
 		"accepted": accepted, "tracked": tracked, "containers": containers.map(func(c: ChipTray) -> Dictionary: return c.to_state()),
-		"pins": _pin_states(), "places": places.to_state(),
+		"pins": _pin_states(), "places": places.to_state(), "crane": crane.get_state(),
 		"dropped": get_tree().get_nodes_in_group(DroppedItem.GROUP).map(func(n: DroppedItem) -> Dictionary: return n.get_state()),
 	}
 	return SaveManager.write_slot(GameState.current_slot, data)

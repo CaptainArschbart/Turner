@@ -20,7 +20,7 @@ func _initialize() -> void:
 
 	# ---------------------------------------------------- Halle und Gratis-Maschinen
 	ok(money0 == 250, "Start mit 250 EUR")
-	ok(Layout.OBSTACLES.size() == 3, "Nur Büro, Torweg und Durchgang zum Qualitätsmanagement sind fest")
+	ok(Layout.OBSTACLES.size() == 4, "Nur Büro, Torweg, Durchgang zum Qualitätsmanagement und Platz vor der Kran-Fernbedienung sind fest")
 	ok(w.layout.check_machine("lathe", Vector2(-6.0, -5.0), 0) == "", "Der Platz der CNC-Fräse ist frei")
 	ok(w.layout.check_machine("drill", Vector2(-10.6, -3.5), 0) == "", "Der Platz des Regals ist frei")
 	ok(w.layout.check_machine("mill", Vector2(3.6, -1.0), 0) == "", "Der Platz der Spänekiste ist frei")

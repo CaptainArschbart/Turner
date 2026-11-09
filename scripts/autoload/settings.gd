@@ -62,6 +62,12 @@ const BINDINGS := [
 	["smoke", "Zigarette anzünden / ausmachen", "Allgemein", "k", KEY_K],
 	["job_menu", "Angenommene Aufträge (nicht an Maschinen)", "Allgemein", "k", KEY_TAB],
 	["build_menu", "Baumenü (nicht an Maschinen)", "Allgemein", "k", KEY_B],
+	["crane_forward", "Kran in Blickrichtung fahren", "Hallenkran", "k", KEY_UP],
+	["crane_back", "Kran zurückfahren", "Hallenkran", "k", KEY_DOWN],
+	["crane_left", "Kran nach links fahren", "Hallenkran", "k", KEY_LEFT],
+	["crane_right", "Kran nach rechts fahren", "Hallenkran", "k", KEY_RIGHT],
+	["crane_up", "Haken heben", "Hallenkran", "k", KEY_PAGEUP],
+	["crane_down", "Haken senken", "Hallenkran", "k", KEY_PAGEDOWN],
 ]
 
 var graphics: Dictionary = {}

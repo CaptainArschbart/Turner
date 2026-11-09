@@ -5,3 +5,6 @@ CLAUDE.local.md
 
 # graphify (lokal erzeugter Wissensgraph)
 graphify-out/
+
+# Handräder heißen *_wheel: ohne diese Einstellung macht Godot daraus Fahrzeugräder und sie fehlen
+!models/lathe.glb.import

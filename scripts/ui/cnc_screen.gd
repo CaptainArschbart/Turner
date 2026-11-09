@@ -677,7 +677,7 @@ func _update_auto() -> void:
 		"vc %d m/min" % int(lathe.cutting_speed()),
 		"Override %d %%" % int(round(nc.override * 100.0)),
 		"KSS %s" % ("EIN" if lathe.coolant else "aus"),
-		"Laufzeit %d:%02d" % [int(nc.run_time) / 60, int(nc.run_time) % 60],
+		"Laufzeit %d:%02d" % [floori(nc.run_time / 60.0), int(nc.run_time) % 60],
 	]
 	if nc.alarm != "":
 		lines.append("")
@@ -1457,6 +1457,7 @@ func _run_sim() -> void:
 	_sim_plot.show_tool = false
 	_sim_plot.queue_redraw()
 	var t := int(r["time"])
+	@warning_ignore("integer_division")
 	var txt := "%s: %d Verfahrwege, Bearbeitungszeit ca. %d:%02d min." % [p["name"], r["moves"].size(), t / 60, t % 60]
 	if not r["errs"].is_empty():
 		txt += "\n" + "\n".join(r["errs"])
