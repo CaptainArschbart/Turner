@@ -19,8 +19,13 @@ const HOOK_SPEED := 0.7
 const ACCEL := 2.5                        # sanftes Anfahren und Bremsen
 const SLING := 0.55                       # Ketten zwischen Haken und Oberkante des Behälters
 const RADIO_RANGE := 40.0                 # Funkreichweite: weiter weg reagiert der Kran nicht
-## Halterung der Fernbedienung an der Südwand der Halle, östlich neben der Bürotür (Wandfläche bei z = 8)
-const HOLDER_POS := Vector3(9.25, 1.45, 7.96)
+## Halterung der Fernbedienung an der Südwand der Halle, östlich neben der Bürotür: Punkt auf der Wandfläche
+## (z = 8) in Höhe der Ablage
+const HOLDER_POS := Vector3(9.25, 1.35, 8.0)
+const HOLDER_PATH := "res://models/kran_halterung.glb"
+const HOLDER_SCALE := 0.04               # 10 Modelleinheiten Breite -> 40 cm
+const HOLDER_MODEL_DEPTH := 6.16         # Brett von der Wand nach vorn in Modelleinheiten
+const HOLDER_WALL_X := -3.16             # Wandseite des Modells
 
 ## Spielwelt: crane_find_bin(hook) -> Nummer, crane_hook(i), crane_carry(i, pos), crane_set_down(i, at) -> Fehler,
 ## crane_bin_height(i), hud
@@ -86,31 +91,45 @@ func _ready() -> void:
 	_sync()
 
 
-## Wandhalterung: Grundplatte mit Schild, Köcher mit Haken, darin die Fernbedienung. Vorderseite zeigt nach -Z.
-func _build_holder(yellow: Material, anth: Material, black: Material) -> void:
+## Wandkonsole aus models/kran_halterung.glb: Ablagebrett mit zwei Dreiecksstützen, darauf liegt die
+## Fernbedienung. Im Modell liegt das Brett bei y = 0 (6 x 10 Einheiten), die Stützen stehen an der Wandseite
+## (x = -3,16) und reichen 3,95 nach oben, die Streben laufen zur Vorderkante des Bretts.
+func _build_holder(yellow: Material, anth: Material, _black: Material) -> void:
 	_holder = Node3D.new()
-	_holder.position = HOLDER_POS
-	_holder.rotation.y = PI              # die Halterung schaut von der Südwand in die Halle
+	_holder.position = HOLDER_POS            # Punkt auf der Wandfläche in Höhe der Brettoberseite
 	add_child(_holder)
-	var plate := Build.mat(Color(0.72, 0.74, 0.76), 0.45, 0.6)
-	Build.box(_holder, Vector3(0.3, 0.5, 0.012), Vector3(0, 0.02, -0.006), plate)
-	for sx in [-0.12, 0.12]:
-		for sy in [-0.2, 0.24]:
-			Build.cyl(_holder, 0.008, 0.006, Vector3(sx, sy, -0.014), anth, Build.AXIS_Z)
-	# Köcher unten offen nach oben, Rückhaltebügel
-	Build.box(_holder, Vector3(0.16, 0.012, 0.1), Vector3(0, -0.12, -0.06), anth)
-	Build.box(_holder, Vector3(0.012, 0.1, 0.1), Vector3(-0.074, -0.07, -0.06), anth)
-	Build.box(_holder, Vector3(0.012, 0.1, 0.1), Vector3(0.074, -0.07, -0.06), anth)
-	Build.box(_holder, Vector3(0.16, 0.06, 0.012), Vector3(0, -0.09, -0.11), anth)
-	Build.label(_holder, "KRAN", Vector3(0, 0.205, -0.014), 0.0016, Color(0.1, 0.1, 0.1), 64, PI)
-	Build.box(_holder, Vector3(0.22, 0.06, 0.004), Vector3(0, 0.205, -0.012), yellow)
-	# Fernbedienung: steht im Köcher, Antenne oben
+	var depth := HOLDER_MODEL_DEPTH * HOLDER_SCALE
+	if ResourceLoader.exists(HOLDER_PATH):
+		var m: Node3D = (load(HOLDER_PATH) as PackedScene).instantiate()
+		# Modell-x (von der Wand weg) zeigt in die Halle (-Z), Modell-z läuft an der Wand entlang
+		m.rotation.y = PI / 2.0
+		m.scale = Vector3.ONE * HOLDER_SCALE
+		m.position = Vector3(0, 0, HOLDER_WALL_X * HOLDER_SCALE)   # Wandseite genau auf der Wandfläche
+		_holder.add_child(m)
+		var steel := Build.mat(Color(0.62, 0.64, 0.66), 0.4, 0.8)
+		steel.cull_mode = BaseMaterial3D.CULL_DISABLED   # das Brett ist eine einzelne Fläche
+		for mi in m.find_children("*", "MeshInstance3D", true, false):
+			(mi as MeshInstance3D).material_override = anth if str(mi.name) != "Plane" else steel
+	else:
+		# Ersatz ohne Modell: Brett und zwei Stützen
+		Build.box(_holder, Vector3(0.3, 0.008, depth), Vector3(0, -0.004, -depth * 0.5), anth)
+		for x in [-0.14, 0.14]:
+			Build.box(_holder, Vector3(0.01, 0.12, 0.01), Vector3(x, 0.06, -0.005), anth)
+	# Schild über der Konsole
+	var sign_y := 3.95 * HOLDER_SCALE + 0.08     # über den Stützen
+	Build.box(_holder, Vector3(0.24, 0.07, 0.004), Vector3(0, sign_y, -0.002), yellow)
+	Build.label(_holder, "KRAN", Vector3(0, sign_y, -0.005), 0.0016, Color(0.1, 0.1, 0.1), 64, PI)
+	# Fernbedienung liegt flach auf dem Brett, Tasten oben, Längsseite an der Wand entlang
 	_remote = Node3D.new()
-	_remote.position = Vector3(0, 0.0, -0.06)
+	_remote.position = Vector3(0, 0.027, -depth * 0.5)
+	_remote.rotation.y = PI / 2.0
 	_holder.add_child(_remote)
-	remote_model(_remote)
+	var lying := Node3D.new()
+	lying.rotation.x = PI / 2.0
+	_remote.add_child(lying)
+	remote_model(lying)
 	# Nur für den Blickstrahl, die Figur läuft nicht dagegen
-	var hit := Build.collider(_holder, Vector3(0.36, 0.6, 0.3), Vector3(0, 0.02, -0.12))
+	var hit := Build.collider(_holder, Vector3(10.0 * HOLDER_SCALE + 0.04, 0.22, depth + 0.04), Vector3(0, 0.07, -depth * 0.5))
 	hit.collision_layer = DroppedItem.LAYER
 	hit.set_meta("interact", self)
 
@@ -210,7 +229,7 @@ func put_on_bench(id: String, bench: Node3D, at: Vector3, yaw: float) -> void:
 	_loose.global_position = at + Vector3(0, 0.026, 0)
 	_loose.global_rotation = Vector3(0, yaw, 0)
 	var lying := Node3D.new()
-	lying.rotation.x = -PI / 2.0            # liegt flach, Tasten nach oben
+	lying.rotation.x = PI / 2.0            # liegt flach, Tasten nach oben
 	_loose.add_child(lying)
 	remote_model(lying)
 	var pick := RemotePickup.new()
