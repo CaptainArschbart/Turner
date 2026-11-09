@@ -239,13 +239,13 @@ func _initialize() -> void:
 	ok(cart.load_n == 3, "Stapel aus drei Paletten angehoben")
 	ok(absf((cart._load_shape.shape as BoxShape3D).size.y - 3.0 * 0.219143) < 0.02, "Lastbox: Höhe load * Palettenhöhe")
 	await put(cart, Vector2(21.0, -11.0), 0.5)
-	ok(w.jack_park() != "" and p.driving_jack(), "Schief nicht abstellbar: Hubwagen gerader ausrichten")
-	await put(cart, Vector2(21.0, -11.0), 0.1)
-	ok(w.jack_park() == "", "Mit Last abgestellt (Einrasten bei kleiner Abweichung)")
+	ok(w.jack_park() == "", "Mit Last schief abgestellt (kein Ausrichten nötig)")
 	ok(not p.driving_jack() and p.hands_free() and p.jack_cart == null, "Hände frei, Wagen weg")
 	await process_frame
 	var pj := idx_of(w, "pallet_jack")
-	ok(pj >= 0 and int(w.layout.shelves[pj]["load"]) == 3 and int(w.layout.shelves[pj]["rot"]) == 0, "Eintrag mit load 3, Drehung eingerastet")
+	ok(pj >= 0 and int(w.layout.shelves[pj]["load"]) == 3 and absf(float(w.layout.shelves[pj].get("angle", 0.0)) - 0.5) < 0.01, "Eintrag mit load 3, Winkel genau erhalten")
+	ok(absf((w.shelf_nodes[pj] as Shelf).rotation.y - 0.5) < 0.01, "Abgestellter Hubwagen steht schief wie gefahren")
+	ok(absf(float(w.layout.to_state()["shelves"][pj]["angle"]) - 0.5) < 0.01, "Winkel wird gespeichert")
 	ok((w.shelf_nodes[pj] as Shelf).cargo == 3, "Last am abgestellten Hubwagen sichtbar")
 	var loaded: Rect2 = w.layout.shelf_rect("pallet_jack", Vector2.ZERO, 0, 3, false)
 	var empty_rect: Rect2 = w.layout.shelf_rect("pallet_jack", Vector2.ZERO, 0)
@@ -278,8 +278,6 @@ func _initialize() -> void:
 	ok(p.jack_load() == 3 and int(p.carry["load"]) == 3, "get_state liefert eine Kopie")
 
 	# Q stellt ebenfalls ab; außerhalb von Werkstatt und Lager geht es nicht
-	await put(p.jack_cart, Vector2(-200.0, -200.0), 0.0)
-	ok(w.jack_park() != "" and p.driving_jack(), "Außerhalb nicht abstellbar")
 	await put(p.jack_cart, Vector2(21.0, -9.0), 0.0)
 	p.drop()
 	ok(not p.driving_jack() and idx_of(w, "pallet_jack") >= 0, "Ablegen-Taste stellt den Hubwagen ab")

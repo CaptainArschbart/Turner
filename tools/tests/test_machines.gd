@@ -154,7 +154,7 @@ func _initialize() -> void:
 		for i in w.layout.bins.size():
 			if str(w.layout.bins[i].get("machine", "")) == "cnc_lathe":
 				bi = i
-		ok(bi >= 0 and str(w.layout.bins[bi]["size"]) == "bin_l", "E50 bekommt einen großen Spänebehälter")
+		ok(bi >= 0 and str(w.layout.bins[bi]["size"]) == "bin_s", "E50 bekommt den normalen Spänebehälter")
 		if bi >= 0:
 			var eb: Dictionary = w.layout.bins[bi]
 			ok(c.chip_bin == eb["chips"] and c.chip_bin_node == w.bin_nodes[bi], "Förderer füllt genau diesen Behälter")

@@ -405,13 +405,13 @@ func _initialize() -> void:
 	ok(not l2._panel_view, "Pultansicht verlassen")
 	l2.operating = false
 
-	# --- E50: Späneförderer trägt die Wanne in die große Spänekiste (ein normaler Spänebehälter)
+	# --- E50: Späneförderer trägt die Wanne in die Spänekiste (ein normaler Spänebehälter)
 	if l2.e50:
 		l2.power_on(true)
-		ok(l2.has_chip_bin_spot and is_equal_approx(l2.chip_bin.capacity, float(ChipBin.SIZES["bin_l"]["kg"])), "E50 hat einen Stellplatz für den großen Spänebehälter")
+		ok(l2.has_chip_bin_spot and is_equal_approx(l2.chip_bin.capacity, float(ChipBin.SIZES["bin_s"]["kg"])), "E50 hat einen Stellplatz für den normalen Spänebehälter")
 		ok(l2.find_child("Spaenekiste", true, false) == null, "Keine eingebaute Kiste mehr an der Maschine")
 		var bn := ChipBin.new()
-		bn.size_id = "bin_l"
+		bn.size_id = "bin_s"
 		root.add_child(bn)
 		l2.chip_bin_node = bn
 		l2.tray.clear()
