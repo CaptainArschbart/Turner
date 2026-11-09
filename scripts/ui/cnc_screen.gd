@@ -61,9 +61,26 @@ const FORMS := {
 		["d", "D", "Zustellung", "mm", "num", "rough"],
 		["ux", "UX", "Aufmaß X", "Ø mm", "num", "rough"],
 		["uz", "UZ", "Aufmaß Z", "mm", "num", "rough"],
+		["hs", "", "Hinterschnitte", "", ["nein", "ja"], "rough"],
+	],
+	"undercut": [
+		["form", "", "Form", "", NcCam.UC_FORMS],
+		["mode", "", "Bearbeitung", "", NcCam.MODES],
+		["t", "T", "Werkzeug", "", "tool"],
+		["f", "F", "Vorschub", "mm/U", "num"],
+		["v", "V", "Schnittgeschw.", "m/min", "num"],
+		["x0", "X0", "Bezugspunkt Ø", "Ø mm", "num"],
+		["z0", "Z0", "Bezugspunkt Z", "mm", "num"],
+		["p", "P", "Steigung", "mm", "num", "din76"],
+		["a", "α", "Flankenwinkel", "°", "num", "din76"],
+		["size", "", "Größe", "", NcCam.FORM_E_NAMES, "forme"],
+		["d", "D", "Zustellung", "mm", "num", "rough"],
+		["ux", "UX", "Aufmaß X", "Ø mm", "num", "rough"],
+		["uz", "UZ", "Aufmaß Z", "mm", "num", "rough"],
 	],
 }
-const FORM_TITLES := {"head": "Programmkopf", "cut": "Abspanen (Rechteck)", "stock": "Konturabspanen"}
+const FORM_TITLES := {"head": "Programmkopf", "cut": "Abspanen (Rechteck)", "stock": "Konturabspanen",
+	"undercut": "Freistich"}
 
 var lathe: Lathe
 var page := "jog"
@@ -929,7 +946,13 @@ func _ed_plot_update() -> void:
 			hi_name = str(b["name"])
 		elif str(b["type"]) == "stock":
 			hi_name = str(b["contour"])
-	for b in p.get("blocks", []):
+		elif str(b["type"]) == "undercut":
+			_ed_plot.hi_poly = NcCam.contour_points(NcCam.undercut_contour(b))
+	var blocks: Array = p.get("blocks", [])
+	for j in blocks.size():
+		var b: Dictionary = blocks[j]
+		if str(b["type"]) == "undercut" and j != i:
+			polys.append(NcCam.contour_points(NcCam.undercut_contour(b)))
 		if str(b["type"]) == "contour":
 			if str(b["name"]) == hi_name:
 				_ed_plot.hi_poly = NcCam.contour_points(b)
@@ -948,7 +971,7 @@ func _keys_edit() -> Array:
 		["Satz\nlöschen", func(): _ed_delete()],
 		["Satz\nnach oben", func(): _ed_move(-1)],
 		["Satz\nnach unten", func(): _ed_move(1)],
-		["Anwählen", func(): _select_prog(open_prog)],
+		["Freistich", func(): _ed_new("undercut")],
 	]
 
 
@@ -1029,6 +1052,11 @@ func _build_form() -> Control:
 
 
 func _open_form(b: Dictionary, idx: int, ins: int) -> void:
+	# Sätze aus älteren Programmen: neue Maskenfelder vorbelegen
+	var defaults := NcCam.new_block(str(b.get("type", "")))
+	for k in defaults:
+		if not b.has(k):
+			b[k] = defaults[k]
 	_form_blk = b
 	_form_idx = idx
 	_form_ins = ins
@@ -1045,7 +1073,9 @@ func _fill_form() -> void:
 	var finish := int(_form_blk.get("mode", 0)) == 1
 	for f in FORMS[type]:
 		var key: String = f[0]
-		var off: bool = f.size() > 5 and f[5] == "rough" and finish
+		var tag: String = f[5] if f.size() > 5 else ""
+		var form := int(_form_blk.get("form", 0))
+		var off: bool = (tag == "rough" and finish) or (tag == "din76" and form != 0) or (tag == "forme" and form != 1)
 		var l := _label(("%s  %s" % [f[1], f[2]]).strip_edges(), 12, C_MUT if off else C_TXT)
 		l.custom_minimum_size.x = 140
 		l.clip_text = true
@@ -1144,6 +1174,45 @@ func _form_accept() -> void:
 	_fill_edit(at)
 
 
+## Hilfebild Freistich: Schulter links, Gewinde/Zylinder rechts, dazwischen der Freistich mit
+## Bezugspunkt X0/Z0 (Ecke Durchmesser/Schulter), Flanke und Grund.
+func _draw_help_undercut(c: Control, f: Font, ax: float, x0: float, x1: float, ink: Color, blue: Color, green: Color) -> void:
+	var din := int(_form_blk.get("form", 0)) == 0
+	var sh_z := x0 + (x1 - x0) * 0.42      # Schulter (Z0)
+	var r_th := ax - 70.0                   # Gewinde-/Zylinder-Ø
+	var r_sh := ax - 120.0                  # Schulter-Ø
+	var r_gr := ax - 48.0                   # Freistichgrund
+	var flank := 46.0 if din else 70.0      # Breite oben
+	var floor_w := 26.0 if din else 22.0
+	var part := PackedVector2Array([Vector2(x0, ax), Vector2(x0, r_sh), Vector2(sh_z, r_sh), Vector2(sh_z, r_gr),
+		Vector2(sh_z + floor_w, r_gr), Vector2(sh_z + flank, r_th), Vector2(x1 - 20.0, r_th), Vector2(x1 - 20.0, ax)])
+	c.draw_colored_polygon(part, Color(0.36, 0.39, 0.44))
+	c.draw_polyline(PackedVector2Array([Vector2(sh_z, r_th), Vector2(sh_z, r_gr), Vector2(sh_z + floor_w, r_gr),
+		Vector2(sh_z + flank, r_th)]), blue, 2.0)
+	c.draw_dashed_line(Vector2(sh_z, r_th), Vector2(sh_z + flank, r_th), ink, 1.0, 3.0)
+	if int(_form_blk.get("mode", 0)) != 1:
+		var yy := r_th + 7.0
+		while yy < r_gr - 2.0:
+			var zl := sh_z + 3.0
+			var zr := sh_z + floor_w + (flank - floor_w) * (r_gr - yy) / (r_gr - r_th) - 3.0
+			c.draw_line(Vector2(zr, yy), Vector2(zl, yy), green, 1.5)
+			yy += 8.0
+	if int(_form_blk.get("mode", 0)) != 0:
+		c.draw_polyline(PackedVector2Array([Vector2(sh_z + flank + 4.0, r_th - 3.0), Vector2(sh_z + floor_w + 2.0, r_gr - 3.0),
+			Vector2(sh_z + 3.0, r_gr - 3.0), Vector2(sh_z + 3.0, r_th - 6.0)]), green, 1.5)
+	c.draw_circle(Vector2(sh_z, r_th), 4.0, Color(0.9, 0.5, 0.1))
+	c.draw_string(f, Vector2(sh_z - 52, r_th - 6), "X0 / Z0", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
+	c.draw_string(f, Vector2(sh_z + flank + 8, r_th + 14), "Ø X0", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
+	if din:
+		c.draw_string(f, Vector2(sh_z + flank * 0.7, r_gr + 16), "α", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, ink)
+		c.draw_string(f, Vector2(x1 - 110, r_th - 8), "Gewinde, Steigung P", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
+	var txt := "Freistich %s - %s" % [NcCam.UC_FORMS[int(_form_blk["form"])], NcCam.MODES[int(_form_blk["mode"])]]
+	c.draw_string(f, Vector2(8, 16), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ink)
+	var expl := "Maße nach DIN 76 aus der Steigung P" if din else "Maße nach DIN 509 aus der Größe (r x t1)"
+	c.draw_string(f, Vector2(8, 32), expl, HORIZONTAL_ALIGNMENT_LEFT, c.size.x - 12, 11, C_MUT)
+	c.draw_string(f, Vector2(8, 46), "Z0 = Schulter, Gewinde rechts davon", HORIZONTAL_ALIGNMENT_LEFT, c.size.x - 12, 11, C_MUT)
+
+
 ## Hilfebild der Zyklusmaske: Schema mit Rohteil, Fertigteil, Schnittaufteilung und Maßen.
 func _draw_help() -> void:
 	var c := _form_help
@@ -1168,6 +1237,9 @@ func _draw_help() -> void:
 		c.draw_string(f, wp + Vector2(-60, -10), "Wechselpunkt XT/ZT", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
 		c.draw_dashed_line(Vector2(x0, ax - 92), Vector2(x1 - 50, ax - 92), Color(0.85, 0.15, 0.1), 1.0, 3.0)
 		c.draw_string(f, Vector2(x0 + 4, ax - 96), "SC Sicherheitsabstand", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
+		return
+	if type == "undercut":
+		_draw_help_undercut(c, f, ax, x0, x1, ink, blue, green)
 		return
 	var face := int(_form_blk.get("dir", 0)) == 1
 	var finish := int(_form_blk.get("mode", 0)) == 1

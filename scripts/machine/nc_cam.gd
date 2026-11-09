@@ -9,7 +9,12 @@ extends RefCounted
 ##   cut     - Abspanen Rechteck: Bereich Z0..Z1 auf Ø X1 (Rohteil = Ist-Material)
 ##   stock   - Konturabspanen: Material außerhalb der Kontur bis zum Werkstückende
 ## Abspansätze: mode 0 Schruppen / 1 Schlichten, dir 0 längs / 1 plan, Werkzeug t, F (mm/U),
-## V (m/min, konstante Schnittgeschwindigkeit), D Zustellung, UX Aufmaß X (Ø), UZ Aufmaß Z.
+## V (m/min, konstante Schnittgeschwindigkeit), D Zustellung, UX Aufmaß X (Ø), UZ Aufmaß Z,
+## hs Hinterschnitte bearbeiten (1 ja / 0 nein, nur Konturabspanen Schruppen).
+## Eine Kontur begrenzt ihren Bearbeitungsbereich in Z: links davon bleibt alles stehen, rechts
+## davon auch - außer die Kontur beginnt an der Drehmitte oder bei Z0 (dann wird bis zum
+## Werkstückende abgespant). So lassen sich mehrere Konturen nacheinander bearbeiten, z. B. ein
+## Freistich als eigene Kontur mitten im Teil.
 ##
 ## Bahnen gelten für die Schneide (WKS wie die Positionsanzeige: Z ab Backen-Stirnfläche, X im
 ## Radius). Damit nichts ins Fertigteil schneidet, rechnet die Bahn mit der echten Plattenform:
@@ -20,9 +25,24 @@ const SEG := 0.25               # wie Lathe.SEG
 const RPM_MIN := 40.0           # wie Lathe.RPM_MIN
 const RAPID := 100.0            # Eilgang mm/s
 const CENTER_OVER := -0.4       # über die Drehmitte hinaus plandrehen (Restzapfen)
-const MODES := ["Schruppen", "Schlichten"]
+const MODES := ["Schruppen", "Schlichten", "Komplett"]   # Komplett = Schruppen + Schlichten, ein Werkzeug
 const DIRS := ["längs", "plan"]
 const TRANS := ["-", "Fase", "Radius"]
+const UC_FORMS := ["Gewinde DIN 76", "Form E DIN 509"]
+## Gewindefreistich DIN 76-1 (Regelfall, außen): [Steigung P, d - dg, g1 (Breite am Grund), r]
+const DIN76 := [
+	[0.5, 0.8, 1.1, 0.2], [0.7, 1.1, 1.5, 0.4], [0.75, 1.2, 1.6, 0.4], [0.8, 1.3, 1.7, 0.4],
+	[1.0, 1.6, 2.1, 0.6], [1.25, 2.0, 2.7, 0.6], [1.5, 2.3, 3.2, 0.8], [1.75, 2.6, 3.9, 1.0],
+	[2.0, 3.0, 4.5, 1.0], [2.5, 3.6, 5.6, 1.2], [3.0, 4.4, 6.7, 1.6], [3.5, 5.0, 7.7, 1.6],
+	[4.0, 5.7, 9.0, 2.0],
+]
+const FORM_E_NAMES := ["E0,6x0,2", "E0,6x0,3", "E1x0,2", "E1x0,4", "E1,6x0,3", "E2,5x0,4", "E4x0,5"]
+## Freistich Form E DIN 509: [Bezeichnung, r, t1 (Tiefe), f (Breite)]; Flanke zum Zylinder 15°
+const FORM_E := [
+	["E0,6x0,2", 0.6, 0.2, 2.0], ["E0,6x0,3", 0.6, 0.3, 2.5], ["E1x0,2", 1.0, 0.2, 2.5],
+	["E1x0,4", 1.0, 0.4, 4.0], ["E1,6x0,3", 1.6, 0.3, 4.0], ["E2,5x0,4", 2.5, 0.4, 5.0],
+	["E4x0,5", 4.0, 0.5, 7.0],
+]
 
 
 # ======================================================================= Programme
@@ -43,6 +63,8 @@ static func migrate_to_wks(prog: Dictionary, zero_z: float) -> bool:
 			"cut":
 				b["z0"] = float(b["z0"]) - zero_z
 				b["z1"] = float(b["z1"]) - zero_z
+			"undercut":
+				b["z0"] = float(b["z0"]) - zero_z
 			"contour":
 				b["z0"] = float(b["z0"]) - zero_z
 				for e in b["els"]:
@@ -73,7 +95,11 @@ static func new_block(type: String, prog := {}) -> Dictionary:
 				if str(b["type"]) == "contour":
 					cname = str(b["name"])
 			return {"type": "stock", "contour": cname, "mode": 0, "dir": 0, "t": "T1", "f": 0.25,
-				"v": 180.0, "d": 2.0, "ux": 0.4, "uz": 0.2}
+				"v": 180.0, "d": 2.0, "ux": 0.4, "uz": 0.2, "hs": 1}
+		"undercut":
+			# Bezugspunkt X0/Z0: Ecke Gewinde- bzw. Zylinderdurchmesser an der Schulter
+			return {"type": "undercut", "form": 0, "mode": 2, "t": "T3", "f": 0.1, "v": 200.0,
+				"x0": 20.0, "z0": -30.0, "p": 1.5, "a": 30.0, "size": 3, "d": 1.0, "ux": 0.2, "uz": 0.1}
 	return {}
 
 
@@ -92,7 +118,7 @@ static func find_contour(prog: Dictionary, cname: String) -> Dictionary:
 
 
 static func is_machining(b: Dictionary) -> bool:
-	return str(b.get("type", "")) in ["cut", "stock"]
+	return str(b.get("type", "")) in ["cut", "stock", "undercut"]
 
 
 static func fmt(v: float, dec := 3) -> String:
@@ -113,8 +139,59 @@ static func summary(b: Dictionary) -> String:
 				b["t"], fmt(b["f"]), int(b["v"]), fmt(b["z0"]), fmt(b["z1"]), fmt(b["x1"])]
 		"stock":
 			return "Kontur abspanen %s %s   %s   %s F%s V%d%s" % [MODES[int(b["mode"])], DIRS[int(b["dir"])],
-				b["contour"], b["t"], fmt(b["f"]), int(b["v"]), ("  D%s" % fmt(b["d"])) if int(b["mode"]) == 0 else ""]
+				b["contour"], b["t"], fmt(b["f"]), int(b["v"]), ("  D%s%s" % [fmt(b["d"]),
+				"" if int(b.get("hs", 1)) == 1 else "  ohne Hinterschn."]) if int(b["mode"]) != 1 else ""]
+		"undercut":
+			var g := ("P%s" % fmt(b["p"])) if int(b["form"]) == 0 else str(FORM_E[clampi(int(b["size"]), 0, FORM_E.size() - 1)][0])
+			return "Freistich %s %s   %s   X%s Z%s   %s F%s V%d" % [UC_FORMS[int(b["form"])], g, MODES[int(b["mode"])],
+				fmt(b["x0"]), fmt(b["z0"]), b["t"], fmt(b["f"]), int(b["v"])]
 	return "?"
+
+
+## Gewindefreistich-Maße DIN 76 für Steigung p (Tabelle, Zwischenwerte linear): [d - dg, g1, r].
+static func din76(p: float) -> Array:
+	var lo: Array = DIN76[0]
+	if p <= float(lo[0]):
+		return [lo[1], lo[2], lo[3]]
+	for i in range(1, DIN76.size()):
+		var hi: Array = DIN76[i]
+		if p <= float(hi[0]):
+			var u := (p - float(lo[0])) / (float(hi[0]) - float(lo[0]))
+			return [lerpf(lo[1], hi[1], u), lerpf(lo[2], hi[2], u), lerpf(lo[3], hi[3], u)]
+		lo = hi
+	var k := p / float(lo[0])
+	return [float(lo[1]) * k, float(lo[2]) * k, float(lo[3]) * k]
+
+
+## Kontur eines Freistichzyklus (wie im Hilfebild): rechts auf dem Gewinde-/Zylinder-Ø X0
+## beginnend die Flanke hinab (DIN 76: Winkel a, meist 30°; Form E: 15°), Grund mit Radius r an
+## der Schulter, an der Schulter (Z0) wieder auf X0. Liegt mitten im Teil: Gewinde und Schulter
+## bleiben stehen.
+static func undercut_contour(b: Dictionary) -> Dictionary:
+	var d := float(b["x0"])
+	var z0 := float(b["z0"])
+	var h: float
+	var g1: float
+	var r: float
+	var ang: float
+	if int(b["form"]) == 0:
+		var m := din76(maxf(float(b["p"]), 0.2))
+		h = float(m[0]) * 0.5
+		g1 = float(m[1])
+		r = float(m[2])
+		ang = clampf(float(b.get("a", 30.0)), 10.0, 90.0)
+	else:
+		var e: Array = FORM_E[clampi(int(b["size"]), 0, FORM_E.size() - 1)]
+		r = float(e[1])
+		h = float(e[2])
+		ang = 15.0
+		g1 = maxf(float(e[3]) - h / tan(deg_to_rad(ang)), r)
+	var run := h / tan(deg_to_rad(ang))
+	return {"type": "contour", "name": "FREISTICH", "x0": d, "z0": z0 + g1 + run, "els": [
+		{"x": d - 2.0 * h, "z": z0 + g1, "tr": 0, "tv": 0.0},
+		{"x": d - 2.0 * h, "z": z0, "tr": 2, "tv": r},
+		{"x": d, "z": z0, "tr": 0, "tv": 0.0},
+	]}
 
 
 ## Beispielprogramme (stehen im Programm-Manager, wenn noch keine Programme da sind).
@@ -235,7 +312,7 @@ static func target(b: Dictionary, prog: Dictionary, prof: PackedFloat32Array, zo
 			var zc := (i + 0.5) * SEG
 			tg[i] = minf(prof[i], r1) if zc > za and zc < zb else prof[i]
 		return {"tg": tg, "zlo": za, "zhi": zb}
-	var c := find_contour(prog, str(b.get("contour", "")))
+	var c := undercut_contour(b) if str(b["type"]) == "undercut" else find_contour(prog, str(b.get("contour", "")))
 	if c.is_empty():
 		return {"err": "Kontur \"%s\" nicht im Programm." % b.get("contour", "")}
 	var poly := contour_points(c, zoff)
@@ -250,17 +327,34 @@ static func target(b: Dictionary, prog: Dictionary, prof: PackedFloat32Array, zo
 			return {"err": "Kontur %s: negativer Durchmesser." % c["name"]}
 	if zhi - zlo < SEG:
 		return {"err": "Kontur %s: keine Länge in Z." % c["name"]}
+	# Rechts der Kontur (zum Werkstückende) nur abspanen, wenn die Kontur dort an der Drehmitte
+	# beginnt oder bis zum Werkstücknullpunkt reicht. Eine Kontur mitten am Teil (z. B. ein
+	# zweiter Absatz bei Z-80) darf das Material rechts davon - andere Konturen - nicht wegnehmen.
+	var r_end := INF
+	for p in poly:
+		if p.x >= zhi - 0.001:
+			r_end = minf(r_end, p.y)
+	var clear_right := r_end <= 0.001 or zhi - zoff >= -0.001
+	# tc = Kontur wie programmiert (Schlichtbahn): über bereits tieferem Material (z. B. einem
+	# vorher gestochenen Freistich) fährt das Schlichten auf der Kontur hinweg statt hinein.
+	var tc := PackedFloat32Array()
+	tc.resize(n)
+	var x_all := _max_prof(prof)
 	for i in n:
 		var a := i * SEG + 0.0001
 		var e := (i + 1) * SEG - 0.0001
 		if (i + 0.5) * SEG < zlo:
 			tg[i] = prof[i]
+			tc[i] = prof[i]
 		elif a > zhi:
-			tg[i] = 0.0
+			tg[i] = 0.0 if clear_right else prof[i]
+			tc[i] = tg[i]
 		else:
 			var r := poly_max(poly, a, e)
-			tg[i] = minf(prof[i], r if r >= 0.0 else 0.0)
-	return {"tg": tg, "zlo": zlo, "zhi": zhi, "poly": contour_points(c)}   # poly in Programm-Z
+			r = r if r >= 0.0 else 0.0
+			tg[i] = minf(prof[i], r)
+			tc[i] = minf(r, x_all)
+	return {"tg": tg, "tc": tc, "zlo": zlo, "zhi": zhi, "poly": contour_points(c)}   # poly in Programm-Z
 
 
 ## Aufmaß: Sollkontur um UZ axial und UX/2 radial aufdicken.
@@ -300,6 +394,8 @@ static func plan(b: Dictionary, prog: Dictionary, t: Dictionary, ctx: Dictionary
 	var err := check_block(b, t)
 	if err != "":
 		return {"err": err}
+	if int(b["mode"]) == 2:
+		return _plan_complete(b, prog, t, ctx)
 	var prof: PackedFloat32Array = ctx["prof"]
 	var tr := target(b, prog, prof, float(ctx.get("zoff", 0.0)))
 	if tr.has("err"):
@@ -308,27 +404,58 @@ static func plan(b: Dictionary, prog: Dictionary, t: Dictionary, ctx: Dictionary
 	var hd := head(prog)
 	var p := {
 		"sc": maxf(float(hd["sc"]), 0.2), "d": float(b["d"]), "zlim": float(ctx.get("zlim", 1.0)),
-		"t": t, "pos": ctx["pos"],
+		"t": t, "pos": ctx["pos"], "hs": int(b.get("hs", 1)) == 1,
+		"zr": Vector2(float(tr["zlo"]), float(tr["zhi"])), "tg": tg,
 	}
 	var finish := int(b["mode"]) == 1
-	var face := int(b["dir"]) == 1
+	var face := int(b.get("dir", 0)) == 1
 	var goal := tg if finish else dilate(tg, maxf(float(b["ux"]), 0.0) * 0.5, maxf(float(b["uz"]), 0.0))
 	var res: Dictionary
 	if finish:
-		res = _finish(prof, goal, p, face)
+		res = _finish(prof, goal, tr.get("tc", tg), p, face)
 	elif face:
 		res = _rough_face(prof, goal, p)
 	else:
 		res = _rough_long(prof, goal, p)
 	if res.has("err"):
 		return res
+	# Material danach: beim Längsschruppen das mitgeführte Ist-Material (auch Reste, an die das
+	# Werkzeug nicht herankommt - wie die Restmaterial-Erkennung der Steuerung), sonst das Ziel.
 	var after := prof.duplicate()
+	var cur: PackedFloat32Array = res.get("cur", goal)
+	res.erase("cur")
 	for i in after.size():
-		after[i] = minf(after[i], goal[i])
+		after[i] = minf(after[i], maxf(cur[i], goal[i]))
 	res["after"] = after
 	res["tg"] = tg
 	if tr.has("poly"):
 		res["poly"] = tr["poly"]
+	return res
+
+
+## Komplettbearbeitung (∇ + ∇∇∇): erst schruppen mit Aufmaß, dann mit demselben Werkzeug auf dem
+## so entstandenen Material schlichten. fin_from = erster Zug des Schlichtens.
+static func _plan_complete(b: Dictionary, prog: Dictionary, t: Dictionary, ctx: Dictionary) -> Dictionary:
+	var br := b.duplicate()
+	br["mode"] = 0
+	var r1 := plan(br, prog, t, ctx)
+	if r1.has("err"):
+		return r1
+	var mv1: Array = r1["moves"]
+	var c2 := ctx.duplicate()
+	c2["prof"] = r1["after"]
+	if not mv1.is_empty():
+		var e: Array = mv1[mv1.size() - 1]
+		c2["pos"] = Vector2(e[0], e[1])
+	var bf := b.duplicate()
+	bf["mode"] = 1
+	var r2 := plan(bf, prog, t, c2)
+	if r2.has("err"):
+		return r2
+	var res := r2.duplicate()
+	res["moves"] = mv1 + r2["moves"]
+	res["finish"] = false
+	res["fin_from"] = mv1.size()
 	return res
 
 
@@ -340,7 +467,12 @@ static func check_block(b: Dictionary, t: Dictionary) -> String:
 		return "Vorschub F muss zwischen 0.01 und 0.5 mm/U liegen."
 	if float(b["v"]) < 20.0 or float(b["v"]) > 400.0:
 		return "Schnittgeschwindigkeit V muss zwischen 20 und 400 m/min liegen."
-	if int(b["mode"]) == 0:
+	if str(b["type"]) == "undercut":
+		if float(b["x0"]) <= 2.0:
+			return "Freistich: Durchmesser X0 zu klein."
+		if int(b["form"]) == 0 and (float(b["p"]) < 0.2 or float(b["p"]) > 6.0):
+			return "Freistich DIN 76: Steigung P zwischen 0.2 und 6 mm."
+	if int(b["mode"]) != 1:
 		var d := float(b["d"])
 		if d <= 0.05:
 			return "Zustellung D zu klein."
@@ -390,75 +522,336 @@ static func _rapid_to(mv: Array, z: float, x: float) -> void:
 		mv.append([z, x, true])
 
 
-## Längsschruppen: Schnitte in Z- auf abnehmenden Durchmessern, am Schnittende Kontur nachziehen.
+## Arbeitsstand einer Bahnberechnung: Hüllkurve der Platte je Segmentversatz und das mitgeführte
+## Ist-Material. Damit weiß der Zyklus nach jedem Schnitt, wo noch Material steht - Eilgänge gehen
+## nur dort, wo nichts im Weg ist, und Zustellungen enden mit Sicherheitsabstand vor dem Material.
+## Werkzeuglagen auf dem Segmentraster k (Schneide bei z = k * SEG).
+class Pass:
+	extends RefCounted
+	var t: Dictionary
+	var j0 := 0                       # Segmentversatz der Plattenkante links
+	var env := PackedFloat32Array()   # tiefste Hüllkurve je Segmentversatz j0 + j (INF = keine Platte)
+	var env_lo := INF
+	var cur := PackedFloat32Array()   # Ist-Material (Radius je Segment)
+	var sc := 1.0
+	var mv: Array = []
+
+	func _init(tool: Dictionary, prof: PackedFloat32Array, safety: float, pos: Vector2) -> void:
+		t = tool
+		sc = safety
+		cur = prof.duplicate()
+		j0 = int(floor(float(t["zmin"]) / SEG + 0.0004))
+		var j1 := int(floor(float(t["zmax"]) / SEG))
+		for j in range(j0, j1 + 1):
+			var e := LatheTools.env_min(t, j * SEG, (j + 1) * SEG)
+			env.append(e)
+			env_lo = minf(env_lo, e)
+		mv.append([pos.x, pos.y, true])   # Startlage, wird am Ende entfernt
+
+	## Tiefste Schneidenlage bei k, ohne dass die Platte das Profil g verletzt (wie safe_x).
+	func safe(g: PackedFloat32Array, k: int) -> float:
+		var m := -INF
+		for j in env.size():
+			var e := env[j]
+			if e == INF:
+				continue
+			var i := k + j0 + j
+			var r := 1.0e6 if i < 0 else (g[i] if i < g.size() else 0.0)
+			m = maxf(m, r - e)
+		return m
+
+	## Tiefste Schneidenlage bei k, bei der die Platte kein Material berührt.
+	func clear_at(k: int) -> float:
+		var m := 0.0
+		for j in env.size():
+			var e := env[j]
+			var i := k + j0 + j
+			if e == INF or i < 0 or i >= cur.size():
+				continue
+			m = maxf(m, cur[i] - e)
+		return m
+
+	## Freifahrhöhe über dem Material zwischen za und zb.
+	func clear_span(za: float, zb: float) -> float:
+		var m := 0.0
+		for k in range(int(floor(minf(za, zb) / SEG + 0.0001)), int(ceil(maxf(za, zb) / SEG - 0.0001)) + 1):
+			m = maxf(m, clear_at(k))
+		return m
+
+	## Material abtragen für Schneidenlagen k = ka..kb auf Höhe x (wie Lathe._cut).
+	func sweep(ka: int, kb: int, x: float) -> void:
+		var n := env.size()
+		for i in range(maxi(ka + j0, 0), mini(kb + j0 + n - 1, cur.size() - 1) + 1):
+			var jlo := maxi(0, i - kb - j0)
+			var jhi := mini(n - 1, i - ka - j0)
+			var e := env_lo
+			if jlo > 0 or jhi < n - 1:
+				e = INF
+				for j in range(jlo, jhi + 1):
+					e = minf(e, env[j])
+			if e == INF:
+				continue
+			var lim := maxf(x + e, 0.0)
+			if lim < 0.3:
+				lim = 0.0
+			if lim < cur[i]:
+				cur[i] = lim
+
+	func last() -> Vector2:
+		var m: Array = mv[mv.size() - 1]
+		return Vector2(m[0], m[1])
+
+	## Vorschubzug; das überfahrene Material wird abgetragen (an den Rasterlagen der Bahn).
+	func feed(z: float, x: float, cuts := true) -> void:
+		var p := last()
+		mv.append([z, x, false])
+		if not cuts:
+			return
+		var za := minf(p.x, z)
+		var zb := maxf(p.x, z)
+		var ka := int(ceil(za / SEG - 0.0001))
+		var kb := int(floor(zb / SEG + 0.0001))
+		if absf(x - p.y) < 0.000001:
+			if ka <= kb:
+				sweep(ka, kb, x)
+			return
+		for k in range(ka, kb + 1):
+			var xi := minf(p.y, x) if zb - za < 0.000001 else lerpf(p.y, x, (k * SEG - p.x) / (z - p.x))
+			sweep(k, k, xi)
+
+	## Eilgang nach (z, x): auf Freifahrhöhe über dem Material, in Z, dann zustellen - bis auf den
+	## Sicherheitsabstand vor dem Material im Eilgang, den Rest im Vorschub.
+	func travel(z: float, x: float) -> void:
+		var p := last()
+		var h := maxf(p.y, clear_span(p.x, z) + sc)
+		if x > h:
+			h = x
+		if h > p.y + 0.0005:
+			mv.append([p.x, h, true])
+		mv.append([z, h, true])
+		if x >= h - 0.0005:
+			return
+		var c := clear_span(z, z)
+		if c <= 0.001 or x >= c + sc * 0.5:
+			mv.append([z, x, true])
+		else:
+			if c + sc < h - 0.0005:
+				mv.append([z, c + sc, true])
+			feed(z, x)
+
+	func moves() -> Array:
+		return mv.slice(1)
+
+
+const EPS := 0.0001
+
+
+## Längsschruppen (wie CYCLE952 "Abspanen längs außen"): Lagen im Abstand D von außen nach innen.
+## Je Lage werden alle Bereiche bearbeitet, in denen die Schneide auf dieser Höhe Platz hat - auch
+## Hinterschnitte (Einstiche, Freistiche zwischen zwei Absätzen), wenn hs gesetzt ist. Dort taucht
+## das Werkzeug konturparallel an der rechten Flanke ein. Am Schnittende wird die Kontur bis zur
+## vorigen Lage nachgezogen, dann 45° abgehoben. Erst der freie Hauptbereich, dann jeder
+## Hinterschnitt für sich (keine Leerwege zwischen den Taschen in jeder Lage).
 static func _rough_long(prof: PackedFloat32Array, goal: PackedFloat32Array, p: Dictionary) -> Dictionary:
 	var t: Dictionary = p["t"]
 	var sc: float = p["sc"]
 	var need := _need(prof, goal)
 	if need.x < 0:
 		return {"moves": [], "info": "Nichts zu zerspanen."}
-	var zmin_t := float(t["zmin"])
-	var zmax_t := float(t["zmax"])
+	var w := Pass.new(t, prof, sc, p["pos"])
 	var x_top := 0.0
 	for i in range(need.x, need.y + 1):
 		x_top = maxf(x_top, prof[i])
-	var k0 := int(ceil(maxf(float(p["zlim"]), need.x * SEG - zmax_t - 1.0) / SEG))
-	var k1 := int(ceil(((need.y + 1) * SEG - zmin_t + sc) / SEG))
+	var k0 := int(ceil(maxf(float(p["zlim"]), need.x * SEG - float(t["zmax"]) - 1.0) / SEG))
+	var k1 := int(ceil(((need.y + 1) * SEG - float(t["zmin"]) + sc) / SEG))
 	var xs := PackedFloat32Array()
 	for k in range(k0, k1 + 1):
-		xs.append(safe_x(t, goal, k * SEG))
+		xs.append(w.safe(goal, k))
+	# tiefste Lage: tiefste erreichbare Stelle, an der auch Material weg muss
 	var x_bot := INF
-	for v in xs:
-		x_bot = minf(x_bot, v)
+	for k in range(k0, k1 + 1):
+		if w.clear_at(k) > xs[k - k0] + 0.01:
+			x_bot = minf(x_bot, xs[k - k0])
 	x_bot = maxf(x_bot, 0.0)
 	if x_bot >= x_top - 0.01:
 		return {"err": "Kontur mit %s nicht erreichbar (Platte stößt an)." % t["id"]}
 	var nl := maxi(1, int(ceil((x_top - x_bot) / float(p["d"]) - 0.001)))
 	var step := (x_top - x_bot) / nl
-	var x_clear := _max_prof(prof) + sc
-	var mv: Array = []
-	var pos: Vector2 = p["pos"]
+	var zr: Vector2 = p["zr"]
+	# Bereiche je Lage: zusammenhängende Schneidenlagen mit xs <= Lage. Eine Lage-Spanne, deren
+	# rechter Nachbar höher liegt, ist ein Hinterschnitt; er gehört zur Tasche, in der er beginnt.
+	var main: Array = []
+	var pockets := {}          # Wurzel-Spanne -> Array der Spannen (von oben nach unten)
+	var prev: Array = []       # Spannen der vorigen Lage: [ka, kb, wurzel]
 	for li in range(1, nl + 1):
 		var lv := x_top - li * step
-		var lp := x_top - (li - 1) * step
-		# Materialende in dieser Höhe -> Schnittbeginn
-		var jh := -1
-		for i in range(need.y, need.x - 1, -1):
-			if prof[i] > lv + 0.001:
-				jh = i
-				break
-		if jh < 0:
+		var lp := lv + step
+		var spans: Array = []
+		var k := k1
+		while k >= k0:
+			if xs[k - k0] > lv + EPS:
+				k -= 1
+				continue
+			var kb := k
+			while k - 1 >= k0 and xs[k - 1 - k0] <= lv + EPS:
+				k -= 1
+			var ka := k
+			k -= 1
+			# rechts begrenzt: Einstieg von oben (Eintauchen). Hinterschnitt nur, wenn die Begrenzung
+			# zur Kontur selbst gehört - nicht das stehende Material rechts einer Kontur mitten am Teil
+			var bounded := kb != k1
+			var open := not bounded
+			if bounded:
+				open = true
+				var tg0: PackedFloat32Array = p["tg"]   # Soll ohne Aufmaß (UZ greift sonst über den Rand)
+				for i in range(maxi(kb + 1, 0), mini(int(floor(zr.y / SEG)), tg0.size())):
+					if tg0[i] > lv + EPS:
+						open = false
+						break
+			var root := ""
+			if not open:
+				root = "%d:%d" % [ka, kb]
+				for q in prev:
+					if ka >= int(q[0]) and kb <= int(q[1]) and str(q[2]) != "":
+						root = str(q[2])     # Fortsetzung einer Tasche aus der Lage darüber
+			spans.append([ka, kb, root])
+			var job := {"ka": ka, "kb": kb, "lv": lv, "lp": lp, "pocket": bounded}
+			if open:
+				main.append(job)
+			elif bool(p["hs"]):
+				if not pockets.has(root):
+					pockets[root] = []
+				pockets[root].append(job)
+		prev = spans
+	var jobs: Array = main.duplicate()
+	var roots: Array = pockets.keys()
+	roots.sort_custom(func(a, b): return int(str(a).split(":")[1]) > int(str(b).split(":")[1]))
+	for r in roots:
+		jobs.append_array(pockets[r])
+	for job in jobs:
+		_rough_span(w, xs, k0, k1, job)
+	_rough_rest(w, xs, k0, k1, bool(p["hs"]), zr.y)
+	if w.mv.size() <= 1:
+		return {"moves": [], "info": "Nichts zu zerspanen."}
+	var e := w.last()
+	w.mv.append([e.x, maxf(_max_prof(prof) + sc, e.y), true])
+	return {"moves": _simplify(w.moves()), "cur": w.cur}
+
+
+## Abschluss des Schruppens: konturparallel mit Aufmaß dort, wo zwischen zwei Lagen noch eine
+## Stufe steht (Absatz, dessen Höhe zwischen zwei Schnitten liegt). Ohne Hinterschnitte folgt der
+## Zug der Hülle der Kontur (Taschen werden überfahren, nicht ausgeräumt).
+static func _rough_rest(w: Pass, xs: PackedFloat32Array, k0: int, k1: int, hs: bool, zhi: float) -> void:
+	var px := xs.duplicate()
+	if not hs:
+		# Hülle ab dem rechten Konturende (Material rechts einer Kontur mitten am Teil zählt nicht)
+		for k in range(k1 - 1, k0 - 1, -1):
+			if (k + 1) * SEG < zhi - SEG:
+				px[k - k0] = maxf(px[k - k0], px[k + 1 - k0])
+	var gap := int(ceil(2.0 * w.sc / SEG))
+	var k := k1
+	while k >= k0:
+		if w.clear_at(k) <= px[k - k0] + 0.08:
+			k -= 1
 			continue
-		var ks := mini(k1, int(ceil(((jh + 1) * SEG - zmin_t + sc) / SEG)))
-		if xs[ks - k0] > lv + 0.0001:
-			continue
-		var ke := ks
-		while ke - 1 >= k0 and xs[ke - 1 - k0] <= lv + 0.0001:
-			ke -= 1
-		if ke == ks:
-			continue
-		if mv.is_empty():
-			_approach(mv, pos, ks * SEG, lv, x_clear)
+		# zusammenhängender Bereich mit Rest (kleine Lücken überbrücken)
+		var rb := k
+		var ra := k
+		var q := k - 1
+		while q >= k0 and q >= ra - gap:
+			if w.clear_at(q) > px[q - k0] + 0.08:
+				ra = q
+			q -= 1
+		k = ra - 1
+		rb = mini(rb + 1, k1)
+		ra = maxi(ra - 1, k0)
+		var pts := PackedVector2Array([Vector2(rb * SEG, px[rb - k0])])
+		for r in range(rb - 1, ra - 1, -1):
+			var x := px[r - k0]
+			var xp := px[r + 1 - k0]
+			if x - xp > 2.0 * SEG:
+				pts.append(Vector2((r + 1) * SEG, x))
+			elif xp - x > 2.0 * SEG:
+				pts.append(Vector2(r * SEG, xp))
+			pts.append(Vector2(r * SEG, x))
+		pts = _simplify_pts(pts)
+		var s0 := pts[0]
+		if w.clear_span(s0.x, s0.x + w.sc) <= s0.y + 0.01:
+			w.travel(s0.x + w.sc, s0.y)
 		else:
-			_rapid_to(mv, ks * SEG, lv)
-		mv.append([ke * SEG, lv, false])
-		# Kontur bis zur vorigen Schnitthöhe nachziehen (nur steigend, keine Hinterschnitte)
-		var kz := ke
-		var xc := lv
+			w.travel(s0.x, s0.y + w.sc)
+		for pt in pts:
+			w.feed(pt.x, pt.y)
+		var e := pts[pts.size() - 1]
+		if w.clear_span(e.x, e.x + w.sc) <= e.y + 0.01:
+			w.feed(e.x + w.sc, e.y + w.sc, false)
+		else:
+			w.mv.append([e.x, e.y + w.sc, true])
+
+
+## Ein Schruppschnitt auf Höhe lv in der Spanne ka..kb (Schneidenlagen).
+static func _rough_span(w: Pass, xs: PackedFloat32Array, k0: int, k1: int, job: Dictionary) -> void:
+	var ka: int = job["ka"]
+	var kb: int = job["kb"]
+	var lv: float = job["lv"]
+	var lp: float = job["lp"]
+	# Material auf dieser Höhe: rechtes und linkes Ende
+	var ks := -1
+	for q in range(kb, ka - 1, -1):
+		if w.clear_at(q) > lv + 0.01:
+			ks = q
+			break
+	if ks < 0:
+		return
+	var ke := ks
+	for q in range(ka, ks + 1):
+		if w.clear_at(q) > lv + 0.01:
+			ke = q
+			break
+	# Steht an der Kontur links (Absatz) noch eine Stufe von der vorigen Lage, bis dorthin schneiden
+	var to_wall := ke == ka
+	if not to_wall and ka > k0:
+		var q := ka - 1
+		while q >= k0 and xs[q - k0] > lv and xs[q - k0] <= lp + EPS:
+			if w.clear_at(q) > xs[q - k0] + 0.02:
+				to_wall = true
+				break
+			q -= 1
+	if to_wall:
+		ke = ka
+	# Einstieg
+	if not bool(job["pocket"]) or ks < kb:
+		w.travel(mini(kb, ks + int(ceil(w.sc / SEG))) * SEG, lv)
+	else:
+		# Hinterschnitt: an der rechten Flanke entlang konturparallel eintauchen
+		var q := kb
+		while q + 1 <= k1 and xs[q + 1 - k0] < lp - EPS and xs[q + 1 - k0] > xs[q - k0] + EPS:
+			q += 1
+		w.travel(q * SEG, maxf(xs[q - k0], lv))
+		for r in range(q - 1, kb - 1, -1):
+			w.feed(r * SEG, maxf(xs[r - k0], lv))
+	w.feed(ke * SEG, lv)
+	# Kontur bis zur vorigen Lage nachziehen (nur steigend, nur solange dort Material steht)
+	var kz := ke
+	var xc := lv
+	if to_wall:
 		while kz - 1 >= k0:
 			var xn := xs[kz - 1 - k0]
-			if xn < xs[kz - k0] - 0.0001 or xn > lp + 0.0001:
+			if xn < xc - EPS or xn > lp + EPS:
+				break
+			if w.clear_at(kz - 1) <= xn + 0.01:
 				break
 			kz -= 1
 			if xn - xc > 2.0 * SEG:
-				mv.append([(kz + 1) * SEG, xn, false])
-			mv.append([kz * SEG, xn, false])
+				w.feed((kz + 1) * SEG, xn)
+			w.feed(kz * SEG, xn)
 			xc = xn
-		mv.append([kz * SEG + sc, xc + sc, false])   # 45° abheben
-	if mv.is_empty():
-		return {"moves": [], "info": "Nichts zu zerspanen."}
-	mv.append([mv[mv.size() - 1][0], x_clear, true])
-	return {"moves": _simplify(mv)}
+	# 45° abheben - oder senkrecht, wenn rechts daneben gleich wieder Kontur steht
+	var lz := kz * SEG + w.sc
+	if w.clear_span(kz * SEG, lz) <= xc + 0.01:
+		w.feed(lz, xc + w.sc, false)
+	else:
+		w.mv.append([kz * SEG, xc + w.sc, true])
 
 
 ## Planschruppen: Schnitte in X- (zur Mitte) auf abnehmenden Z, Kontur nachziehen.
@@ -520,30 +913,43 @@ static func _rough_face(prof: PackedFloat32Array, goal: PackedFloat32Array, p: D
 
 ## Schlichten entlang der Kontur. Längs: von rechts nach links (Z-); steile Flächen (Absätze)
 ## werden von oben nach innen geschlichtet. Plan: von links (großer Ø) zur Mitte.
-static func _finish(prof: PackedFloat32Array, goal: PackedFloat32Array, p: Dictionary, face: bool) -> Dictionary:
+static func _finish(prof: PackedFloat32Array, goal: PackedFloat32Array, path_goal: PackedFloat32Array, p: Dictionary, face: bool) -> Dictionary:
 	var t: Dictionary = p["t"]
 	var sc: float = p["sc"]
 	var need := _need(prof, goal, 0.003)
 	if need.x < 0:
 		return {"moves": [], "info": "Kontur bereits fertig."}
-	var zmin_t := float(t["zmin"])
-	var zmax_t := float(t["zmax"])
 	var x_all := _max_prof(prof)
 	var x_clear := x_all + sc
-	var k0 := int(ceil(maxf(float(p["zlim"]), need.x * SEG - zmax_t - 1.0) / SEG))
-	var k1 := int(ceil(((need.y + 1) * SEG - zmin_t + sc) / SEG))
-	# Konturzug der Schneide von rechts nach links, steile Sprünge als Ecke
+	var w := Pass.new(t, prof, sc, p["pos"])
+	# Schlichtbahn nur über die programmierte Kontur (zr), wie die Steuerung die Kontur vom Anfang
+	# bis zum Ende abfährt - nicht an Rohteil oder Nachbarkonturen entlang. Links eine Lage mehr:
+	# dort steht ggf. die Schulter, an der die Kontur endet.
+	var zr: Vector2 = p["zr"]
+	var k_lim := int(ceil(float(p["zlim"]) / SEG))
+	var kl := maxi(k_lim, int(floor(zr.x / SEG + 0.0001)))
+	var kr := maxi(kl + 1, int(ceil(zr.y / SEG - 0.0001)))
+	# Konturzug der Schneide von rechts nach links; senkrechte Sprünge als Ecke
 	var pts := PackedVector2Array()
 	var prev_x := NAN
-	for k in range(k1, k0 - 1, -1):
-		var x := maxf(safe_x(t, goal, k * SEG), 0.0)
-		if not is_nan(prev_x) and x - prev_x > 2.0 * SEG:
-			pts.append(Vector2((k + 1) * SEG, x))
+	for k in range(kr, kl - 2, -1):
+		if k < k_lim:
+			break
+		var x := maxf(w.safe(path_goal, k), 0.0)
+		if k == kl - 1:
+			if x - prev_x > 2.0 * SEG:
+				pts.append(Vector2((k + 1) * SEG, x))   # Schulter am Konturende hinauf
+			break
+		if not is_nan(prev_x):
+			if x - prev_x > 2.0 * SEG:
+				pts.append(Vector2((k + 1) * SEG, x))
+			elif prev_x - x > 2.0 * SEG:
+				pts.append(Vector2(k * SEG, prev_x))    # Einstich: erst über die Kante, dann hinein
 		pts.append(Vector2(k * SEG, x))
 		prev_x = x
-		if x >= x_all - 0.005 and k * SEG < need.x * SEG:
-			break   # links vom Bearbeitungsbereich auf Rohteilhöhe angekommen
 	pts = _simplify_pts(pts)
+	if pts.size() < 2:
+		return {"moves": [], "info": "Kontur bereits fertig."}
 	var mv: Array = []
 	var pos: Vector2 = p["pos"]
 	if face:
@@ -562,26 +968,34 @@ static func _finish(prof: PackedFloat32Array, goal: PackedFloat32Array, p: Dicti
 				e = q
 				break
 		pts = pts.slice(s, e + 1)
-		_approach(mv, pos, pts[0].x, minf(pts[0].y + sc, x_clear), x_clear)
+		w.travel(pts[0].x, minf(pts[0].y + sc, maxf(x_clear, pts[0].y)))
 		for q in pts:
-			mv.append([q.x, q.y, false])
+			w.feed(q.x, q.y)
 		var last := pts[pts.size() - 1]
 		if last.y <= 0.01:
-			mv.append([last.x, CENTER_OVER, false])
-		mv.append([last.x + sc, maxf(last.y, 0.0) + sc, false])
-		mv.append([last.x + sc, x_clear, true])
-		return {"moves": _simplify(mv), "finish": true}
-	# längs: einfach die Kontur abfahren - von rechts kommend die Planflächen hinauf und die
-	# Durchmesser entlang, in einem Zug (das Schlichtaufmaß vor Planflächen nimmt die Schneide mit)
+			w.feed(last.x, CENTER_OVER)
+		w.feed(last.x + sc, maxf(last.y, 0.0) + sc, false)
+		w.mv.append([last.x + sc, maxf(x_clear, last.y + sc), true])
+		return {"moves": _simplify(w.moves()), "finish": true}
+	# längs: die Kontur vom Anfang bis zum Ende abfahren - von rechts kommend die Planflächen hinauf,
+	# die Durchmesser entlang und in Einstiche hinein, in einem Zug (das Schlichtaufmaß vor
+	# Planflächen nimmt die Schneide mit)
 	var thick := _finish_too_thick(prof, goal, t)
 	if thick != "":
 		return {"err": thick}
-	_approach(mv, pos, pts[0].x, pts[0].y, x_clear)
+	# Anfahren: an der Drehmitte bzw. bei freiem Raum rechts waagerecht auf den Konturanfang zu,
+	# sonst (Kontur beginnt neben stehendem Material, z. B. ein Freistich hinter dem Gewinde) von oben.
+	var s0 := pts[0]
+	if s0.y <= 0.01 or w.clear_span(s0.x, s0.x + sc) <= s0.y + 0.01:
+		w.travel(s0.x + sc, s0.y)
+	else:
+		w.travel(s0.x, s0.y + sc)
+	w.feed(s0.x, s0.y)
 	for q in range(1, pts.size()):
-		mv.append([pts[q].x, pts[q].y, false])
-	var e: Array = mv[mv.size() - 1]
-	mv.append([e[0], x_clear, true])
-	return {"moves": _simplify(mv), "finish": true}
+		w.feed(pts[q].x, pts[q].y)
+	var e := w.last()
+	w.mv.append([e.x, maxf(x_clear, e.y + sc), true])
+	return {"moves": _simplify(w.moves()), "finish": true}
 
 
 ## Schlichten setzt ein Schruppen voraus: steht irgendwo radial mehr als die zulässige Zustellung
@@ -667,6 +1081,8 @@ static func simulate(prog: Dictionary, lathe) -> Dictionary:
 		var b: Dictionary = blocks[bi]
 		if str(b["type"]) == "contour":
 			polys.append(contour_points(b))
+		elif str(b["type"]) == "undercut":
+			polys.append(contour_points(undercut_contour(b)))
 		if not is_machining(b):
 			continue
 		var tid := str(b["t"])
