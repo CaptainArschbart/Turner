@@ -141,6 +141,9 @@ func _update_camera() -> void:
 # ------------------------------------------------------------ Eingabe
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Ziel inzwischen gelöscht (Umbau, aufgehobene Palette): nicht mehr ansprechen
+	if _focus != null and not _alive(_focus):
+		_focus = null
 	# Rauchen geht überall, auch beim Bedienen einer Maschine
 	if event.is_action_pressed("smoke") and not event.is_echo():
 		get_viewport().set_input_as_handled()
@@ -390,15 +393,19 @@ func set_build_mode(on: bool) -> void:
 
 
 func _update_focus() -> void:
+	if _focus != null and not _alive(_focus):
+		_focus = null
 	if build_mode:
 		_focus = null
 		_set_prompt("")
 		return
 	var target: Node = null
 	_on_part = false
-	if ray.is_colliding():
+	# Der Strahl rechnet erst nach der Figur neu: Direkt nach einem Umbau (Palette aufgehoben, Stapel neu
+	# aufgestellt) meldet er noch den alten, schon gelöschten Körper. Solche Treffer zählen nicht.
+	if ray.is_colliding() and _alive(ray.get_collider()):
 		var c := ray.get_collider()
-		if c and c.has_meta("interact"):
+		if c.has_meta("interact") and _alive(c.get_meta("interact")):
 			target = c.get_meta("interact")
 			# Blick aufs eingespannte Teil: Das Teil geht vor der Werkzeugaufnahme
 			if hands_free() and target.has_method("get_machine") and _aims_at_part(target.get_machine()):
@@ -774,9 +781,18 @@ func pallet_spot() -> Vector2:
 	return me + off.normalized() * clampf(off.length(), PALLET_NEAR, PALLET_FAR)
 
 
+## Gibt es das Objekt noch (nicht gelöscht, nicht zum Löschen vorgemerkt, noch in der Szene)?
+static func _alive(o: Object) -> bool:
+	if o == null or not is_instance_valid(o):
+		return false
+	if o is Node:
+		return not (o as Node).is_queued_for_deletion() and (o as Node).is_inside_tree()
+	return true
+
+
 ## Palettenstapel, auf den die getragene Palette gerade zielt (null = Boden).
 func pallet_target() -> Shelf:
-	if carrying_pallet() and _focus is Shelf and (_focus as Shelf).is_pallet():
+	if carrying_pallet() and _alive(_focus) and _focus is Shelf and (_focus as Shelf).is_pallet():
 		return _focus as Shelf
 	return null
 
