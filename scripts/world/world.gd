@@ -2115,9 +2115,8 @@ func pallet_click(i: int) -> void:
 
 # ------------------------------------------------------------ Hubwagen
 
-## Hubwagen und Last rasten beim Abstellen auf 90° ein, wenn sie höchstens so viele Grad davon entfernt stehen
-## (Paletten brauchen es genauer, sonst klemmen die Zinken in den Klötzen).
-const JACK_SNAP_DEG := 15.0
+## Abgesenkte Paletten rasten auf 90° ein, dafür darf der Wagen höchstens so viele Grad davon entfernt stehen
+## (sonst klemmen die Zinken in den Klötzen). Der Hubwagen selbst bleibt in jedem Winkel stehen ("angle").
 const PALLET_SNAP_DEG := 6.0
 ## Seitlicher Versatz der Palettenmitte zur Zinkenmitte: Die Zinken-Kollision (z 0,205 bis 0,325) hat in der
 ## Öffnung (0,095 bis 0,38) außen 0,055 m Luft. Etwas mehr erlaubt, damit jede Lage, in die man hineinfährt, auch hebt.
@@ -2141,7 +2140,7 @@ func jack_click(i: int) -> void:
 	var s: Dictionary = layout.shelves[i]
 	if str(s["size"]) != "pallet_jack":
 		return
-	var phi := int(s["rot"]) * PI / 2.0
+	var phi := float(s.get("angle", int(s["rot"]) * PI / 2.0))
 	var f := Vector2(cos(phi), -sin(phi))
 	var center: Vector2 = s["pos"]
 	var node: Node = shelf_nodes[i] if i < shelf_nodes.size() else null
@@ -2254,37 +2253,32 @@ func _settle_pallets(node: Node3D) -> void:
 			create_tween().tween_property(c, "position:y", y, JackCart.LIFT_TIME)
 
 
-## Hubwagen sofort an der Stelle des Wagens abstellen, ohne Prüfung (Figur teleportiert, schläft, ist zu weit weg).
-## Rot auf 90° gerundet; nichts geht verloren, auch wenn dort etwas steht.
+## Hubwagen sofort an der Stelle des Wagens abstellen (Figur teleportiert, schläft, ist zu weit weg).
 func jack_abandon() -> void:
 	if not player.driving_jack():
 		return
-	layout.shelves.append({"size": "pallet_jack", "pos": player.jack_center(), "rot": player.jack_rot(),
-			"load": player.jack_load(), "cross": player.jack_cross()})
-	player.clear_carry()
-	_rebuild_stands()
+	_leave_jack()
 	hud.show_message("Hubwagen an seiner Stelle abgestellt.", Color(0.9, 0.95, 1.0))
 
 
-## E oder Q beim Fahren: Hubwagen (samt Last) loslassen und an der echten Stelle abstellen. Der Wagen rastet
-## auf 90° ein, wenn er höchstens 15° davon entfernt steht. Fehlertext, leer = abgestellt.
+## E oder Q beim Fahren: Hubwagen (samt Last) loslassen. Er bleibt genau so stehen, wie er gerade steht, in
+## jedem Winkel und überall, auch unter einer Palette. Fehlertext, leer = abgestellt (immer leer).
 func jack_park() -> String:
 	if not player.driving_jack():
 		return ""
-	if player.jack_snap_error() > deg_to_rad(JACK_SNAP_DEG):
-		var msg := "Hubwagen gerader ausrichten."
-		hud.show_message(msg, Color(1, 0.75, 0.2))
-		return msg
-	var at: Vector2 = player.jack_center()
-	var rot: int = player.jack_rot()
-	var err := layout.check_shelf("pallet_jack", at, rot, -1, player.jack_load(), player.jack_cross())
-	if err != "":
-		hud.show_message(err, Color(1, 0.75, 0.2))
-		return err
-	layout.shelves.append({"size": "pallet_jack", "pos": at, "rot": rot, "load": player.jack_load(), "cross": player.jack_cross()})
+	_leave_jack()
+	return ""
+
+
+## Wagen mit genauer Lage ins Layout eintragen. "rot" (gerundet) dient nur der Grobprüfung im Baumodus,
+## gezeichnet und wieder gegriffen wird mit "angle".
+func _leave_jack() -> void:
+	var cart: JackCart = player.jack_cart
+	layout.shelves.append({"size": "pallet_jack", "pos": player.jack_center(), "rot": player.jack_rot(),
+			"angle": cart.phi if cart else player.jack_rot() * PI / 2.0,
+			"load": player.jack_load(), "cross": player.jack_cross()})
 	player.clear_carry()
 	_rebuild_stands()
-	return ""
 
 
 ## Getragene Palette am Punkt (x, z) abstellen, die lange Seite quer zur Blickrichtung. Fehlertext, leer = abgestellt.
@@ -2314,6 +2308,7 @@ func place_shelf(moving: int, size_id: String, pos: Vector2, rot: int) -> String
 	if moving >= 0:
 		layout.shelves[moving]["pos"] = pos
 		layout.shelves[moving]["rot"] = rot
+		layout.shelves[moving].erase("angle")      # im Baumodus umgestellt: wieder gerade
 	else:
 		if int(inventory.get(size_id, 0)) <= 0:
 			return "Dieses Regal wurde nicht gekauft."
@@ -2421,7 +2416,7 @@ func _rebuild_stands() -> void:
 		sn.cargo_cross = bool(s.get("cross", false))
 		sn.world = self
 		sn.position = Vector3(s["pos"].x, 0, s["pos"].y)
-		sn.rotation.y = int(s["rot"]) * PI / 2.0
+		sn.rotation.y = float(s.get("angle", int(s["rot"]) * PI / 2.0))
 		add_child(sn)
 		shelf_nodes.append(sn)
 	for i in layout.crates.size():
@@ -2647,7 +2642,7 @@ func crane_set_down(i: int, at: Vector2) -> String:
 	return ""
 
 
-## Die Spänekiste unter dem Späneförderer (E50) ist ein normaler großer Spänebehälter der Werkstatt. Jede
+## Die Spänekiste unter dem Späneförderer (E50) ist ein normaler Spänebehälter der Werkstatt. Jede
 ## Maschine mit Stellplatz bekommt ihre Kiste genau dorthin, Kisten von nicht aufgestellten Maschinen
 ## verschwinden.
 func _sync_machine_bins() -> void:
@@ -2668,8 +2663,11 @@ func _sync_machine_bins() -> void:
 				b = e
 		if b.is_empty():
 			# Neu unter dem Förderer: übernimmt, was schon in der Kiste der Maschine liegt (alte Spielstände)
-			b = {"size": "bin_l", "chips": m.chip_bin, "out": false, "machine": id}
+			b = {"size": Lathe.CHIP_BIN_SIZE, "chips": m.chip_bin, "out": false, "machine": id}
 			layout.bins.append(b)
+		# Immer der normale Behälter, auch wenn ein alter Spielstand die Kiste noch groß gespeichert hat
+		b["size"] = Lathe.CHIP_BIN_SIZE
+		b["chips"].capacity = float(ChipBin.SIZES[Lathe.CHIP_BIN_SIZE]["kg"])
 		m.chip_bin = b["chips"]
 		# Mit dem Kran herausgehoben: Der Förderer hat keine Kiste, bis sie wieder darunter steht
 		m.chip_bin_away = bool(b.get("away", false)) or bool(b.get("hooked", false)) or bool(b.get("out", false))
@@ -3129,6 +3127,8 @@ func _apply_layout(d: Dictionary) -> void:
 				layout.shelves.append({"size": str(s["size"]), "pos": Vector2(s["pos"][0], s["pos"][1]), "rot": int(s["rot"]),
 						"stack": clampi(int(s.get("stack", 1)), 1, Shelf.MAX_STACK),
 						"load": clampi(int(s.get("load", 0)), 0, Shelf.MAX_STACK), "cross": bool(s.get("cross", false))})
+				if s.has("angle"):
+					layout.shelves.back()["angle"] = float(s["angle"])
 		for c in saved.get("crates", []):
 			var items = c.get("items", [])
 			layout.crates.append({"size": str(c["size"]), "pos": Vector2(c["pos"][0], c["pos"][1]), "rot": int(c["rot"]),

@@ -89,10 +89,12 @@ var hw_axis := 0              # Handrad-Achse: 0 = X (Plan), 1 = Z (Längs)
 var coolant := false
 var tray := ChipTray.new()         # Spänewanne, muss von Hand geleert werden
 var _chip_heap: MeshInstance3D
-## E50: Der Späneförderer trägt die Späne aus der Wanne in den großen Spänebehälter unter dem Abwurf.
+## E50: Der Späneförderer trägt die Späne aus der Wanne in den normalen Spänebehälter unter dem Abwurf.
 ## Der Behälter ist ein ganz normaler Spänebehälter der Werkstatt (layout.bins): Die Spielwelt stellt ihn an
 ## chip_bin_spot auf und setzt hier seinen Inhalt (chip_bin) und seinen Knoten (chip_bin_node) ein.
-var chip_bin := ChipTray.new(float(ChipBin.SIZES["bin_l"]["kg"]))
+## E50: Die Kiste unter dem Förderer ist derselbe normale Spänebehälter, den man auch kauft.
+const CHIP_BIN_SIZE := "bin_s"
+var chip_bin := ChipTray.new(float(ChipBin.SIZES[CHIP_BIN_SIZE]["kg"]))
 var chip_bin_node: ChipBin
 ## E50: Stellplatz der Spänekiste unter dem Abwurf in Maschinenkoordinaten, has_chip_bin_spot = es gibt ihn.
 var chip_bin_spot := Transform3D()
@@ -211,7 +213,7 @@ var guard_open := false                    # Ziel: offen
 var GUARD_TRAVEL := 0.0                    # m Weg nach links
 var GUARD_BOX := AABB()                    # Klickfläche (zu), Maschinenkoordinaten
 var e50 := false                           # Maschine aus dem E50-Modell (Verkleidung, Schlitten, Türen)
-const BIN_UNDER_CHUTE := 0.3                           # so weit ragt der E50-Abwurf über die große Spänekiste (m)
+const BIN_UNDER_CHUTE := 0.3                           # so weit ragt der E50-Abwurf über die Spänekiste (m)
 var periphery: Node3D                                     # Späneförderer und Spänewagen (stehen neben der Maschine)
 var _telescope: Array = []                                # Teleskopabdeckung links/rechts vom Bettschlitten
 var _chain: Array[MeshInstance3D] = []                    # Glieder der Energiekette
@@ -1229,11 +1231,11 @@ func _build_details() -> void:
 			Build.box(paper, Vector3(0.002, 0.006, 0.15 - (i % 3) * 0.03), Vector3(-0.0005, 0.11 - i * 0.025, -0.01), Build.mat(Color(0.35, 0.35, 0.38), 0.9))
 
 
-## E50: Stellplatz des großen Spänebehälters unter dem Abwurf des Späneförderers. Die Kiste selbst ist ein
+## E50: Stellplatz des normalen Spänebehälters unter dem Abwurf des Späneförderers. Die Kiste selbst ist ein
 ## normaler Spänebehälter der Werkstatt, den die Spielwelt dort aufstellt; die schräge Kippseite (+X im
 ## Modell) zeigt nach vorn zum Bediener. Dazu der Schaltkasten des Förderers.
 func _build_conveyor_bin(cb: AABB, dark: Material) -> void:
-	var s := ChipBin.size_of("bin_l")
+	var s := ChipBin.size_of(CHIP_BIN_SIZE)
 	# Kiste ist so hoch wie der Abwurf: hinter das Förderer-Ende, nur der Abwurf ragt über die Öffnung
 	chip_bin_spot = Transform3D(Basis(Vector3.UP, -PI / 2.0), Vector3(cb.end.x - BIN_UNDER_CHUTE + s.z * 0.5, 0, cb.get_center().z))
 	has_chip_bin_spot = true

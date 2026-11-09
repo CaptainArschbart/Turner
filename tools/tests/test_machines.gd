@@ -154,7 +154,7 @@ func _initialize() -> void:
 		for i in w.layout.bins.size():
 			if str(w.layout.bins[i].get("machine", "")) == "cnc_lathe":
 				bi = i
-		ok(bi >= 0 and str(w.layout.bins[bi]["size"]) == "bin_l", "E50 bekommt einen großen Spänebehälter")
+		ok(bi >= 0 and str(w.layout.bins[bi]["size"]) == "bin_s", "E50 bekommt den normalen Spänebehälter")
 		if bi >= 0:
 			var eb: Dictionary = w.layout.bins[bi]
 			ok(c.chip_bin == eb["chips"] and c.chip_bin_node == w.bin_nodes[bi], "Förderer füllt genau diesen Behälter")
@@ -190,7 +190,7 @@ func _initialize() -> void:
 			ok(cr.hooked == bi and c.chip_bin_away, "Kran hebt die Spänekiste unter dem Förderer heraus")
 			var free := Vector2.INF
 			for cand in [Vector2(spot.x, spot.z - 3.5), Vector2(spot.x, spot.z + 3.5), Vector2(spot.x - 3.5, spot.z), Vector2(spot.x + 3.5, spot.z), Vector2(spot.x + 3.5, spot.z - 3.5)]:
-				if free == Vector2.INF and w.layout.check_bin(cand, int(eb["rot"]), bi, "bin_l") == "":
+				if free == Vector2.INF and w.layout.check_bin(cand, int(eb["rot"]), bi, str(eb["size"])) == "":
 					free = cand
 			ok(free != Vector2.INF, "Freier Platz neben der E50")
 			if free != Vector2.INF:
