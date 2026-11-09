@@ -185,7 +185,14 @@ func update(delta: float, hspeed: float, on_floor: bool, sprinting: bool, look_d
 		k = clampf(delta * 25.0, 0.0, 1.0)
 	for i in 2:
 		_p[i] = _p[i].lerp(_p_t[i], k)
-		_g[i] = _g[i].slerp(_g_t[i], k).normalized() if _g[i].dot(_g_t[i]) > -0.99 else _g_t[i]
+		# Fast gleiche Richtungen nicht per slerp drehen: die Drehachse wäre dann nicht sauber normiert
+		var gd := _g[i].dot(_g_t[i])
+		if gd > 0.9995:
+			_g[i] = _g[i].lerp(_g_t[i], k).normalized()
+		elif gd > -0.99:
+			_g[i] = _g[i].slerp(_g_t[i], k).normalized()
+		else:
+			_g[i] = _g_t[i]
 		_e[i] = _e[i].lerp(_e_t[i], k)
 	item.position = _item_pos
 	item.rotation = _item_rot

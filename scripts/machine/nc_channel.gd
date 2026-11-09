@@ -226,6 +226,7 @@ func step(delta: float) -> void:
 				lathe.coolant = false
 				state = "done"
 				block = -1
+				@warning_ignore("integer_division")
 				lathe._info("Programm %s beendet (%d:%02d min)." % [prog["name"], int(run_time) / 60, int(run_time) % 60])
 
 

@@ -792,6 +792,7 @@ func _slot_pos(i: int) -> Vector3:
 
 static func _slot_address(i: int) -> Dictionary:
 	var n := i % SLOTS_PER_RACK
+	@warning_ignore("integer_division")
 	return {"rack": i / SLOTS_PER_RACK, "shelf": n / 2, "bay": n % 2}
 
 
@@ -905,8 +906,8 @@ static func delivery_groups(items: Array) -> Array:
 ## Platz der i-ten Palette: im Osten des Hofs, die Wege zu beiden Toren bleiben frei.
 static func delivery_pos(i: int) -> Vector3:
 	var col := i % 5
-	var row := (i / 5) % 5
-	var stack := i / 25
+	var row := floori(i / 5.0) % 5
+	var stack := floori(i / 25.0)
 	return Vector3(21.6 + col * 1.7, 0.12 + stack * 1.0, LAGER_Z + 2.6 + row * 3.4)
 
 

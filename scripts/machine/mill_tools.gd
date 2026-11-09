@@ -217,7 +217,7 @@ static func _insert_set(root: Node3D) -> void:
 	for i in 6:
 		var mi := _add(root, plate, gold)
 		mi.rotation = Vector3(-PI / 2, 0, -0.5)
-		mi.position = Vector3((i % 3 - 1) * 23.0, 0, (i / 3 - 0.5) * 18.0)
+		mi.position = Vector3((i % 3 - 1) * 23.0, 0, (floorf(i / 3.0) - 0.5) * 18.0)
 
 
 static func _drill(root: Node3D, d := 10.0, total := 133.0, flute := 87.0) -> void:

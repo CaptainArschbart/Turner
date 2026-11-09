@@ -51,7 +51,7 @@ func _ready() -> void:
 	Build.box(self, Vector3(0.3, 1.4, 2.2), Vector3(counter_x + 2.3, 1.4, counter_z), Build.mat(Color(0.3, 0.22, 0.15), 0.6), true)
 	for i in 18:
 		var c := Color(0.95, 0.95, 0.92) if i % 3 else Color(0.8, 0.1, 0.1)
-		Build.box(self, Vector3(0.05, 0.1, 0.08), Vector3(counter_x + 2.12, 0.85 + (i / 6) * 0.35, counter_z - 0.8 + (i % 6) * 0.3), Build.mat(c, 0.6))
+		Build.box(self, Vector3(0.05, 0.1, 0.08), Vector3(counter_x + 2.12, 0.85 + floorf(i / 6.0) * 0.35, counter_z - 0.8 + (i % 6) * 0.3), Build.mat(c, 0.6))
 	var label := Build.label(self, "KASSE", Vector3(counter_x, 2.5, counter_z), 0.006, Color(0.8, 0.1, 0.1), 64)
 	label.font = UITheme.font(700, 2)
 	label.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
