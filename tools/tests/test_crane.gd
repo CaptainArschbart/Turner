@@ -48,21 +48,27 @@ func _initialize() -> void:
 	ok(p.operating == null, "Figur bedient keine Maschine, sie läuft frei")
 	var x0: float = c.bridge_x
 	var z0: float = c.trolley_z
-	p.yaw = 0.0                       # Blick nach -Z
+	var hand: CraneRemote = _find_remote(p)
+	ok(hand != null, "Fernbedienung mit Joysticks in der Hand")
+	p.yaw = PI / 2.0                  # Blick nach -X: die Richtung darf keine Rolle spielen
 	Input.action_press("crane_forward")
 	await frames(40)
+	ok(hand != null and hand.tilt().z < -0.9 and absf(hand.tilt().x) < 0.05, "Linker Stick nach vorn gekippt")
 	Input.action_release("crane_forward")
 	await frames(40)
-	ok(c.trolley_z < z0 - 0.2 and absf(c.bridge_x - x0) < 0.05, "Pfeil hoch fährt die Katze in Blickrichtung (%.2f -> %.2f)" % [z0, c.trolley_z])
-	p.yaw = PI / 2.0                  # Blick nach -X
-	Input.action_press("crane_forward")
+	ok(c.trolley_z < z0 - 0.2 and absf(c.bridge_x - x0) < 0.05, "Pfeil hoch fährt nach Norden, egal wohin man schaut (%.2f -> %.2f)" % [z0, c.trolley_z])
+	ok(hand != null and hand.tilt().length() < 0.05, "Stick federt zurück in die Mitte")
+	p.yaw = PI                        # Blick nach +Z
+	Input.action_press("crane_right")
 	await frames(40)
-	Input.action_release("crane_forward")
+	ok(hand != null and hand.tilt().x > 0.9, "Linker Stick nach rechts gekippt")
+	Input.action_release("crane_right")
 	await frames(40)
-	ok(c.bridge_x < x0 - 0.2, "Nach Drehen fährt die Brücke (%.2f -> %.2f)" % [x0, c.bridge_x])
+	ok(c.bridge_x > x0 + 0.2, "Pfeil rechts fährt die Brücke nach Osten (%.2f -> %.2f)" % [x0, c.bridge_x])
 	var y0: float = c.hook_y
 	Input.action_press("crane_down")
 	await frames(40)
+	ok(hand != null and hand.tilt().y < -0.9, "Rechter Stick für den Haken gekippt")
 	Input.action_release("crane_down")
 	await frames(30)
 	ok(c.hook_y < y0 - 0.2, "Haken senkt sich")
@@ -165,3 +171,14 @@ func _initialize() -> void:
 
 	print("CHECKS %d FAILS %d" % [checks, fails])
 	quit()
+
+
+## Fernbedienung in der Ego-Hand der Figur suchen.
+func _find_remote(n: Node) -> CraneRemote:
+	if n is CraneRemote:
+		return n
+	for ch in n.get_children():
+		var r := _find_remote(ch)
+		if r != null:
+			return r
+	return null

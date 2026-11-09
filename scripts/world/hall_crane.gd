@@ -3,7 +3,8 @@ extends Node3D
 ## Hallenkran (5 t) mit Funkfernbedienung. Die Brücke fährt auf der Kranbahn in X, die Katze auf der Brücke
 ## in Z, das Hubwerk hebt und senkt den Haken. Die Fernbedienung hängt in ihrer Halterung an der Hallenwand
 ## neben dem Meisterbüro: Wer sie nimmt, läuft und schaut frei herum und steuert dabei mit den Pfeiltasten
-## (relativ zur Blickrichtung) und Bild auf / Bild ab. Abgelegt wird sie in der Halterung oder auf einer
+## nach Himmelsrichtungen wie an einem echten Kran (hoch = Nord / -Z, rechts = Ost / +X), unabhängig von der
+## Blickrichtung, und mit Bild auf / Bild ab den Haken. Die Joysticks der Fernbedienung bewegen sich mit. Abgelegt wird sie in der Halterung oder auf einer
 ## Werkbank, von dort nimmt man sie auch wieder.
 ## Am Haken hängt ein Spänebehälter, z. B. die Spänekiste unter dem Förderer der E50.
 
@@ -93,39 +94,35 @@ func _build_holder(yellow: Material, anth: Material, black: Material) -> void:
 	_holder.rotation.y = PI              # die Halterung schaut von der Südwand in die Halle
 	add_child(_holder)
 	var plate := Build.mat(Color(0.72, 0.74, 0.76), 0.45, 0.6)
-	Build.box(_holder, Vector3(0.3, 0.5, 0.012), Vector3(0, 0.02, -0.006), plate)
-	for sx in [-0.12, 0.12]:
+	Build.box(_holder, Vector3(0.36, 0.5, 0.012), Vector3(0, 0.02, -0.006), plate)
+	for sx in [-0.15, 0.15]:
 		for sy in [-0.2, 0.24]:
 			Build.cyl(_holder, 0.008, 0.006, Vector3(sx, sy, -0.014), anth, Build.AXIS_Z)
 	# Köcher unten offen nach oben, Rückhaltebügel
-	Build.box(_holder, Vector3(0.16, 0.012, 0.1), Vector3(0, -0.12, -0.06), anth)
-	Build.box(_holder, Vector3(0.012, 0.1, 0.1), Vector3(-0.074, -0.07, -0.06), anth)
-	Build.box(_holder, Vector3(0.012, 0.1, 0.1), Vector3(0.074, -0.07, -0.06), anth)
-	Build.box(_holder, Vector3(0.16, 0.06, 0.012), Vector3(0, -0.09, -0.11), anth)
+	Build.box(_holder, Vector3(0.3, 0.012, 0.1), Vector3(0, -0.12, -0.06), anth)
+	Build.box(_holder, Vector3(0.012, 0.1, 0.1), Vector3(-0.144, -0.07, -0.06), anth)
+	Build.box(_holder, Vector3(0.012, 0.1, 0.1), Vector3(0.144, -0.07, -0.06), anth)
+	Build.box(_holder, Vector3(0.3, 0.03, 0.012), Vector3(0, -0.105, -0.11), anth)
 	Build.label(_holder, "KRAN", Vector3(0, 0.205, -0.014), 0.0016, Color(0.1, 0.1, 0.1), 64, PI)
 	Build.box(_holder, Vector3(0.22, 0.06, 0.004), Vector3(0, 0.205, -0.012), yellow)
-	# Fernbedienung: steht im Köcher, Antenne oben
+	# Fernbedienung: steht hochkant im Köcher, Sticks zur Halle, Tragbügel oben
 	_remote = Node3D.new()
-	_remote.position = Vector3(0, 0.0, -0.06)
+	_remote.position = Vector3(0, -0.06, -0.06)
+	_remote.rotation = Vector3(PI / 2.0, 0.0, PI)
 	_holder.add_child(_remote)
 	remote_model(_remote)
 	# Nur für den Blickstrahl, die Figur läuft nicht dagegen
-	var hit := Build.collider(_holder, Vector3(0.36, 0.6, 0.3), Vector3(0, 0.02, -0.12))
+	var hit := Build.collider(_holder, Vector3(0.4, 0.6, 0.3), Vector3(0, 0.02, -0.12))
 	hit.collision_layer = DroppedItem.LAYER
 	hit.set_meta("interact", self)
 
 
-## Modell der Funkfernbedienung (Mitte im Ursprung, Tasten nach -Z), auch für die Hand der Spielfigur.
-static func remote_model(holder: Node3D) -> void:
-	var yellow := Build.mat(Color(0.95, 0.72, 0.08), 0.5)
-	var black := Build.mat(Color(0.08, 0.08, 0.09), 0.6)
-	Build.box(holder, Vector3(0.085, 0.22, 0.05), Vector3.ZERO, yellow)
-	Build.box(holder, Vector3(0.07, 0.03, 0.04), Vector3(0, -0.12, 0), black)
-	Build.cyl(holder, 0.006, 0.07, Vector3(0.03, 0.145, 0), black)
-	Build.cyl(holder, 0.02, 0.014, Vector3(0, 0.075, -0.027), Build.mat(Color(0.85, 0.1, 0.06), 0.4), Build.AXIS_Z)
-	for i in 3:
-		for j in 2:
-			Build.box(holder, Vector3(0.022, 0.02, 0.01), Vector3(-0.016 + j * 0.032, 0.025 - i * 0.04, -0.027), black)
+## Modell der Funkfernbedienung (CraneRemote: Mitte im Ursprung, Sticks nach +Y, Bedienerseite nach +Z),
+## auch für die Hand der Spielfigur. Liefert das Modell, damit man es ausrichten kann.
+static func remote_model(holder: Node3D) -> CraneRemote:
+	var r := CraneRemote.new()
+	holder.add_child(r)
+	return r
 
 
 # ------------------------------------------------------------ Bedienung
@@ -210,13 +207,13 @@ func put_on_bench(id: String, bench: Node3D, at: Vector3, yaw: float) -> void:
 	_loose.global_position = at + Vector3(0, 0.026, 0)
 	_loose.global_rotation = Vector3(0, yaw, 0)
 	var lying := Node3D.new()
-	lying.rotation.x = -PI / 2.0            # liegt flach, Tasten nach oben
+	lying.position.y = 0.019                # liegt flach auf der Platte, Sticks nach oben
 	_loose.add_child(lying)
 	remote_model(lying)
 	var pick := RemotePickup.new()
 	pick.crane = self
 	_loose.add_child(pick)
-	var hit := Build.collider(_loose, Vector3(0.14, 0.08, 0.28), Vector3(0, 0.01, 0))
+	var hit := Build.collider(_loose, Vector3(0.28, 0.1, 0.14), Vector3(0, 0.03, 0))
 	hit.collision_layer = DroppedItem.LAYER
 	hit.set_meta("interact", pick)
 	remote_bench = id
@@ -304,15 +301,17 @@ func _min_hook() -> float:
 
 func _physics_process(delta: float) -> void:
 	var target := Vector3.ZERO
+	var stick := Vector3.ZERO                 # Ausschlag der Joysticks an der Fernbedienung
 	if held_by != null:
 		if not is_instance_valid(held_by) or not held_by.carrying_pendant():
 			held_by = null
 		elif held_by.operating == null and not held_by.build_mode and _in_range(held_by):
 			var iv := Input.get_vector("crane_left", "crane_right", "crane_forward", "crane_back")
-			# Relativ zur Blickrichtung: Pfeil hoch fährt dorthin, wohin die Figur schaut
-			var d := Basis(Vector3.UP, float(held_by.yaw)) * Vector3(iv.x, 0, iv.y)
 			var lift := Input.get_action_strength("crane_up") - Input.get_action_strength("crane_down")
-			target = Vector3(d.x * BRIDGE_SPEED, lift * HOOK_SPEED, d.z * TROLLEY_SPEED)
+			stick = Vector3(iv.x, lift, iv.y)
+			# Himmelsrichtungen wie am echten Kran: hoch = Nord (-Z), rechts = Ost (+X), egal wohin man schaut
+			target = Vector3(iv.x * BRIDGE_SPEED, lift * HOOK_SPEED, iv.y * TROLLEY_SPEED)
+	CraneRemote.input = stick
 	_v = _v.move_toward(target, ACCEL * delta)
 	var nx := clampf(bridge_x + _v.x * delta, X_RANGE.x, X_RANGE.y)
 	var nz := clampf(trolley_z + _v.z * delta, Z_RANGE.x, Z_RANGE.y)

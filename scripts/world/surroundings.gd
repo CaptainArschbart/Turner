@@ -1,7 +1,9 @@
 class_name Surroundings
 extends RefCounted
-## Hintergrund der Welt: Wiese, Straße, Hecken, Nachbarhallen, Laternen und Außenhaut der Gebäude. Alles liegt
+## Hintergrund der Welt: Wiese, Straße, Bäume, Hecken, Nachbarhallen, Laternen und Außenhaut der Gebäude. Alles liegt
 ## außerhalb der Flächen, die sich als Kacheln kaufen lassen, und hat keine Kollision.
+
+const NATURE := "res://models/nature.glb"
 
 
 static func build(root: Node3D) -> void:
@@ -16,7 +18,7 @@ static func build(root: Node3D) -> void:
 	_lamps(n)
 	_cars(n)
 	_outdoor(n)
-	# Bäume nach _outdoor: Sie bekommen die Außenebene, werfen aber Schatten (Platzhalter bis zum Blender-Modell)
+	# Bäume nach _outdoor: Sie bekommen die Außenebene, werfen aber Schatten
 	var trees := Node3D.new()
 	trees.name = "Bäume"
 	n.add_child(trees)
@@ -132,10 +134,13 @@ static func _neighbours(n: Node3D) -> void:
 			Build.box(n, Vector3(0.06, 4.0, 4.5), at + Vector3(facing * s.x * 0.5, 2.0, s.z * 0.25), door)
 
 
-## Hecken hinter dem Hofzaun. Bäume kommen später als eigenes Modell aus Blender.
-## Platzhalter-Bäume, bis die Modelle aus Blender kommen: Laubbäume, Birken und Nadelbäume, verstreut in der
-## Landschaft und als Reihe zwischen Hecke und Straße. Kaufbare Flächen, Straße und Nachbarhallen bleiben frei.
+## Bäume aus models/nature.glb (zwei Laubbäume), verstreut in der Landschaft und als Reihe zwischen Hecke und
+## Straße. Kaufbare Flächen, Straße und Nachbarhallen bleiben frei. Jeder Baum ist eines der beiden Modelle,
+## zufällig gedreht und etwas skaliert; alle teilen sich Mesh und Material.
 static func _trees(n: Node3D) -> void:
+	var models := _tree_models()
+	if models.is_empty():
+		return
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 4711
 	var spots: Array[Vector2] = []
@@ -155,79 +160,55 @@ static func _trees(n: Node3D) -> void:
 	for x in [-38.0, -30.0, -22.0, -14.0, -6.0, 2.0, 10.0, 34.0, 42.0]:
 		spots.append(Vector2(x + rng.randf_range(-0.8, 0.8), 19.6))
 	for i in spots.size():
-		var at := Vector3(spots[i].x, 0, spots[i].y)
-		var kind := rng.randf()
-		if spots[i].y > 19.0 and spots[i].y < 20.0:
-			_leaf_tree(n, at, rng, 0.85)
-		elif kind < 0.55:
-			_leaf_tree(n, at, rng, 1.0)
-		elif kind < 0.75:
-			_birch(n, at, rng)
-		else:
-			_conifer(n, at, rng)
+		var street := spots[i].y > 19.0 and spots[i].y < 20.0
+		var size := rng.randf_range(0.6, 0.7) if street else rng.randf_range(0.75, 1.1)
+		var model: Array = models[rng.randi_range(0, models.size() - 1)]
+		var mi := MeshInstance3D.new()
+		mi.mesh = model[0]
+		mi.material_override = model[2]
+		var turn := Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * size)
+		mi.transform = Transform3D(turn * (model[1] as Basis), Vector3(spots[i].x, 0, spots[i].y))
+		n.add_child(mi)
 
 
-## Laubbaum: leicht schräger, nach oben dünner Stamm mit zwei, drei Ästen und einer Krone aus mehreren
-## gestauchten, gegeneinander versetzten Laubballen in zwei Grüntönen.
-static func _leaf_tree(n: Node3D, at: Vector3, rng: RandomNumberGenerator, size: float) -> void:
-	var h := rng.randf_range(3.2, 5.0) * size
-	var r := rng.randf_range(2.0, 3.0) * size
-	var lean := Vector3(rng.randf_range(-0.12, 0.12), 0, rng.randf_range(-0.12, 0.12))
-	var trunk := Build.cyl(n, 0.24 * size, h + r * 0.5, at + Vector3(0, (h + r * 0.5) * 0.5, 0), HallTex.bark(), Build.AXIS_Y, false, 10, 0.13 * size)
-	trunk.rotation = lean
-	var top := at + Vector3(lean.z, 0, -lean.x) * h + Vector3(0, h, 0)
-	for b in rng.randi_range(2, 3):
-		var a := rng.randf() * TAU
-		var dir := Vector3(cos(a), 0, sin(a))
-		var branch := Build.cyl(n, 0.08 * size, r * 0.9, top + dir * r * 0.3 + Vector3(0, r * 0.15, 0), HallTex.bark(), Build.AXIS_Y, false, 6, 0.04 * size)
-		branch.rotation = Vector3(dir.z * 0.9, 0, -dir.x * 0.9)
-	var greens := [Color(0.2, 0.36, 0.14), Color(0.26, 0.42, 0.16), Color(0.18, 0.31, 0.15), Color(0.3, 0.44, 0.18)]
-	var base: Color = greens[rng.randi_range(0, greens.size() - 1)]
-	var lobes := rng.randi_range(5, 7)
-	var crown := top + Vector3(0, r * 0.55, 0)
-	Build.sphere(n, r * 0.85, crown, HallTex.foliage(base)).scale = Vector3(1.0, 0.85, 1.0)
-	for i in lobes:
-		var a := TAU * i / lobes + rng.randf_range(-0.3, 0.3)
-		var out := r * rng.randf_range(0.45, 0.7)
-		var up := rng.randf_range(-0.35, 0.45) * r
-		var lr := r * rng.randf_range(0.5, 0.7)
-		var m := HallTex.foliage(base.lightened(0.06) if i % 2 == 0 else base.darkened(0.08))
-		var ball := Build.sphere(n, lr, crown + Vector3(cos(a) * out, up, sin(a) * out), m)
-		ball.scale = Vector3(1.0, rng.randf_range(0.7, 0.9), 1.0)
-	# Obenauf ein kleinerer Ballen, damit die Krone nicht flach endet
-	Build.sphere(n, r * 0.5, crown + Vector3(rng.randf_range(-0.3, 0.3), r * 0.65, rng.randf_range(-0.3, 0.3)), HallTex.foliage(base.lightened(0.1)))
+## Baummodelle aus nature.glb als [Mesh, Basis des Modellknotens, Material]. Das Laub im Modell ist halbtransparent
+## (Blend, Laub nur 25 bis 60 % deckend); für Schatten und saubere Tiefensortierung wird daraus Alpha-Scissor
+## mit niedriger Schwelle.
+static func _tree_models() -> Array:
+	var out := []
+	var scene := load(NATURE) as PackedScene
+	if scene == null:
+		return out
+	var root := scene.instantiate() as Node3D
+	for c in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := c as MeshInstance3D
+		if mi.mesh == null:
+			continue
+		var mat: Material = mi.get_active_material(0)
+		if mat is BaseMaterial3D:
+			var m := (mat as BaseMaterial3D).duplicate() as BaseMaterial3D
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+			m.alpha_scissor_threshold = 0.12
+			m.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mat = m
+		# Lage relativ zur Modellwurzel ohne Verschiebung: Der Fuß des Stamms liegt im Ursprung des Knotens
+		out.append([mi.mesh, _rel(root, mi).basis, mat])
+	root.free()
+	return out
 
 
-## Birke: schlanker weißer Stamm, schmale hohe Krone aus lockeren, hellgrünen Ballen.
-static func _birch(n: Node3D, at: Vector3, rng: RandomNumberGenerator) -> void:
-	var h := rng.randf_range(6.0, 8.5)
-	Build.cyl(n, 0.14, h, at + Vector3(0, h * 0.5, 0), HallTex.bark(true), Build.AXIS_Y, false, 10, 0.06)
-	var leaf := HallTex.foliage(Color(0.36, 0.5, 0.2))
-	var count := 6
-	for i in count:
-		var t := float(i) / (count - 1)
-		var a := rng.randf() * TAU
-		var r := lerpf(1.3, 0.7, t)
-		var off := Vector3(cos(a), 0, sin(a)) * rng.randf_range(0.2, 0.5)
-		Build.sphere(n, r, at + off + Vector3(0, lerpf(h * 0.45, h - 0.2, t), 0), leaf).scale = Vector3(1.0, 1.3, 1.0)
+## Transformation von node relativ zu root, ohne dass beide im Szenenbaum hängen.
+static func _rel(root: Node3D, node: Node3D) -> Transform3D:
+	var xf := Transform3D.IDENTITY
+	var cur: Node = node
+	while cur != null and cur != root:
+		if cur is Node3D:
+			xf = (cur as Node3D).transform * xf
+		cur = cur.get_parent()
+	return xf
 
 
-## Nadelbaum: kurzer Stamm, vier bis sechs übereinander gestaffelte Kegel in dunklem Grün, nach oben schmaler.
-static func _conifer(n: Node3D, at: Vector3, rng: RandomNumberGenerator) -> void:
-	var h := rng.randf_range(7.0, 11.0)
-	var w := h * rng.randf_range(0.2, 0.26)
-	Build.cyl(n, 0.2, h * 0.3, at + Vector3(0, h * 0.15, 0), HallTex.bark(), Build.AXIS_Y, false, 8, 0.12)
-	var needles := HallTex.foliage(Color(0.11, 0.24, 0.14))
-	var tiers := rng.randi_range(4, 6)
-	for i in tiers:
-		var t := float(i) / tiers
-		var tr := w * lerpf(1.0, 0.3, t)
-		var th := h * 0.32
-		var y := h * 0.18 + t * h * 0.68
-		var cone := Build.cyl(n, tr, th, at + Vector3(0, y + th * 0.5, 0), needles, Build.AXIS_Y, false, 14, 0.0)
-		cone.rotation.y = rng.randf() * TAU
-
-
+## Hecken hinter dem Hofzaun.
 static func _hedges(n: Node3D) -> void:
 	# Hecke hinter dem Hofzaun
 	var hedge := Build.mat(Color(0.2, 0.36, 0.17), 0.95)
