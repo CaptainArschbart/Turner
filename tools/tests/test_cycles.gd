@@ -35,6 +35,7 @@ func _initialize() -> void:
 	await process_frame
 	var l = load("res://scripts/machine/lathe.gd").new()
 	root.add_child(l)
+	l.power_on(true)
 	await process_frame
 
 	# --- Kontur mit Fase und Radius
@@ -68,10 +69,10 @@ func _initialize() -> void:
 	l.toggle_door()
 	for i in 40:
 		l._physics_process(0.05)
-	var dx: float = l._door.position.x + l.DOOR_X1 - (l.carriage.position.x + 0.31)
+	var dx: float = l._door.position.x + l.DOOR_X1 - (l.carriage.position.x + l.CARRIAGE_RIGHT)
 	ok(l.door_closed() and absf(dx) < 0.002, "Tür zum Schlitten geschoben und eingerastet (%.3f)" % dx)
 	l.move_tool(-40.0, 0.0)
-	dx = l._door.position.x + l.DOOR_X1 - (l.carriage.position.x + 0.31)
+	dx = l._door.position.x + l.DOOR_X1 - (l.carriage.position.x + l.CARRIAGE_RIGHT)
 	ok(l.door_closed() and absf(dx) < 0.002, "eingerastete Tür fährt mit dem Schlitten (%.3f)" % dx)
 	l.move_tool(40.0, 0.0)
 
@@ -80,6 +81,7 @@ func _initialize() -> void:
 	l.operating = true
 	l.set_view("front")
 	l.cam_pan = Vector3(-0.15, 0.1, 0)
+	l._dist_t = 1.3                 # vor der Tür (sonst blendet die Kamera sie aus)
 	for i in 30:
 		l._update_camera(0.1)
 	var hp: Vector3 = l.to_global(l.HANDLE_POS)
@@ -89,9 +91,14 @@ func _initialize() -> void:
 	var ev := InputEventMouseButton.new()
 	ev.button_index = MOUSE_BUTTON_LEFT
 	ev.pressed = true
-	ev.position = l.op_cam.unproject_position(l.to_global(Vector3(l.DOOR_CX, 1.37, 0.535)))
+	ev.position = l.op_cam.unproject_position(l.to_global(l.DOOR_BOX.get_center()))
 	ok(l.door_hit(ev.position), "Türfenster unter der Maus erkannt")
 	ok(l._door_input(ev), "Linksklick auf die Tür")
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = ev.position
+	l._door_input(up)
 	l._physics_process(0.05)
 	ok(not l.door_closed() and l.door_t > 0.0, "Tür schiebt sich nach rechts (%.2f)" % l.door_t)
 	for i in 40:
@@ -100,9 +107,31 @@ func _initialize() -> void:
 	ok(not l._door_input(ev) or l.door_closed(), "Klick auf eingerastete Tür löst sie nicht")
 	ev.position = l.op_cam.unproject_position(l.to_global(l.HANDLE_POS + Vector3(l._door.position.x, 0, 0)))
 	ok(l._door_input(ev) and not l.door_closed(), "Klick auf den schwarzen Hebel löst die Tür")
+	up.position = ev.position
+	l._door_input(up)
 	for i in 40:
 		l._physics_process(0.05)
 	ok(l.door_t < 0.001, "gelöste Tür aufgeschoben")
+	# Ziehen: Tür folgt der Hand träge, rollt nach dem Loslassen nach und bleibt dann stehen
+	var dz: float = l.DOOR_BOX.get_center().z
+	var o: Vector3 = Vector3(l.DOOR_CX, l.DOOR_BOX.get_center().y, dz + 1.0)
+	l.begin_door_drag(o, Vector3(0, 0, -1), false)
+	l.drag_door_to(o + Vector3(0.3, 0, 0), Vector3(0, 0, -1))
+	l._physics_process(0.02)
+	var lag: float = l.door_t * l.DOOR_TRAVEL
+	ok(lag > 0.0 and lag < 0.25, "Tür kommt beim Ziehen langsamer hinterher (%.3f m)" % lag)
+	for i in 6:
+		l._physics_process(0.02)
+	var at_release: float = l.door_t
+	l.end_door_drag()
+	l._physics_process(0.02)
+	ok(l.door_t > at_release, "losgelassene Tür rollt nach")
+	for i in 100:
+		l._physics_process(0.05)
+	var rest: float = l.door_t
+	l._physics_process(0.05)
+	ok(not l.door_closed() and absf(l.door_t - rest) < 0.0001 and rest > 0.0, "Tür bleibt nach dem Ausrollen stehen (%.2f)" % rest)
+	l.set_door(false)
 	l.operating = false
 	l.set_view("reset")
 
@@ -114,7 +143,7 @@ func _initialize() -> void:
 		var gp: Vector3 = l.to_global(pm)
 		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(gp + l.global_basis.z * 1.5, gp))
 		return hit["collider"].get_meta("interact") if hit and hit["collider"].has_meta("interact") else null
-	var tgt = aim.call(Vector3(l.DOOR_CX, 1.40, 0.55))
+	var tgt = aim.call(l.DOOR_BOX.get_center())
 	ok(tgt != null and tgt.has_method("click") and not tgt.get("lever"), "Fadenkreuz auf der Tür: Tür-Ziel (%s)" % tgt)
 	if tgt != null and tgt.has_method("click"):
 		tgt.click(null)
@@ -276,6 +305,7 @@ func _initialize() -> void:
 	var st: Dictionary = l.get_state()
 	var l2 = load("res://scripts/machine/lathe.gd").new()
 	root.add_child(l2)
+	l2.power_on(true)
 	await process_frame
 	l2.set_state(st)
 	ok(l2.programs.size() == l.programs.size() and l2.prog_sel == "TEST_1" and l2.door_closed(), "Programme, Anwahl und Tür geladen")

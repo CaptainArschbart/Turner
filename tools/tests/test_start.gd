@@ -39,7 +39,8 @@ func _initialize() -> void:
 	ok(bench.holders.size() == 36, "36 Halterungen unter der Werkbank")
 	# Der Blick trifft die Halterung, auch aus dem schmalen Gang zwischen Maschine und Werkbank
 	await physics_frame
-	var aim: Vector3 = bench.to_global(bench.holders[9].at + Vector3(0, 0, 0.1))
+	# Auf der Platte (Drehmaschine) zielt der Blick auf den Fühler über der Mulde, sonst vor die Halterung
+	var aim: Vector3 = bench.to_global(bench.holders[9].at + (Vector3(0, 0.02, 0) if bench.on_top else Vector3(0, 0, 0.1)))
 	var eye: Vector3 = bench.to_global(Vector3(bench.holders[9].at.x, 1.62, 0.35 + 0.35))
 	var hit: Dictionary = bench.get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(eye, eye + (aim - eye) * 1.5))
 	ok(hit.has("collider") and hit["collider"].has_meta("interact") and hit["collider"].get_meta("interact") == bench.holders[9], "Sichtstrahl trifft die Halterung")
@@ -57,9 +58,9 @@ func _initialize() -> void:
 		ok(Materials.exists(str(j["material"])), "Werkstoff " + str(j["title"]))
 	ok(not w.day_started and w.accept_job("lathe:0").contains("nicht begonnen"), "Vor Tagesbeginn kein Auftrag")
 	ok(w._work_blocked(l, true), "Vor Tagesbeginn keine Bearbeitung")
-	o.day_app.start_button.pressed.emit()
-	ok(w.day_started, "Tag im Programm gestartet")
-	ok(o.day_app.end_button.visible and not o.day_app.start_button.visible, "Jetzt lässt er sich beenden")
+	w.whiteboard.overlay.day_app.start_button.pressed.emit()
+	ok(w.day_started, "Tag am Whiteboard gestartet")
+	ok(w.whiteboard.overlay.day_app.end_button.visible and not w.whiteboard.overlay.day_app.start_button.visible, "Jetzt lässt er sich beenden")
 	var first := Jobs.describe(Jobs.LIST[0])
 	ok(first.contains("150") and first.contains("160"), "Auftrag 1 nennt Länge und Fertiglänge")
 	ok(w.day_started and w.accept_job("lathe:0") == "", "Annehmen")
@@ -106,7 +107,8 @@ func _initialize() -> void:
 
 	# ---------------------------------------------------- Halterungen
 	p.set_held(l, "T1")
-	ok(bench.holder_prompt(5).contains("Halterung"), "Hinweis mit Werkzeug in der Hand")
+	var holder_hint: String = bench.holder_prompt(5)
+	ok((holder_hint.contains("hinlegen") or holder_hint.contains("Platz")) if bench.on_top else holder_hint.contains("Halterung"),"Hinweis mit Werkzeug in der Hand: " + bench.holder_prompt(5))
 	bench.holder_click(5, p)
 	ok(p.held.is_empty() and store.holder_id(5) == "T1" and store.count("T1") == 4, "In Halterung 5 gesteckt")
 	ok(bench.holders[5].model != null and bench.holders[5].shown == "T1", "Modell in der Halterung")
@@ -189,8 +191,11 @@ func _initialize() -> void:
 	w.money = cash_stat - 30
 	w.money = w.money + 100
 	ok(w.day_stats["earned"] == 100 and w.day_stats["spent"] == 30, "Kasse wird mitgezählt")
-	o.day_app.refresh()
-	ok(o.day_app.values["profit"].text.contains("70"), "Gewinn: " + o.day_app.values["profit"].text)
+	var board = w.whiteboard
+	board.refresh()
+	ok(board.overlay.day_app.values["profit"].text.contains("70"), "Gewinn: " + board.overlay.day_app.values["profit"].text)
+	ok(board._today.text.contains("+70 EUR"), "Das Whiteboard zeigt den Gewinn: " + board._today.text)
+	ok(board._clock.text == w.clock_text(), "Das Whiteboard zeigt Tag und Uhrzeit")
 	# Tipps im Tab-Menü
 	ok(w.accept_job(today[0]) == "", "Auftrag annehmen")
 	ok(w.job_menu.show_tips == false, "Tipps sind aus")

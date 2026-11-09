@@ -37,33 +37,32 @@ var _machine_buttons: Dictionary = {}
 
 
 func _ready() -> void:
-	add_theme_constant_override("separation", 12)
+	add_theme_constant_override("separation", 18)
 	var left := VBoxContainer.new()
-	left.add_theme_constant_override("separation", 8)
+	left.add_theme_constant_override("separation", 6)
 	add_child(left)
+	left.add_child(UITheme.section("Maschine"))
 	for m in MACHINES:
-		var b := UITheme.button(m["title"], select_machine.bind(m["id"]), 220)
+		var b := UITheme.small_button(m["title"], select_machine.bind(m["id"]), 230)
 		b.toggle_mode = true
 		b.button_group = _group
-		b.focus_mode = Control.FOCUS_NONE
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.custom_minimum_size.y = 40
 		left.add_child(b)
 		_machine_buttons[m["id"]] = b
 	var right := VBoxContainer.new()
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right.add_theme_constant_override("separation", 8)
 	add_child(right)
-	_money = Label.new()
-	_money.add_theme_font_size_override("font_size", 16)
-	_money.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+	_money = UITheme.money_label()
+	_money.visible = false            # die Kasse steht in der Kopfzeile des PCs
 	right.add_child(_money)
-	_lock = Label.new()
-	_lock.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_lock.add_theme_font_size_override("font_size", 14)
-	_lock.add_theme_color_override("font_color", Color(0.95, 0.7, 0.35))
-	right.add_child(_lock)
+	right.add_child(UITheme.section("Werkzeugart"))
 	_cat_bar = HBoxContainer.new()
 	_cat_bar.add_theme_constant_override("separation", 6)
 	right.add_child(_cat_bar)
+	_lock = UITheme.note("", 14, UITheme.WARN)
+	right.add_child(_lock)
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -72,10 +71,9 @@ func _ready() -> void:
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_list.add_theme_constant_override("separation", 6)
 	scroll.add_child(_list)
-	_result = Label.new()
-	_result.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_result.add_theme_font_size_override("font_size", 15)
+	_result = UITheme.note("", 15, UITheme.TEXT)
 	right.add_child(_result)
+	right.add_child(UITheme.note("Jedes Werkzeug bis zu %d Stück. Gekauftes steckt in einer Halterung unter der Werkbank der Maschine." % ToolStore.MAX_COPIES, 13))
 	select_machine("lathe")
 
 
@@ -142,12 +140,9 @@ func _build_categories() -> void:
 	categories = categories_of(machine)
 	var group := ButtonGroup.new()
 	for i in categories.size():
-		var b := UITheme.button(str(categories[i]["title"]), select_category.bind(i), 160)
+		var b := UITheme.small_button(str(categories[i]["title"]), select_category.bind(i), 150)
 		b.toggle_mode = true
 		b.button_group = group
-		b.focus_mode = Control.FOCUS_NONE
-		b.custom_minimum_size.y = 36
-		b.add_theme_font_size_override("font_size", 15)
 		_cat_bar.add_child(b)
 		category_buttons.append(b)
 	select_category(0)
@@ -165,24 +160,24 @@ func select_category(i: int) -> void:
 func _row(id: String, title: String) -> void:
 	var h := HBoxContainer.new()
 	h.add_theme_constant_override("separation", 8)
-	_list.add_child(h)
+	var card := UITheme.card(h)
+	card.get_theme_stylebox("panel").content_margin_top = 8
+	card.get_theme_stylebox("panel").content_margin_bottom = 8
+	_list.add_child(card)
 	var col := VBoxContainer.new()
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
 	col.add_theme_constant_override("separation", 0)
 	h.add_child(col)
-	var l := Label.new()
-	l.text = title
-	l.add_theme_font_size_override("font_size", 16)
+	var l := UITheme.title(title, 17)
 	col.add_child(l)
 	var s := Label.new()
 	s.add_theme_font_size_override("font_size", 13)
 	col.add_child(s)
-	var row := {"status": s, "box": h}
+	var row := {"status": s, "box": card}
 	for g in ToolStore.GRADE_TITLES:
-		var b := UITheme.button("", buy.bind(id, g), 210)
-		b.custom_minimum_size.y = 38
-		b.focus_mode = Control.FOCUS_NONE
-		b.add_theme_font_size_override("font_size", 15)
+		var b := UITheme.small_button("", buy.bind(id, g), 200)
+		b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		h.add_child(b)
 		row[g] = b
 	rows[id] = row
@@ -191,7 +186,7 @@ func _row(id: String, title: String) -> void:
 func buy(id: String, grade: String) -> void:
 	var err: String = shop.buy_tool(machine, id, grade)
 	_result.text = "Gekauft: steckt in einer Halterung unter der Werkbank der Maschine." if err == "" else err
-	_result.add_theme_color_override("font_color", Color(0.5, 0.9, 0.5) if err == "" else Color(1.0, 0.45, 0.35))
+	_result.add_theme_color_override("font_color", UITheme.GOOD if err == "" else UITheme.BAD)
 	refresh()
 
 
@@ -217,7 +212,7 @@ func refresh() -> void:
 		var have: bool = n > 0
 		var full: bool = n >= ToolStore.MAX_COPIES
 		(row["status"] as Label).text = "%d von %d Stück%s" % [n, ToolStore.MAX_COPIES, ": %s" % store.info(id) if store.has(id) else ""] if have else "Nicht vorhanden"
-		(row["status"] as Label).add_theme_color_override("font_color", Color(0.5, 0.9, 0.5) if have else UITheme.MUTED)
+		(row["status"] as Label).add_theme_color_override("font_color", UITheme.GOOD if have else UITheme.MUTED)
 		if wheels:
 			var wheel: Dictionary = Wheels.by_id(machine, id)
 			var need := str(Wheels.TYPES[wheel["type"]]["skill"])

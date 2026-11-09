@@ -252,7 +252,8 @@ func _before_stamp(_speed: float) -> void:
 ## Teil zum Weitertragen: Maße, Werkstoff und Höhenkarte.
 func part_state() -> Dictionary:
 	return {"size": [block_l, block_w, block_h], "material": material, "ceramic": ceramic_part,
-		"data": Marshalls.raw_to_base64(data.to_byte_array().compress(FileAccess.COMPRESSION_ZSTD))}
+		"data": Marshalls.raw_to_base64(data.to_byte_array().compress(FileAccess.COMPRESSION_ZSTD)),
+		"back": Marshalls.raw_to_base64(data_back.to_byte_array().compress(FileAccess.COMPRESSION_ZSTD)), "flipped": flipped}
 
 
 ## Teil aus part_state einspannen.
@@ -267,6 +268,12 @@ func load_part(d: Dictionary) -> void:
 		if raw.size() == nx * ny * 8:
 			data = raw.to_float32_array()
 			_hmap.update(_height_image())
+	# Ausgespannte Teile bringen ihre Unterseite und Lage mit
+	if d.has("back"):
+		var back := Marshalls.base64_to_raw(str(d["back"])).decompress(nx * ny * 8, FileAccess.COMPRESSION_ZSTD)
+		if back.size() == nx * ny * 8:
+			data_back = back.to_float32_array()
+		flipped = bool(d.get("flipped", false))
 	untouched = false
 
 
@@ -962,13 +969,13 @@ func refresh_tray() -> void:
 	_chip_mm.visible_instance_count = chips_in_tray
 
 
-## Volle Wanne stoppt die Spindel.
+## Füllstand der Wanne melden. Die Spindel läuft weiter, bei voller Wanne fallen die Späne daneben.
 func _check_tray() -> void:
-	if tray.is_full() and spindle_on:
-		spindle_on = false
-		auto_axis = -1
-		_warn("Spänewanne voll! Spindel gestoppt. Mit einem Spänebehälter leeren.")
-	elif _cut_t > 0.0 and tray.fraction() >= 0.9:
+	if _cut_t <= 0.0:
+		return
+	if tray.is_full():
+		_warn("Spänewanne voll: Die Späne fallen daneben. Mit einem Spänebehälter leeren.")
+	elif tray.fraction() >= 0.9:
 		_warn("Spänewanne fast voll: bald mit einem Spänebehälter leeren.")
 
 

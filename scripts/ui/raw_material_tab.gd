@@ -76,19 +76,16 @@ class OrderPage extends HBoxContainer:
 		v.custom_minimum_size.x = 400
 		v.add_theme_constant_override("separation", 6)
 		_photo = TextureRect.new()
-		_photo.custom_minimum_size = Vector2(400, 150)
+		_photo.custom_minimum_size = Vector2(400, 140)
 		_photo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		_photo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		v.add_child(_photo)
-		_name = Label.new()
-		_name.add_theme_font_size_override("font_size", 20)
-		_name.add_theme_color_override("font_color", UITheme.ACCENT)
+		_name = UITheme.title("", 20)
 		v.add_child(_name)
-		_info = Label.new()
-		_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		_info.add_theme_font_size_override("font_size", 14)
-		_info.add_theme_color_override("font_color", UITheme.MUTED)
+		_info = UITheme.note("", 13)
 		v.add_child(_info)
+		v.add_child(HSeparator.new())
+		v.add_child(UITheme.section("Bestellung"))
 		var form := GridContainer.new()
 		form.columns = 2
 		form.add_theme_constant_override("h_separation", 12)
@@ -110,16 +107,15 @@ class OrderPage extends HBoxContainer:
 		form.add_child(_form_label("Stückzahl"))
 		form.add_child(qty)
 		_price = Label.new()
+		_price.add_theme_font_override("font", UITheme.font(500, 1))
 		_price.add_theme_font_size_override("font_size", 16)
 		v.add_child(_price)
-		order_button = UITheme.button("Bestellen", order, 200)
+		order_button = UITheme.primary(UITheme.small_button("Bestellen", order, 200))
 		order_button.custom_minimum_size.y = 40
 		v.add_child(order_button)
-		_result = Label.new()
-		_result.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		_result.add_theme_font_size_override("font_size", 14)
+		_result = UITheme.note("", 14, UITheme.TEXT)
 		v.add_child(_result)
-		return v
+		return UITheme.card(v)
 
 	func _form_label(t: String) -> Label:
 		var l := Label.new()
@@ -231,27 +227,26 @@ class OrderPage extends HBoxContainer:
 			return
 		var err: String = owner_tab.shop.order_material(spec())
 		_result.text = "Bestellt: steht vor dem Lager-Rolltor. Mit Linksklick aufheben und in ein Regalfach legen." if err == "" else err
-		_result.add_theme_color_override("font_color", Color(0.5, 0.9, 0.5) if err == "" else Color(1.0, 0.45, 0.35))
+		_result.add_theme_color_override("font_color", UITheme.GOOD if err == "" else UITheme.BAD)
 		owner_tab.refresh()
 
 
 func _ready() -> void:
 	add_theme_constant_override("separation", 8)
-	_money = Label.new()
-	_money.add_theme_font_size_override("font_size", 16)
-	_money.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+	_money = UITheme.money_label()
+	_money.visible = false            # die Kasse steht in der Kopfzeile des PCs
 	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 10)
+	head.add_theme_constant_override("separation", 8)
 	add_child(head)
 	var left := VBoxContainer.new()
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.alignment = BoxContainer.ALIGNMENT_CENTER
 	left.add_child(_money)
-	_needs = Label.new()
-	_needs.add_theme_font_size_override("font_size", 14)
+	_needs = UITheme.note("", 14, UITheme.VALUE)
 	left.add_child(_needs)
 	head.add_child(left)
-	head.add_child(UITheme.button("Für Drehauftrag wählen", pick_for_job.bind("lathe"), 240))
-	head.add_child(UITheme.button("Für Fräsauftrag wählen", pick_for_job.bind("mill"), 240))
+	head.add_child(UITheme.small_button("Für Drehauftrag wählen", pick_for_job.bind("lathe"), 220))
+	head.add_child(UITheme.small_button("Für Fräsauftrag wählen", pick_for_job.bind("mill"), 220))
 	kinds = TabContainer.new()
 	kinds.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_child(kinds)

@@ -14,7 +14,6 @@ var _built := false
 func _ready() -> void:
 	add_theme_constant_override("separation", 8)
 	_head = UITheme.title("Alle Aufträge", 22)
-	_head.add_theme_color_override("font_color", UITheme.ACCENT)
 	add_child(_head)
 	tabs = TabContainer.new()
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -64,7 +63,7 @@ func _build() -> void:
 
 func _card(key: String, job: Dictionary) -> Control:
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UITheme.sb(Color(0.1, 0.11, 0.12), Color(0.24, 0.26, 0.29)))
+	card.add_theme_stylebox_override("panel", UITheme.card_style())
 	var h := HBoxContainer.new()
 	h.add_theme_constant_override("separation", 12)
 	card.add_child(h)
@@ -96,7 +95,7 @@ func _update_locks() -> void:
 	for s in tabs.find_children("Status", "Label", true, false):
 		var reason: String = JobBoard.lock_reason(str(s.get_meta("key")), shop.company)
 		s.text = "Frei" if reason == "" else reason
-		s.add_theme_color_override("font_color", Color(0.5, 0.9, 0.5) if reason == "" else Color(0.95, 0.7, 0.35))
+		s.add_theme_color_override("font_color", UITheme.GOOD if reason == "" else UITheme.WARN)
 
 
 func _show_drawing(job: Dictionary) -> void:

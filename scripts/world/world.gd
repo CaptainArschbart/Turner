@@ -6,6 +6,8 @@ var player: Player
 var lathe: Lathe
 var mill: Mill
 var office_pc: OfficePC
+var whiteboard: Whiteboard        # Tagesbericht an der Bürowand: Tag starten und beenden
+var office_clock: OfficeClock
 var bench_nodes: Dictionary = {}  # Maschinen-id -> ToolBench
 var lathe_bench: ToolBench:
 	get:
@@ -21,7 +23,12 @@ var mill_hud: MillHUD
 var mill_huds: Dictionary = {}    # Maschinen-id -> MillHUD der Bohr- und Flachschleifmaschine
 var pause_menu: PauseMenu
 var env: Environment
-var probe: ReflectionProbe
+var probe: ReflectionProbe                 # Halle
+var probes: Array[ReflectionProbe] = []    # Halle, Büro, QM-Raum
+var _probe_light := -1.0                   # Tageslicht bei der letzten Aufnahme der Reflexionen
+var _probe_wait := 0.0                     # Sekunden bis zur nächsten erlaubten Neuaufnahme
+var _probe_due := false                    # Neuaufnahme angefordert (Umbau, Lichtwechsel)
+var _was_building := false
 var _lights: Dictionary = {}
 var _ambient: AudioStreamPlayer
 var _amb_pb: AudioStreamGeneratorPlayback
@@ -40,7 +47,7 @@ var money: int:
 		else:
 			day_stats["spent"] = int(day_stats.get("spent", 0)) + company.balance - v
 		company.balance = v
-var day_started := true           # Jeder Tag muss am PC im Programm Tagesbericht gestartet werden
+var day_started := true           # Jeder Tag muss am Whiteboard im Büro gestartet werden
 var day_stats: Dictionary = {}    # {"accepted", "done", "earned", "spent"} des laufenden Tages
 var last_day_stats: Dictionary = {}
 var job_index := 0
@@ -49,26 +56,40 @@ var drill_job_index := 0
 var parts := 0
 var day := 1                      # laufender Tag
 var day_time := 0.0               # s seit Tagesbeginn
+var day_cycle: DayCycle           # Sonne, Himmel und Tageslicht nach der Uhrzeit
+var _evening := 0.0               # s seit Feierabend, nur für den Sonnenuntergang
 var day_over := false             # Feierabend: Nichts annehmen und nichts kaufen, bis der Tag beendet wird
 var deadlines: Dictionary = {}    # Auftrag -> letzter Tag
 var _clock_t := 0.0
-const DAY_SECONDS := 1200.0       # ein Arbeitstag dauert 20 Minuten
+const DAY_SECONDS := 720.0        # der Tag (6 bis 18 Uhr) dauert 12 Minuten
+const NIGHT_SECONDS := 720.0      # die Nacht nach Feierabend (18 bis 6 Uhr) dauert ebenfalls 12 Minuten
 const REP_DONE := 2.0             # Ansehen für einen erfolgreichen Auftrag
 const REP_LATE := -8.0            # Ansehen für eine verpasste Frist
 const REP_SCRAP := -3.0           # Ansehen für Ausschuss beim Schleifen
 var play_time := 0.0
 var stock: Array = []             # bestelltes Rohmaterial im Lager
 var free_mode := false            # Testmodus: alles gratis, wird nicht gespeichert
+var time_scale := 1.0             # Zeitraffer aus dem Debug-Menü, wird nicht gespeichert
+var debug_menu: DebugMenu
 var deliveries: Array = []        # bestellt, steht noch vor dem Lagertor
 var site: Site
 var job_menu: JobMenu
 var rack_menu: RackMenu
+var places: Places                # Orte außerhalb des Geländes: Supermarkt, je Spieler ein Zuhause
+var travel_menu: TravelMenu       # Hoftor und Ausgangstüren: wohin gehen
+var shop_menu: ShopMenu           # Kasse im Supermarkt
+var autosave := true              # nach dem Schlafen speichern; Tests schalten es ab, sonst überschreiben sie Slot 0
+const SITE_ENTRY := Vector3(Site.GATE_X, 0.05, Site.YARD_Z1 - 1.5)   # wer zurückkommt, steht innen am Hoftor
 var build_menu: BuildMenu
 var layout := Layout.new()        # Stellplan: Maschinen, Bereiche, Werkbänke
 var inventory: Dictionary = {}    # gekauft, aber noch nicht aufgestellt
 var extra_machines: Dictionary = {}
 var drawing: DrawingOverlay
 var clamp_dialog: ClampDialog
+var quality: QualityStation        # Qualitätsmanagement: hier werden ausgespannte Teile abgegeben
+var pins: Array = []               # angepinnte Zeichnungen (PinnedDrawing)
+var _drawing_vps: Dictionary = {}  # Auftrag -> SubViewport, das die Zeichnung als Bild rendert
+const QM_COLOR := Color(0.7, 0.95, 1.0)
 const STARTER_MACHINES := ["lathe", "saw"]
 const STARTER_TOOLS := ["T1", "T3", "T5"]     # Schruppen, Schlichten, Fasen
 const STARTER_RACK := Vector2(14.0, -12.0)
@@ -80,6 +101,10 @@ var tracked := ""                 # Auftrag, der oben rechts steht
 var grind_jobs: Array = []        # vorbearbeitet, wartet aufs Schleifen, Schlüssel wie accepted
 var crate_nodes: Array = []
 var bin_nodes: Array = []
+var shelf_nodes: Array = []
+var _pallet_ghost: Node3D               # Vorschau: wo Q die getragene Palette abstellt
+var _pallet_ghost_mat: StandardMaterial3D
+var _ghost_n := 0                        # so viele Paletten zeigt die Vorschau gerade
 var containers: Array = []        # ChipTray je Spänecontainer im Hof
 
 const CONTAINER_KG := 120.0
@@ -92,6 +117,9 @@ func _ready() -> void:
 	site = Site.new()
 	site.world = self
 	add_child(site)
+	day_cycle = DayCycle.new()
+	add_child(day_cycle)
+	day_cycle.setup(env, site.sun, _lights)
 
 	lathe = Lathe.new()
 	lathe.conventional = true
@@ -106,9 +134,28 @@ func _ready() -> void:
 	office_pc.position = Workshop.OFFICE_PC_POS
 	add_child(office_pc)
 
+	whiteboard = Whiteboard.new()
+	whiteboard.position = Workshop.WHITEBOARD_POS
+	whiteboard.rotation.y = Workshop.WHITEBOARD_YAW
+	add_child(whiteboard)
+
+	office_clock = OfficeClock.new()
+	office_clock.position = Workshop.CLOCK_POS
+	office_clock.rotation.y = Workshop.CLOCK_YAW
+	office_clock.day_seconds = DAY_SECONDS
+	add_child(office_clock)
+
+	quality = QualityStation.new()
+	quality.world = self
+	quality.position = QualityStation.POS
+	add_child(quality)
+
 	player = Player.new()
 	player.position = Vector3(0.5, 0.05, 2.5)
+	player.drawing_texture = drawing_texture
+	player.machine_lookup = _machine_node
 	add_child(player)
+	player.pin_requested.connect(pin_drawing)
 
 	hud = HUD.new()
 	hud.lathe = lathe
@@ -130,6 +177,19 @@ func _ready() -> void:
 	rack_menu = RackMenu.new()
 	rack_menu.world = self
 	add_child(rack_menu)
+	places = Places.new()
+	places.world = self
+	add_child(places)
+	travel_menu = TravelMenu.new()
+	travel_menu.world = self
+	add_child(travel_menu)
+	shop_menu = ShopMenu.new()
+	shop_menu.world = self
+	add_child(shop_menu)
+	places.home_of(player.player_id)
+	debug_menu = DebugMenu.new()
+	debug_menu.world = self
+	add_child(debug_menu)
 
 	job_menu = JobMenu.new()
 	job_menu.world = self
@@ -148,6 +208,8 @@ func _ready() -> void:
 	add_child(drawing)
 
 	player.prompt_changed.connect(hud.set_prompt)
+	player.cigarette.notice.connect(func(t: String): hud.show_message(t, Color(0.9, 0.95, 1.0)))
+	hud.cigarette = player.cigarette
 	_wire_lathe(lathe)
 	_wire_mill(mill, mill_hud)
 	office_pc.using_changed.connect(func(on: bool): hud.visible = not on)
@@ -164,7 +226,14 @@ func _ready() -> void:
 	office_pc.overlay.world = self
 	player.material_to_machine.connect(ask_clamp)
 	player.gate = _work_blocked
-	office_pc.overlay.day_app.shop = self
+	player.pallet_drop = put_pallet
+	player.jack_lift = jack_lift
+	player.jack_drop = jack_park
+	player.jack_abandon = jack_abandon
+	whiteboard.shop = self
+	whiteboard.overlay.day_app.shop = self
+	whiteboard.using_changed.connect(func(on: bool): hud.visible = not on)
+	office_clock.shop = self
 	office_pc.overlay.dev_app.shop = self
 	Settings.changed.connect(_apply_quality)
 
@@ -173,7 +242,7 @@ func _ready() -> void:
 	_setup_ambient()
 	restore_mouse()
 	if company.owns("lathe"):
-		hud.show_message("Willkommen in der Werkstatt, %s! Drehmaschine, Werkbank mit Grundwerkzeugen, Bandsäge und ein Regal mit einer Stange stehen bereit. Starte den Tag am PC im Büro, im Programm Tagesbericht." % save_name, Color(0.9, 0.95, 1.0))
+		hud.show_message("Willkommen in der Werkstatt, %s! Drehmaschine, Werkbank mit Grundwerkzeugen, Bandsäge und ein Regal mit einer Stange stehen bereit. Starte den Tag am Whiteboard im Meisterbüro." % save_name, Color(0.9, 0.95, 1.0))
 	else:
 		hud.show_message("Willkommen in der Werkstatt, %s! Die Halle ist leer: Am PC im Büro gibt es die erste Drehmaschine und die Bandsäge gratis, dazu Werkbank, Werkzeuge und Aufträge." % save_name, Color(0.9, 0.95, 1.0))
 
@@ -194,11 +263,10 @@ func _wire_lathe(m: Lathe) -> void:
 		hud.use_lathe(m)
 		hud.set_levers(m, on))
 	m.tool_lost.connect(_on_tool_lost.bind(m.MACHINE_ID))
+	m.submit_requested.connect(_submit_hint)
 	if m.grinder_type != "":
-		m.submit_requested.connect(_on_grind_submit.bind(m))
 		m.new_part_requested.connect(_on_grind_new_part)
 	else:
-		m.submit_requested.connect(_on_submit.bind(m))
 		m.new_part_requested.connect(_on_new_part.bind(m))
 
 
@@ -210,13 +278,12 @@ func _wire_mill(m: Mill, mh: MillHUD) -> void:
 	m.levers_changed.connect(mh.set_levers_open)
 	m.levers_changed.connect(hud.set_other_machine)
 	m.tool_lost.connect(_on_tool_lost.bind(m.MACHINE_ID))
+	m.submit_requested.connect(_submit_hint)
 	if m.grinder_type != "":
 		m.operating_changed.connect(func(on: bool): _hint_grinder(on, m))
-		m.submit_requested.connect(_on_grind_submit.bind(m))
 		m.new_part_requested.connect(_on_grind_new_part)
 	else:
 		m.operating_changed.connect(func(on: bool): _hint_empty(on, m.has_part, _need_of(JobBoard.key(m.MACHINE_ID, _active_index(m.MACHINE_ID)))); _hint_tool(on, m))
-		m.submit_requested.connect(_on_mill_submit.bind(m))
 		m.new_part_requested.connect(_on_mill_new_part.bind(m))
 
 
@@ -253,14 +320,57 @@ func _build_environment() -> void:
 	we.environment = env
 	add_child(we)
 
-	probe = ReflectionProbe.new()
-	probe.size = Vector3(24, 6.5, 16)
-	probe.position = Vector3(0, 3.0, 0)
-	probe.box_projection = true
-	probe.interior = true
-	probe.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
-	probe.update_mode = ReflectionProbe.UPDATE_ONCE
-	add_child(probe)
+	# Reflexionen: je Raum eine Sonde, deren Kasten genau die Wände trifft (Box-Projektion), aufgenommen auf
+	# Augenhöhe, damit Spiegelungen in Blechen, Glas und Drehteilen dort liegen, wo der Spieler sie erwartet.
+	# Die Aufnahme ist einmalig und wird erneuert, wenn sich das Licht (Tag/Nacht) oder die Einrichtung ändert.
+	var hw := Workshop.W * 0.5
+	var hd := Workshop.D * 0.5
+	probe = _add_probe(Vector3(-hw, 0, -hd), Vector3(hw, Workshop.H, hd), 0.4)
+	_add_probe(Vector3(Workshop.OFFICE_X.x, 0, hd), Vector3(Workshop.OFFICE_X.y, Workshop.OFFICE_H, Workshop.OFFICE_Z1), 0.2)
+	_add_probe(Vector3(Workshop.QM_X.x, 0, hd), Vector3(Workshop.QM_X.y, Workshop.OFFICE_H, Workshop.OFFICE_Z1), 0.2)
+
+
+## Innenraum-Sonde für den Quader a..b (Boden bis Decke). Aufnahmepunkt auf 1,6 m Augenhöhe.
+func _add_probe(a: Vector3, b: Vector3, blend: float) -> ReflectionProbe:
+	var p := ReflectionProbe.new()
+	var size := b - a
+	p.size = size
+	p.position = (a + b) * 0.5
+	p.origin_offset = Vector3(0, minf(1.6, size.y * 0.5) - size.y * 0.5, 0)
+	p.box_projection = true
+	p.interior = true
+	p.blend_distance = blend
+	p.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
+	p.update_mode = ReflectionProbe.UPDATE_ONCE
+	p.max_distance = maxf(size.x, size.z)
+	add_child(p)
+	probes.append(p)
+	return p
+
+
+## Reflexionen neu aufnehmen lassen (z. B. nach einem Umbau). Mehrere Anfragen kurz hintereinander
+## führen zu einer Aufnahme.
+func request_reflections() -> void:
+	_probe_due = true
+
+
+func _update_reflections(delta: float) -> void:
+	_probe_wait = maxf(0.0, _probe_wait - delta)
+	var building: bool = player != null and player.build_mode
+	if _was_building and not building:
+		_probe_due = true
+	_was_building = building
+	if day_cycle != null and absf(day_cycle.daylight - _probe_light) > 0.08:
+		_probe_due = true
+	if not _probe_due or _probe_wait > 0.0 or building:
+		return
+	_probe_due = false
+	_probe_wait = 1.5
+	if day_cycle != null:
+		_probe_light = day_cycle.daylight
+	for p in probes:
+		# Jede Änderung an der Sonde markiert sie im RenderingServer als veraltet; UPDATE_ONCE nimmt dann neu auf.
+		p.intensity = p.intensity
 
 
 func _apply_quality() -> void:
@@ -268,6 +378,11 @@ func _apply_quality() -> void:
 	env.ssao_enabled = q >= 1
 	env.ssao_intensity = 1.6
 	env.ssr_enabled = q >= 2
+	# Bildschirmraum-Spiegelungen weich ein- und ausblenden, sonst reißen sie am Bildrand und hinter Kanten ab
+	env.ssr_max_steps = 96 if q >= 3 else 64
+	env.ssr_fade_in = 0.2
+	env.ssr_fade_out = 2.5
+	env.ssr_depth_tolerance = 0.3
 	env.ssil_enabled = q >= 3
 	Settings.apply_bloom(env)
 	env.adjustment_brightness = float(Settings.graphics["brightness"])
@@ -275,13 +390,76 @@ func _apply_quality() -> void:
 		(l as Light3D).shadow_enabled = q >= 2
 	lathe.lamp.shadow_enabled = q >= 1
 	mill.lamp.shadow_enabled = q >= 2
-	probe.visible = q >= 1
+	for p in probes:
+		p.visible = q >= 1
+		p.enable_shadows = q >= 2
+	request_reflections()
 
 
 func _process(delta: float) -> void:
 	play_time += delta
-	_advance_day(delta)
+	_advance_day(delta * time_scale)
+	_update_reflections(delta)
 	_fill_ambient()
+	_update_pallet_ghost()
+
+
+## Durchscheinende Palette dort, wo die Ablegen-Taste die getragene Palette abstellt:
+## grün = frei, rot = geht dort nicht.
+func _update_pallet_ghost() -> void:
+	var n := 0
+	var at := Vector2.ZERO
+	var rot := 0
+	if player != null and not player.operating and not player.build_mode:
+		if player.carrying_pallet():
+			n = 1
+			at = player.pallet_spot()
+			rot = player.pallet_rot()
+		elif player.jack_load() > 0:
+			# Hubwagen: Die Last wird dort abgesenkt, wo sie auf der Gabel liegt
+			n = player.jack_load()
+			at = player.jack_spot()
+			rot = player.jack_load_rot()
+	if n == 0:
+		if _pallet_ghost:
+			_pallet_ghost.visible = false
+		return
+	if not _pallet_ghost:
+		_pallet_ghost_mat = StandardMaterial3D.new()
+		_pallet_ghost_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_pallet_ghost_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_pallet_ghost = Node3D.new()
+		add_child(_pallet_ghost)
+	if n != _ghost_n:
+		for c in _pallet_ghost.get_children():
+			_pallet_ghost.remove_child(c)
+			c.queue_free()
+		Shelf.add_pallets(_pallet_ghost, n)
+		_ghostify(_pallet_ghost)
+		_ghost_n = n
+	var is_free: bool
+	var stack: Shelf = player.pallet_target() if player.carrying_pallet() else null
+	if stack and stack.is_inside_tree():
+		# Auf einen Stapel gezielt: Vorschau liegt oben auf der obersten Palette
+		var h := float(Shelf.SIZES["pallet"]["height"])
+		is_free = stack.stack < Shelf.MAX_STACK
+		_pallet_ghost.global_transform = stack.global_transform.translated(Vector3(0, h * stack.stack + 0.003, 0))
+	else:
+		is_free = layout.check_shelf("pallet", at, rot) == ""
+		_pallet_ghost.transform = Transform3D(Basis(Vector3.UP, rot * PI / 2.0), Vector3(at.x, 0.003, at.y))
+	_pallet_ghost_mat.albedo_color = Color(0.35, 1.0, 0.45, 0.38) if is_free else Color(1.0, 0.3, 0.25, 0.38)
+	_pallet_ghost.visible = true
+
+
+func _ghostify(n: Node) -> void:
+	if n is GeometryInstance3D:
+		(n as GeometryInstance3D).material_override = _pallet_ghost_mat
+		(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if n is CollisionObject3D:
+		(n as CollisionObject3D).collision_layer = 0
+		(n as CollisionObject3D).collision_mask = 0
+	for c in n.get_children():
+		_ghostify(c)
 
 
 # ------------------------------------------------------------ Aufträge
@@ -301,25 +479,40 @@ func _advance_day(delta: float) -> void:
 		day_time += delta
 		if day_time >= DAY_SECONDS:
 			end_day()
+	if day_over:
+		_evening += delta
+	day_cycle.set_hour(sky_hour())
 	_clock_t -= delta
 	if _clock_t <= 0.0:
 		_clock_t = 1.0
 		_show_clock()
 
 
-## Uhrzeit: Der Arbeitstag läuft von 7 bis 17 Uhr.
+## Stunde für Sonne und Himmel, durchgehend gezählt (nach Mitternacht über 24): Vor dem Start dämmert es um 6 Uhr,
+## der Tag läuft in 12 Minuten von 6 bis 18 Uhr, nach Feierabend die Nacht in 12 Minuten bis 6 Uhr morgens.
+## Danach bleibt es Morgen, bis der Tag am Whiteboard beendet wird.
+func sky_hour() -> float:
+	if not day_started:
+		return 6.0
+	if day_over:
+		return 18.0 + minf(_evening / NIGHT_SECONDS, 1.0) * 12.0
+	return 6.0 + clampf(day_time / DAY_SECONDS, 0.0, 1.0) * 12.0
+
+
+## Uhrzeit: Tagsüber läuft sie von 6 bis 18 Uhr, nach Feierabend weiter durch die Nacht.
 func clock_text() -> String:
-	var minutes := 7 * 60 + int(clampf(day_time / DAY_SECONDS, 0.0, 1.0) * 600.0)
+	var minutes := int(sky_hour() * 60.0) % (24 * 60) if day_started else 6 * 60
 	return "Tag %d   %02d:%02d" % [day, minutes / 60, minutes % 60]
 
 
 func _show_clock() -> void:
 	var text := clock_text()
 	if not day_started:
-		text += "   Tag noch nicht gestartet: am PC im Programm Tagesbericht"
+		text += "   Tag noch nicht gestartet: am Whiteboard im Büro"
 	elif day_over:
-		text += "   FEIERABEND: am PC den Tag beenden"
+		text += "   FEIERABEND: am Hoftor nach Hause gehen und schlafen"
 	hud.set_clock(text, day_over)
+	whiteboard.refresh()
 
 
 ## Tag ist um: Das laufende Teil lässt sich noch fertigstellen, sonst geht nichts Neues mehr.
@@ -328,8 +521,66 @@ func end_day() -> void:
 		return
 	day_over = true
 	_show_clock()
-	hud.show_message("Feierabend: Das laufende Teil lässt sich noch abgeben, neue Aufträge und Einkäufe gibt es erst morgen. Tag am PC beenden.", Color(1, 0.75, 0.3))
+	hud.show_message("Feierabend: Das laufende Teil lässt sich noch abgeben, neue Aufträge und Einkäufe gibt es erst morgen. Am Hoftor nach Hause gehen und schlafen.", Color(1, 0.75, 0.3))
 	office_pc.overlay.refresh_all()
+
+
+## Warum gerade nicht geschlafen werden kann, leer = es geht.
+func sleep_error() -> String:
+	if not day_started:
+		return "Ausgeschlafen: Der Tag wartet auf den Start am Whiteboard im Büro."
+	if not day_over:
+		return "Noch kein Feierabend: Erst um 18 Uhr oder nach \"Tag beenden\" am Whiteboard im Büro geht es ins Bett."
+	return ""
+
+
+## Im Bett zuhause: schlafen, wenn es geht, sonst sagen, warum nicht.
+func sleep_in_bed(p: Node) -> void:
+	var err := go_sleep(p)
+	if err != "":
+		hud.show_message(err, Color(1, 0.75, 0.3))
+
+
+## Schlafen: Der nächste Tag beginnt sofort, man wacht neben dem eigenen Bett auf. Danach wird gespeichert.
+## Multiplayer später: Der Tag ist für alle gleich, dann erst weiterschalten, wenn alle im Bett liegen.
+func go_sleep(p: Node) -> String:
+	var err := sleep_error()
+	if err != "":
+		return err
+	if p.driving_jack():
+		jack_abandon()          # der Hubwagen bleibt in der Werkstatt, nichts geht verloren
+	next_day()
+	start_day()
+	var home := places.home_of(p.player_id)
+	p.global_position = home.wake_point()
+	p.velocity = Vector3.ZERO
+	p.location = home.id
+	hud.show_message("Ausgeschlafen. Tag %d beginnt: durch die Haustür zur Werkstatt." % day, Color(0.9, 0.95, 1.0))
+	if autosave:
+		save_game()
+	return ""
+
+
+## Hier kommt man aufs Gelände zurück: innen am Hoftor, Blick zur Halle.
+func site_entry() -> Vector3:
+	return SITE_ENTRY
+
+
+func site_entry_yaw() -> float:
+	return 0.0
+
+
+## Supermarkt: Zigaretten aus Supermarket.GOODS kaufen, bezahlt wird aus der Kasse der Werkstatt.
+func buy_cigarettes(p: Node, i: int) -> String:
+	if i < 0 or i >= Supermarket.GOODS.size():
+		return "Gibt es nicht."
+	var g: Dictionary = Supermarket.GOODS[i]
+	var price := 0 if free_mode else int(g["price"])
+	if money < price:
+		return "Zu wenig Geld in der Kasse."
+	money -= price
+	p.cigarette.stock += int(g["count"])
+	return ""
 
 
 ## Tag starten: Erst jetzt lässt sich arbeiten und bestellen, die Uhr läuft.
@@ -344,6 +595,7 @@ func start_day() -> void:
 func next_day() -> void:
 	day += 1
 	day_time = 0.0
+	_evening = 0.0
 	day_over = false
 	day_started = false
 	last_day_stats = day_stats
@@ -351,7 +603,7 @@ func next_day() -> void:
 	_check_deadlines()
 	_show_clock()
 	_jobs_changed()
-	hud.show_message("Tag %d: am PC im Programm Tagesbericht starten." % day, Color(0.9, 0.95, 1.0))
+	hud.show_message("Tag %d: am Whiteboard im Büro starten." % day, Color(0.9, 0.95, 1.0))
 
 
 ## Darf der Spieler dieses Ziel gerade benutzen? Vor Tagesbeginn wird nichts bearbeitet. silent: nur prüfen.
@@ -361,7 +613,7 @@ func _work_blocked(target: Node, silent: bool) -> bool:
 	if not (target is Lathe or target is Mill or target is BandSaw or target is ToolMount or target is Lathe.LeverTarget or target is MillLeverPanel):
 		return false
 	if not silent:
-		hud.show_message("Der Tag hat noch nicht begonnen: am PC im Programm Tagesbericht starten.", Color(1, 0.75, 0.2))
+		hud.show_message("Der Tag hat noch nicht begonnen: am Whiteboard im Büro starten.", Color(1, 0.75, 0.2))
 	return true
 
 
@@ -382,6 +634,9 @@ func _job_late(key: String) -> void:
 	_job_gone(key)
 	if str(player.carry.get("key", "")) == key:
 		player.clear_carry()
+	for n in get_tree().get_nodes_in_group(DroppedItem.GROUP):
+		if str(n.item.get("kind", "")) == "semi" and str(n.item.get("key", "")) == key:
+			n.discard()
 	for i in range(deliveries.size() - 1, -1, -1):
 		if str(deliveries[i].get("key", "")) == key:
 			deliveries.remove_at(i)
@@ -396,8 +651,8 @@ func _closed_error() -> String:
 	if free_mode:
 		return ""
 	if not day_started:
-		return "Der Tag hat noch nicht begonnen: am PC im Programm Tagesbericht starten."
-	return "Feierabend: Erst morgen wieder. Tag am PC beenden." if day_over else ""
+		return "Der Tag hat noch nicht begonnen: am Whiteboard im Büro starten."
+	return "Feierabend: Erst morgen wieder. Am Hoftor nach Hause gehen und schlafen." if day_over else ""
 
 
 ## Vergütung nach Ansehen.
@@ -569,6 +824,7 @@ func _finish_job(key: String) -> String:
 func _jobs_changed() -> void:
 	_refresh_hud()
 	office_pc.overlay.refresh_all()
+	whiteboard.refresh()
 
 
 ## Stand beim Material für den Auftrag der gewählten Maschine.
@@ -670,50 +926,6 @@ func _on_mill_new_part(m: Mill = null) -> void:
 	_refresh_hud()
 
 
-func _on_mill_submit(m: Mill = null) -> void:
-	if m == null:
-		m = mill
-	if not m.has_part:
-		hud.show_message("Es ist kein Rohteil eingespannt.", Color(1, 0.75, 0.2))
-		return
-	if m.untouched:
-		hud.show_message("Das Rohteil ist noch unbearbeitet.", Color(1, 0.75, 0.2))
-		return
-	var id: String = m.MACHINE_ID
-	if not has_job(id):
-		hud.show_message("Kein %s angenommen. Aufträge gibt es am PC im Büro." % JobBoard.MACHINE_NAMES[id], Color(1, 0.75, 0.2))
-		return
-	var job := _active_job(id)
-	var res := m.evaluate(job)
-	var score := _material_score(float(res["score"]), m.material, job)
-	var to_grind: bool = score >= 0.999 and JobBoard.grind_active(job, company)
-	if to_grind and not player.hands_free():
-		hud.show_message("Das Teil muss zum Schleifen getragen werden: erst die Hände frei machen.", Color(1, 0.75, 0.2))
-		return
-	var pay := 0
-	var verdict := "Ausschuss! Keine Vergütung."
-	if score >= 0.999:
-		pay = _pay(float(job["reward"]))
-		verdict = "Alle Maße in Toleranz - sehr gut!"
-	elif score >= 0.5:
-		pay = _pay(float(job["reward"]) * score * 0.5)
-		verdict = "Nacharbeit nötig - Teilvergütung."
-	money += pay
-	parts += 1
-	var lines: Array = res["lines"]
-	var text := "PRÜFPROTOKOLL - %s\n\n%s\n\n%d / %d Merkmale in Ordnung\n%s\nVergütung: %d EUR" % [
-		job["title"], "\n".join(lines), int(res["ok"]), int(res["total"]), verdict, pay]
-	var key := JobBoard.key(id, _active_index(id))
-	if to_grind:
-		text += _send_to_grinding(key, m)
-	elif score >= 0.999:
-		text += _finish_job(key)
-	hud.show_result(text)
-	# Das fertige Teil ist weg. Das nächste Rohteil holt der Spieler selbst aus dem Lager.
-	m.set_material(str(_active_job(id)["material"]))
-	m.clear_workpiece()
-	hud.show_message("Schraubstock ist leer: Material für den nächsten Auftrag aus dem Lager holen.", Color(0.9, 0.95, 1.0))
-	_jobs_changed()
 
 
 func _lathe_new_workpiece(m: Lathe = null) -> void:
@@ -729,63 +941,18 @@ func _on_new_part(m: Lathe = null) -> void:
 	_refresh_hud()
 
 
-func _on_submit(m: Lathe = null) -> void:
-	if m == null:
-		m = lathe
-	if not m.has_part:
-		hud.show_message("Es ist kein Rohteil eingespannt.", Color(1, 0.75, 0.2))
-		return
-	if m.is_untouched():
-		hud.show_message("Das Rohteil ist noch unbearbeitet.", Color(1, 0.75, 0.2))
-		return
-	if not has_job("lathe"):
-		hud.show_message("Kein Drehauftrag angenommen. Aufträge gibt es am PC im Büro.", Color(1, 0.75, 0.2))
-		return
-	var job := _current_job()
-	var res := m.evaluate(job)
-	var score := _material_score(float(res["score"]), m.material, job)
-	var to_grind: bool = score >= 0.999 and JobBoard.grind_active(job, company)
-	if to_grind and not player.hands_free():
-		hud.show_message("Das Teil muss zum Schleifen getragen werden: erst die Hände frei machen.", Color(1, 0.75, 0.2))
-		return
-	var pay := 0
-	var verdict := ""
-	if score >= 0.999:
-		pay = _pay(float(job["reward"]))
-		verdict = "Alle Maße in Toleranz - sehr gut!"
-	elif score >= 0.5:
-		pay = _pay(float(job["reward"]) * score * 0.5)
-		verdict = "Nacharbeit nötig - Teilvergütung."
-	else:
-		verdict = "Ausschuss! Keine Vergütung."
-	money += pay
-	parts += 1
-	var lines: Array = res["lines"]
-	var text := "PRÜFPROTOKOLL - %s\n\n%s\n\n%d / %d Merkmale in Ordnung\n%s\nVergütung: %d EUR" % [
-		job["title"], "\n".join(lines), int(res["ok"]), int(res["total"]), verdict, pay]
-	var key := JobBoard.key("lathe", job_index)
-	if to_grind:
-		text += _send_to_grinding(key, m)
-	elif score >= 0.999:
-		text += _finish_job(key)
-	hud.show_result(text)
-	# Das fertige Teil ist weg. Das nächste Rohteil holt der Spieler selbst aus dem Lager.
-	m.set_material(str(_current_job()["material"]))
-	m.clear_workpiece()
-	hud.show_message("Futter ist leer: Material für den nächsten Auftrag aus dem Lager holen.", Color(0.9, 0.95, 1.0))
-	_jobs_changed()
 
 
 # ------------------------------------------------------------ Schleifen
 
 ## Vorbearbeitet und bezahlt: Das Teil kommt in die Hände und muss noch zur Schleifmaschine. Die Erfahrung
-## gibt es erst, wenn der ganze Auftrag fertig ist.
-func _send_to_grinding(key: String, m: Node) -> String:
+## gibt es erst, wenn der ganze Auftrag fertig ist. part = part_state des Teils.
+func _send_to_grinding(key: String, part: Dictionary) -> String:
 	var job := JobBoard.job_of(key)
 	accepted.erase(key)
 	_job_gone(key)
 	grind_jobs.append(key)
-	player.set_carry({"kind": "semi", "key": key, "type": job["grind"]["type"], "title": job["title"], "part": m.part_state()})
+	player.set_carry({"kind": "semi", "key": key, "type": job["grind"]["type"], "title": job["title"], "part": part})
 	var grinder: String = Layout.SPECS[JobBoard.GRINDERS[job["grind"]["type"]]]["title"]
 	# Die Frist läuft weiter, bis auch geschliffen ist
 	return "\n\nDas Teil muss noch auf die %s: %s.\nEs liegt in deinen Händen." % [grinder, JobBoard.grind_line(job)]
@@ -823,20 +990,175 @@ func _on_grind_new_part() -> void:
 	hud.show_message("Schleifmaschinen spannen nur vorbearbeitete Teile: Auftrag mit Schleifanforderung abgeben, Teil herbringen und mit Linksklick einspannen.", Color(0.9, 0.95, 1.0))
 
 
-## Geschliffenes Teil abgeben. Passt die Fläche noch nicht, darf weitergeschliffen werden. Sind die Maße
-## verschliffen, ist das Teil Ausschuss und der Auftrag ohne Schleifvergütung beendet.
-func _on_grind_submit(m: Node) -> void:
-	if not m.has_part or m.semi_key == "":
-		hud.show_message("Es ist kein vorbearbeitetes Teil eingespannt.", Color(1, 0.75, 0.2))
+func _clear_grinder(m: Node) -> void:
+	m.semi_key = ""
+	m.ceramic_part = false
+	m.clear_workpiece()
+
+
+# ------------------------------------------------------------ Ausspannen und Qualitätsmanagement
+
+## Abgabetaste an der Maschine: Verkauft wird dort nichts mehr. Sie misst das Teil nur zwischendurch.
+func _submit_hint() -> void:
+	var m: Node = player.operating
+	var how := "Teile werden im Qualitätsmanagement abgegeben: Maschine verlassen, mit Linksklick aufs Teil ausspannen und zum Prüfplatz an der Südwand bringen."
+	if m == null or not (m is Lathe or m is Mill) or not m.has_part:
+		hud.show_message(how, Color(0.9, 0.95, 1.0))
 		return
-	var key: String = m.semi_key
+	var key := _key_in(m)
+	if key == "":
+		hud.show_message("Kein passender Auftrag zum Messen. " + how, Color(1, 0.75, 0.2))
+		return
+	var job := JobBoard.job_of(key)
+	var res: Dictionary = m.evaluate_grind(job) if m.grinder_type != "" else m.evaluate(job)
+	var lines: Array = res["lines"]
+	hud.show_result("ZWISCHENMESSUNG - %s\n\n%s\n\n%d / %d Merkmale in Ordnung\n\n%s" % [job["title"], "\n".join(lines), int(res["ok"]), int(res["total"]), how])
+
+
+## Auftrag, zu dem das eingespannte Teil gehört. Leer = keiner.
+func _key_in(m: Node) -> String:
+	if m.grinder_type != "":
+		return str(m.semi_key)
+	var category := "lathe" if m is Lathe else str(m.MACHINE_ID)
+	return JobBoard.key(category, _active_index(category)) if has_job(category) else ""
+
+
+## Ausgespanntes Teil zum Tragen: Maße für die Kiste, Kontur zum Wiedereinspannen und das Prüfergebnis.
+func _part_item(m: Node, key: String, res: Dictionary) -> Dictionary:
+	var it := {"kind": "part", "key": key, "machine": str(m.MACHINE_ID), "material": str(m.material), "part": m.part_state(), "res": res,
+		"title": str(JobBoard.job_of(key)["title"]) if key != "" else "Teil ohne Auftrag"}
+	if m is Lathe:
+		it["shape"] = "round"
+		it["d"] = float(m.stock_d)
+		it["l"] = float(m.stock_len)
+	else:
+		it["shape"] = "block"
+		it["l"] = float(m.block_l)
+		it["w"] = float(m.block_w)
+		it["h"] = float(m.block_h)
+	return it
+
+
+## Teil aus der Maschine in die Hände nehmen. Unbearbeitetes Rohmaterial bleibt Rohmaterial, alles andere ist
+## ein Teil für das Qualitätsmanagement oder eine Kiste. Fehlertext, leer = ausgespannt.
+func unclamp_part(m: Node) -> String:
+	if m == null or not m.has_part:
+		return "Es ist kein Teil eingespannt."
+	if m.spindle_speed > 5.0:
+		return "Erst die Spindel stoppen."
+	if not player.hands_free():
+		return "Erst die Hände frei machen."
+	var item := {}
+	var text := ""
+	if m.grinder_type != "":
+		var key: String = str(m.semi_key)
+		item = _part_item(m, key, m.evaluate_grind(JobBoard.job_of(key)) if key != "" else {})
+		item["grind"] = key != ""
+		_clear_grinder(m)
+		text = "Ausgespannt: %s. Im Qualitätsmanagement prüfen lassen." % item["title"]
+	else:
+		var untouched: bool = (m.is_untouched() if m is Lathe else m.untouched) and not m.ceramic_part
+		if untouched:
+			if m is Lathe:
+				item = {"kind": Materials.KIND_ROUND, "sawn": true, "material": str(m.material), "d": float(m.stock_d), "l": float(m.stock_len)}
+			else:
+				item = {"kind": Materials.KIND_CUT, "material": str(m.material), "l": float(m.block_l), "w": float(m.block_w), "h": float(m.block_h)}
+			text = "Rohteil ausgespannt: ins Regal, in eine Kiste oder an einer anderen Maschine einspannen."
+		else:
+			var key := _key_in(m)
+			item = _part_item(m, key, m.evaluate(JobBoard.job_of(key)) if key != "" else {})
+			text = "Ausgespannt: %s. Im Qualitätsmanagement an der Südwand abgeben oder in eine Kiste legen." % item["title"]
+		m.clear_workpiece()
+	player.set_carry(item)
+	player._focus = null
+	hud.show_message(text, QM_COLOR)
+	_jobs_changed()
+	return ""
+
+
+func qm_prompt() -> String:
+	if player.carrying_part():
+		var it: Dictionary = player.carry
+		if not _qm_open(it):
+			return "[Linksklick] Teil ohne offenen Auftrag verschrotten    |    Qualitätsmanagement"
+		return "[Linksklick] %s zur Prüfung abgeben    |    Qualitätsmanagement" % it["title"]
+	if player.carrying_semi():
+		return "Vorbearbeitetes Teil: erst auf die Schleifmaschine    |    Qualitätsmanagement"
+	return "Qualitätsmanagement: ausgespannte Teile hier abgeben"
+
+
+func qm_click() -> void:
+	if not player.carrying_part():
+		if player.hands_free():
+			hud.show_message("Hier werden fertige Teile abgegeben: an der Maschine mit Linksklick aufs Teil ausspannen und herbringen.", Color(0.9, 0.95, 1.0))
+		return
+	var err := qm_submit()
+	if err != "":
+		hud.show_message(err, Color(1, 0.75, 0.2))
+
+
+## Gehört das Teil zu einem Auftrag, der noch offen ist?
+func _qm_open(it: Dictionary) -> bool:
+	var key := str(it.get("key", ""))
+	if key == "" or (it.get("res", {}) as Dictionary).is_empty():
+		return false
+	return grind_jobs.has(key) if bool(it.get("grind", false)) else accepted.has(key)
+
+
+## Teil aus den Händen prüfen lassen und abrechnen. Fehlertext, leer = abgegeben.
+func qm_submit() -> String:
+	if not player.carrying_part():
+		return "Kein ausgespanntes Teil in den Händen."
+	var item: Dictionary = player.carry
+	if not _qm_open(item):
+		player.clear_carry()
+		quality.show_result("%s\nKein offener Auftrag:\nverschrottet." % item.get("title", "Teil"))
+		hud.show_message("Zu diesem Teil gibt es keinen offenen Auftrag: Es wurde verschrottet.", Color(1, 0.75, 0.2))
+		return ""
+	if bool(item.get("grind", false)):
+		_qm_grind(item)
+		return ""
+	var key := str(item["key"])
+	var job := JobBoard.job_of(key)
+	var res: Dictionary = item["res"]
+	var score := _material_score(float(res["score"]), str(item["material"]), job)
+	var to_grind: bool = score >= 0.999 and JobBoard.grind_active(job, company)
+	var pay := 0
+	var verdict := "Ausschuss! Keine Vergütung."
+	if score >= 0.999:
+		pay = _pay(float(job["reward"]))
+		verdict = "Alle Maße in Toleranz - sehr gut!"
+	elif score >= 0.5:
+		pay = _pay(float(job["reward"]) * score * 0.5)
+		verdict = "Nacharbeit nötig - Teilvergütung."
+	money += pay
+	parts += 1
+	var lines: Array = res["lines"]
+	var text := "PRÜFPROTOKOLL - %s\n\n%s\n\n%d / %d Merkmale in Ordnung\n%s\nVergütung: %d EUR" % [
+		job["title"], "\n".join(lines), int(res["ok"]), int(res["total"]), verdict, pay]
+	player.clear_carry()
+	if to_grind:
+		text += _send_to_grinding(key, item["part"])
+	elif score >= 0.999:
+		text += _finish_job(key)
+	hud.show_result(text)
+	quality.show_result("%s\n%d / %d Merkmale i.O.\n%s\n%d EUR" % [job["title"], int(res["ok"]), int(res["total"]), verdict, pay])
+	_jobs_changed()
+	return ""
+
+
+## Geschliffenes Teil prüfen. Passt die Fläche noch nicht, kommt es zurück in die Hände zum Weiterschleifen.
+## Sind die Maße verschliffen, ist das Teil Ausschuss und der Auftrag ohne Schleifvergütung beendet.
+func _qm_grind(item: Dictionary) -> void:
+	var key := str(item["key"])
 	var job := JobBoard.job_of(key)
 	var g: Dictionary = job["grind"]
-	var res: Dictionary = m.evaluate_grind(job)
+	var res: Dictionary = item["res"]
 	var lines: Array = res["lines"]
 	var ok_all: bool = int(res["ok"]) == int(res["total"])
 	var measures_ok: bool = int(res["ok"]) >= int(res["total"]) - 1 and str(lines[lines.size() - 1]).begins_with("FEHL")
 	var head := "PRÜFPROTOKOLL SCHLEIFEN - %s\n\n%s\n\n" % [job["title"], "\n".join(lines)]
+	player.clear_carry()
 	if ok_all:
 		var pay := _pay(float(g["reward"]))
 		money += pay
@@ -845,22 +1167,202 @@ func _on_grind_submit(m: Node) -> void:
 		grind_jobs.erase(key)
 		text += _finish_job(key)
 		hud.show_result(text)
-		_clear_grinder(m)
+		quality.show_result("%s\nGeschliffen i.O.\n%d EUR" % [job["title"], pay])
 	elif measures_ok:
-		hud.show_result(head + "Die Fläche ist noch nicht fertig: weiterschleifen, zuletzt fein zustellen und langsam fahren.")
+		player.set_carry({"kind": "semi", "key": key, "type": g["type"], "title": job["title"], "part": item["part"]})
+		hud.show_result(head + "Die Fläche ist noch nicht fertig: Das Teil liegt wieder in deinen Händen. Erneut einspannen, weiterschleifen, zuletzt fein zustellen und langsam fahren.")
+		quality.show_result("%s\nFläche noch nicht fertig:\nweiterschleifen." % job["title"])
 	else:
 		grind_jobs.erase(key)
 		deadlines.erase(key)
 		company.change_reputation(REP_SCRAP, day, "Ausschuss: %s" % job["title"])
 		hud.show_result(head + "Maße verschliffen: Ausschuss! Keine Schleifvergütung.")
-		_clear_grinder(m)
+		quality.show_result("%s\nMaße verschliffen:\nAusschuss." % job["title"])
 	_jobs_changed()
 
 
-func _clear_grinder(m: Node) -> void:
-	m.semi_key = ""
-	m.ceramic_part = false
-	m.clear_workpiece()
+## Abgabe wie früher in einem Schritt: ausspannen und gleich prüfen lassen. Fehlertext, leer = abgegeben.
+func _submit_direct(m: Node, untouched: bool, category: String) -> void:
+	var err := ""
+	if not m.has_part:
+		err = "Es ist kein Rohteil eingespannt."
+	elif m.grinder_type != "" and str(m.semi_key) == "":
+		err = "Es ist kein vorbearbeitetes Teil eingespannt."
+	elif m.grinder_type == "" and untouched:
+		err = "Das Rohteil ist noch unbearbeitet."
+	elif m.grinder_type == "" and not has_job(category):
+		err = "Kein %s angenommen. Aufträge gibt es am PC im Büro." % JobBoard.MACHINE_NAMES.get(category, "Auftrag")
+	if err == "":
+		err = unclamp_part(m)
+	if err == "":
+		err = qm_submit()
+	if err != "":
+		hud.show_message(err, Color(1, 0.75, 0.2))
+
+
+func _on_submit(m: Lathe = null) -> void:
+	if m == null:
+		m = lathe
+	_submit_direct(m, m.is_untouched(), "lathe")
+
+
+func _on_mill_submit(m: Mill = null) -> void:
+	if m == null:
+		m = mill
+	_submit_direct(m, m.untouched, m.MACHINE_ID)
+
+
+func _on_grind_submit(m: Node) -> void:
+	_submit_direct(m, false, "")
+
+
+## Teil aus den Händen wieder einspannen, zum Beispiel aus der Kiste. Fehlertext, leer = eingespannt.
+func _clamp_part(machine: Node) -> String:
+	var item: Dictionary = player.carry
+	var err := _part_fit(machine, item)
+	if err == "" and machine.spindle_speed > 5.0:
+		err = "Erst die Spindel stoppen."
+	elif err == "" and machine.has_part:
+		err = "Es ist schon ein Teil eingespannt: erst mit Linksklick aufs Teil ausspannen."
+	if err == "":
+		err = _tray_conflict(machine, str(item["material"]))
+	if err != "":
+		hud.show_message(err, Color(1, 0.75, 0.2))
+		return err
+	machine.load_part(item["part"])
+	player.clear_carry()
+	_jobs_changed()
+	return ""
+
+
+## Passt das ausgespannte Teil auf diese Maschine? Fehlertext, leer = ja.
+func _part_fit(machine: Node, item: Dictionary) -> String:
+	var round_part := str(item.get("shape", "")) == "round"
+	if not machine is Lathe and not machine is Mill:
+		return "Hier lässt sich nichts einspannen."
+	if machine.grinder_type != "":
+		return "Schleifmaschinen spannen nur vorbearbeitete Teile."
+	if machine is Lathe and not round_part:
+		return "Die Drehmaschine spannt nur runde Teile."
+	if machine is Mill and round_part:
+		return "Der Schraubstock spannt nur eckige Teile."
+	return ""
+
+
+## Kurzbeschreibung eines Stücks für Kisten und Hinweise.
+func _item_text(it: Dictionary) -> String:
+	if str(it.get("kind", "")) == "part":
+		return "%s (%s)" % [it.get("title", "Teil"), Materials.label(str(it["material"]))]
+	return "%s  %s" % [Materials.label(str(it["material"])), RawMaterialTab.describe(it)]
+
+
+# ------------------------------------------------------------ Zeichnungen in der Hand und an der Wand
+
+## Bild der Zeichnung für Blatt und Hand. Je Auftrag wird es einmal gerendert.
+func drawing_texture(job: Dictionary) -> Texture2D:
+	var id := JSON.stringify(job).hash()
+	if not _drawing_vps.has(id):
+		var vp := SubViewport.new()
+		vp.size = Vector2i(1120, 660)
+		vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+		vp.gui_disable_input = true
+		var d := PartDrawing.new()
+		d.printed = true
+		d.job = job
+		d.position = Vector2.ZERO
+		d.size = Vector2(1120, 660)
+		d.theme = UITheme.build()
+		vp.add_child(d)
+		add_child(vp)
+		_drawing_vps[id] = vp
+	return (_drawing_vps[id] as SubViewport).get_texture()
+
+
+## Ausgedruckte Zeichnung in die Hand nehmen. Fehlertext, leer = in der Hand.
+func take_drawing(job: Dictionary) -> String:
+	if job.is_empty():
+		return "Keine Zeichnung: Es ist kein Auftrag gewählt."
+	if player.operating != null:
+		return "Erst die Maschine verlassen, dann die Zeichnung nehmen."
+	if not player.hands_free():
+		return "Erst die Hände frei machen."
+	player.set_carry({"kind": "drawing", "job": job.duplicate(true)})
+	hud.show_message("Zeichnung in der Hand: Mit Linksklick an eine Fläche pinnen, zum Beispiel an die Maschinentür. Rechtsklick legt sie weg.", QM_COLOR)
+	return ""
+
+
+## Zeichnung aus der Hand an die Stelle pinnen, auf die der Blick fällt.
+func pin_drawing(collider: Object, point: Vector3, normal: Vector3) -> void:
+	if not player.carrying_drawing():
+		return
+	var n := normal.normalized()
+	var up := Vector3.UP
+	if absf(n.dot(up)) > 0.9:
+		# Waagrecht (Tisch, Boden): Die Oberkante zeigt vom Spieler weg
+		up = -player.global_transform.basis.z
+		up = (up - n * up.dot(n)).normalized()
+	var x := up.cross(n).normalized()
+	var y := n.cross(x).normalized()
+	var xf := Transform3D(Basis(x, y, n), point + n * 0.002)
+	_add_pin(player.carry["job"], xf, collider as Node3D)
+	player.clear_carry()
+	hud.show_message("Zeichnung angepinnt. [%s] zeigt sie groß, Linksklick nimmt sie wieder ab." % Settings.binding_text("interact"), QM_COLOR)
+
+
+func _add_pin(job: Dictionary, xf: Transform3D, anchor: Node3D) -> PinnedDrawing:
+	var p := PinnedDrawing.new()
+	p.world = self
+	p.job = job
+	add_child(p)
+	p.global_transform = xf
+	p.attach(anchor)
+	pins.append(p)
+	return p
+
+
+func pin_prompt(pin: PinnedDrawing) -> String:
+	var what := "Zeichnung %s" % str(pin.job.get("title", ""))
+	if not player.hands_free():
+		return "[%s] %s ansehen    |    Hände voll" % [Settings.binding_text("interact"), what]
+	return "[%s] %s ansehen    [Linksklick] Abnehmen" % [Settings.binding_text("interact"), what]
+
+
+## Angepinnte Zeichnung wieder in die Hand nehmen.
+func pin_click(pin: PinnedDrawing) -> void:
+	if not player.hands_free():
+		return
+	pins.erase(pin)
+	var job := pin.job
+	pin.queue_free()
+	player._focus = null
+	player.set_carry({"kind": "drawing", "job": job})
+
+
+func _pin_states() -> Array:
+	var out: Array = []
+	for p in pins:
+		if not is_instance_valid(p):
+			continue
+		var t: Transform3D = p.global_transform
+		out.append({"job": p.job, "xf": [t.basis.x.x, t.basis.x.y, t.basis.x.z, t.basis.y.x, t.basis.y.y, t.basis.y.z,
+			t.basis.z.x, t.basis.z.y, t.basis.z.z, t.origin.x, t.origin.y, t.origin.z]})
+	return out
+
+
+## Geladene Zeichnungen wieder an den Körper hängen, auf dem sie sitzen (zum Beispiel eine Maschinentür).
+func _anchor_pins() -> void:
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var space := get_world_3d().direct_space_state
+	for p in pins:
+		if not is_instance_valid(p) or p.anchor != null:
+			continue
+		var n: Vector3 = p.global_transform.basis.z.normalized()
+		var q := PhysicsRayQueryParameters3D.create(p.global_position + n * 0.05, p.global_position - n * 0.05)
+		q.exclude = [p.body.get_rid()]
+		var hit := space.intersect_ray(q)
+		if not hit.is_empty() and hit["collider"] is Node3D:
+			p.attach(hit["collider"])
 
 
 ## Falscher Werkstoff ist Ausschuss, egal wie gut die Maße sind.
@@ -874,7 +1376,8 @@ func _material_score(score: float, used: String, job: Dictionary) -> float:
 
 # ------------------------------------------------------------ Rohmaterial
 
-## Taste ^ schaltet den Testmodus um. Auf deutschen Tastaturen ist ^ eine Tottaste, darum auch nach Lage.
+## Taste ^ öffnet und schließt das Debug-Menü (Testmodus, Noclip, Zeit, Geld). Auf deutschen Tastaturen ist ^
+## eine Tottaste, darum auch nach Lage.
 func _input(event: InputEvent) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo:
 		return
@@ -884,8 +1387,29 @@ func _input(event: InputEvent) -> void:
 	var focus := get_viewport().gui_get_focus_owner()
 	if focus is LineEdit or focus is TextEdit or lathe.typing() or (cnc_lathe != null and cnc_lathe.typing()):
 		return
-	set_free_mode(not free_mode)
-	get_viewport().set_input_as_handled()
+	# An einer Maschine oder in einem anderen Menü bleibt es zu, das Debug-Menü selbst schließt die Taste
+	if debug_menu.visible or player.operating == null:
+		debug_menu.toggle()
+		get_viewport().set_input_as_handled()
+
+
+## Debug: Uhrzeit setzen. 6 bis 18 Uhr ist Arbeitstag, sonst Nacht nach Feierabend (bis 6 Uhr morgens).
+func debug_set_hour(h: float) -> void:
+	if not day_started:
+		start_day()
+	if h >= 6.0 and h < 18.0:
+		day_over = false
+		_evening = 0.0
+		day_time = (h - 6.0) / 12.0 * DAY_SECONDS
+	else:
+		day_time = DAY_SECONDS
+		if not day_over:
+			end_day()
+		var hh := h if h >= 18.0 else h + 24.0
+		_evening = (hh - 18.0) / 12.0 * NIGHT_SECONDS
+	day_cycle.shown = -1.0
+	day_cycle.set_hour(sky_hour())
+	_show_clock()
 
 
 func set_free_mode(on: bool) -> void:
@@ -1192,7 +1716,7 @@ func pick_delivery(i: int) -> String:
 ## Hinweis beim Anvisieren eines Fachs.
 func rack_prompt(slot: int) -> String:
 	var where := Site.slot_name(slot)
-	if player.carrying_bin() or player.carrying_semi():
+	if player.carrying_bin() or player.carrying_semi() or player.carrying_part() or player.carrying_drawing():
 		return "%s    |    Hände voll" % where
 	var here := Storage.on_board(stock, slot)
 	if not player.carry.is_empty():
@@ -1215,7 +1739,7 @@ func rack_click(slot: int) -> void:
 func store_at(slot: int) -> String:
 	if player.carry.is_empty():
 		return "Keine Hand voll Material."
-	if player.carrying_bin() or player.carrying_semi():
+	if player.carrying_bin() or player.carrying_semi() or player.carrying_part() or player.carrying_drawing():
 		return "Das gehört nicht ins Regal."
 	if not Storage.fits_with(Storage.on_board(stock, slot), player.carry):
 		var full := "%s: Das passt hier nicht. Stangen und Fertigschnitte liegen getrennt, nach Maßen ist irgendwann Schluss." % Site.slot_name(slot)
@@ -1240,7 +1764,7 @@ func _put_in_slot(slot: int) -> void:
 func store_carried(rack := -1) -> String:
 	if player.carry.is_empty():
 		return "Keine Hand voll Material."
-	if player.carrying_bin() or player.carrying_semi():
+	if player.carrying_bin() or player.carrying_semi() or player.carrying_part() or player.carrying_drawing():
 		return "Das gehört nicht ins Regal."
 	var slot := -1
 	if rack >= 0:
@@ -1281,6 +1805,10 @@ func clamp_carried(machine: Node) -> String:
 		return saw_load(machine)
 	if player.carrying_semi():
 		return _clamp_semi(machine)
+	if player.carrying_part():
+		return _clamp_part(machine)
+	if player.carrying_drawing():
+		return ""
 	var item: Dictionary = player.carry
 	var round_bar := str(item["kind"]) == Materials.KIND_ROUND
 	var err := ""
@@ -1339,6 +1867,11 @@ func _clamp_precheck(machine: Node) -> String:
 		return "Erst die Spindel stoppen, dann umspannen." if machine.spindle_speed > 5.0 else ""
 	if player.carrying_semi():
 		return ""
+	if player.carrying_part():
+		var fit := _part_fit(machine, player.carry)
+		if fit == "" and machine.has_part:
+			fit = "Es ist schon ein Teil eingespannt: erst mit Linksklick aufs Teil ausspannen."
+		return fit
 	var round_bar := str(player.carry["kind"]) == Materials.KIND_ROUND
 	if machine.grinder_type != "":
 		return "Schleifmaschinen spannen nur vorbearbeitete Teile."
@@ -1385,8 +1918,8 @@ func finish_clamp(machine: Node, flip: bool, depth: float) -> String:
 ## Stange aus den Händen auf die Rollbahn legen.
 func saw_load(saw: BandSaw) -> String:
 	var err := ""
-	if player.carrying_semi():
-		err = "Kundenteile werden nicht gesägt."
+	if player.carrying_semi() or player.carrying_part():
+		err = "Bearbeitete Teile werden nicht gesägt."
 	elif str(player.carry["kind"]) == Materials.KIND_CUT:
 		err = "Fertigschnitte sind schon auf Maß."
 	elif saw.cutting:
@@ -1432,7 +1965,7 @@ func saw_suggestion(item: Dictionary) -> float:
 func crate_prompt(i: int) -> String:
 	var c: Dictionary = layout.crates[i]
 	var what := "%s (%d von %d Teilen)" % [Crate.SIZES[c["size"]]["title"], c["items"].size(), int(Crate.SIZES[c["size"]]["max"])]
-	if player.carrying_bin() or player.carrying_semi():
+	if player.carrying_bin() or player.carrying_semi() or player.carrying_drawing():
 		return "%s    |    Hände voll" % what
 	if not player.carry.is_empty():
 		return "[Linksklick] In die Kiste legen    |    %s" % what
@@ -1441,7 +1974,7 @@ func crate_prompt(i: int) -> String:
 	if c["items"].is_empty():
 		return "%s    |    leer" % what
 	var top: Dictionary = c["items"][-1]
-	return "[Linksklick] %s  %s nehmen    |    %s" % [Materials.label(str(top["material"])), RawMaterialTab.describe(top), what]
+	return "[Linksklick] %s nehmen    |    %s" % [_item_text(top), what]
 
 
 func crate_click(i: int) -> void:
@@ -1459,9 +1992,11 @@ func crate_put(i: int) -> String:
 		return "Keine Hand voll Material."
 	if player.carrying_bin():
 		return "Der Spänebehälter passt nicht in die Kiste."
+	if player.carrying_drawing():
+		return "Die Zeichnung lieber anpinnen."
 	var c: Dictionary = layout.crates[i]
 	if not Crate.accepts(player.carry):
-		return "Stangen gehören ins Regal. In die Kiste kommen Fertigschnitte und abgesägte Teile."
+		return "Stangen gehören ins Regal. In die Kiste kommen Fertigschnitte, abgesägte und ausgespannte Teile."
 	if not Crate.fits(c["size"], c["items"], player.carry):
 		return "Das passt nicht mehr in diese Kiste."
 	c["items"].append(player.carry)
@@ -1504,7 +2039,9 @@ func place_crate(moving: int, size_id: String, pos: Vector2, rot: int) -> String
 
 ## Spänebehälter aufstellen oder umstellen.
 func place_bin(moving: int, size_id: String, pos: Vector2, rot: int) -> String:
-	var err := layout.check_bin(pos, rot, moving)
+	if moving >= 0:
+		size_id = str(layout.bins[moving]["size"])
+	var err := layout.check_bin(pos, rot, moving, size_id)
 	if err != "":
 		return err
 	if moving >= 0:
@@ -1517,6 +2054,254 @@ func place_bin(moving: int, size_id: String, pos: Vector2, rot: int) -> String:
 			return "Dieser Behälter wurde nicht gekauft."
 		inventory[size_id] = int(inventory[size_id]) - 1
 		layout.bins.append({"size": size_id, "pos": pos, "rot": rot, "chips": ChipTray.new(float(ChipBin.SIZES[size_id]["kg"])), "out": false})
+	_rebuild_stands()
+	return ""
+
+
+## Holzregal aufstellen oder umstellen.
+# ------------------------------------------------------------ Leere Paletten von Hand stapeln
+
+## Hinweis auf einem Palettenstapel.
+func pallet_prompt(i: int) -> String:
+	var n := int(layout.shelves[i].get("stack", 1))
+	var what := "Europalette" if n == 1 else "%d Europaletten gestapelt" % n
+	if player.carrying_pallet():
+		if n >= Shelf.MAX_STACK:
+			return "Stapel ist voll (%d)    |    Palette woanders abstellen" % Shelf.MAX_STACK
+		return "[%s] Palette auflegen    |    %s" % [Settings.binding_text("interact"), what]
+	if not player.hands_free():
+		return "%s    |    Hände voll" % what
+	return "[%s] Palette aufnehmen    |    %s" % [Settings.binding_text("interact"), what]
+
+
+## E auf einen Palettenstapel: oberste aufnehmen oder die getragene drauflegen.
+func pallet_click(i: int) -> void:
+	var s: Dictionary = layout.shelves[i]
+	var n := int(s.get("stack", 1))
+	if player.carrying_pallet():
+		if n >= Shelf.MAX_STACK:
+			hud.show_message("Der Stapel ist voll: höchstens %d Paletten." % Shelf.MAX_STACK, Color(1, 0.75, 0.2))
+			return
+		s["stack"] = n + 1
+		player.clear_carry()
+		_rebuild_stands()
+		return
+	if not player.hands_free():
+		return
+	if n <= 1:
+		layout.shelves.remove_at(i)
+	else:
+		s["stack"] = n - 1
+	player.set_carry({"kind": "pallet", "title": "Europalette"})
+	_rebuild_stands()
+
+
+# ------------------------------------------------------------ Hubwagen
+
+## Hubwagen und Last rasten beim Abstellen auf 90° ein, wenn sie höchstens so viele Grad davon entfernt stehen
+## (Paletten brauchen es genauer, sonst klemmen die Zinken in den Klötzen).
+const JACK_SNAP_DEG := 15.0
+const PALLET_SNAP_DEG := 6.0
+## Seitlicher Versatz der Palettenmitte zur Zinkenmitte: Die Zinken (z 0,175 bis 0,355) haben in der
+## Öffnung (0,095 bis 0,38) nur rund 0,025 m Luft.
+const LIFT_SIDE_TOL := 0.03
+
+
+## Hinweis auf dem abgestellten Hubwagen.
+func jack_prompt(i: int) -> String:
+	var n := int(layout.shelves[i].get("load", 0))
+	var what := "Hubwagen" if n == 0 else "Hubwagen mit %d Palette%s" % [n, "" if n == 1 else "n"]
+	if not player.hands_free():
+		return "%s    |    Hände voll" % what
+	return "[%s] Deichsel greifen    |    %s    |    im Baumenü umstellen" % [Settings.binding_text("interact"), what]
+
+
+## E auf den abgestellten Hubwagen: Deichsel greifen. Die Figur steht dann hinter dem Lenkrad (Handgriff-Seite),
+## sonst seitlich davon; ist nirgends Platz, passiert nichts.
+func jack_click(i: int) -> void:
+	if not player.hands_free():
+		return
+	var s: Dictionary = layout.shelves[i]
+	if str(s["size"]) != "pallet_jack":
+		return
+	var phi := int(s["rot"]) * PI / 2.0
+	var f := Vector2(cos(phi), -sin(phi))
+	var center: Vector2 = s["pos"]
+	var node: Node = shelf_nodes[i] if i < shelf_nodes.size() else null
+	var rear := -f
+	var spot := Vector2.ZERO
+	var found := false
+	for turn in [0.0, 0.6, -0.6, 1.2, -1.2]:
+		var dir := rear.rotated(turn as float)
+		var q := center + f * JackCart.PIVOT_X + dir * JackCart.HOLD
+		if _stand_free(Vector3(q.x, player.global_position.y, q.y), node):
+			spot = q
+			rear = dir
+			found = true
+			break
+	if not found:
+		hud.show_message("Hier ist kein Platz, um die Deichsel zu greifen.", Color(1, 0.75, 0.2))
+		return
+	var load_n := int(s.get("load", 0))
+	var cross := bool(s.get("cross", false))
+	layout.shelves.remove_at(i)
+	# Die Figur blickt zum Wagen
+	player.yaw = atan2(rear.x, rear.y)
+	player.rotation.y = player.yaw
+	player.global_position = Vector3(spot.x, player.global_position.y, spot.y)
+	player.velocity = Vector3.ZERO
+	player.set_carry({"kind": "jack", "title": "Hubwagen", "load": load_n, "cross": cross, "pos": [center.x, center.y], "rot": phi})
+	_rebuild_stands()
+
+
+## Ist an dieser Stelle Platz für die Figur (Kapsel)? Der Knoten ignore (der Hubwagen selbst) zählt nicht.
+func _stand_free(at: Vector3, ignore: Node) -> bool:
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.3
+	cap.height = 1.8
+	var q := PhysicsShapeQueryParameters3D.new()
+	q.shape = cap
+	q.transform = Transform3D(Basis.IDENTITY, at + Vector3(0, 0.95, 0))
+	q.collision_mask = 1
+	q.exclude = [player.get_rid()]
+	for hit in get_world_3d().direct_space_state.intersect_shape(q, 16):
+		var c := hit["collider"] as Node
+		if c and ignore and c.has_meta("interact") and c.get_meta("interact") == ignore:
+			continue
+		return false
+	return true
+
+
+## Leertaste beim Fahren: ohne Last die Palette über den Zinken anheben, mit Last absenken.
+func jack_lift() -> void:
+	if not player.driving_jack():
+		return
+	var cart: JackCart = player.jack_cart
+	var spot: Vector2 = cart.load_spot()
+	if cart.load_n > 0:
+		# Absenken: Die Palette steht danach mit gerundeter Drehung, dafür muss der Wagen fast gerade stehen
+		if player.jack_snap_error(PI / 2.0 if cart.cross else 0.0) > deg_to_rad(PALLET_SNAP_DEG):
+			hud.show_message("Palette gerader ausrichten.", Color(1, 0.75, 0.2))
+			return
+		var rot: int = player.jack_load_rot()
+		var err := layout.check_shelf("pallet", spot, rot)
+		if err != "":
+			hud.show_message(err, Color(1, 0.75, 0.2))
+			return
+		layout.shelves.append({"size": "pallet", "pos": spot, "rot": rot, "stack": cart.load_n})
+		player.set_jack_load(0)
+		_rebuild_stands()
+		_settle_pallets(shelf_nodes.back())
+		return
+	var f: Vector2 = cart.forward()
+	var l: Vector2 = cart.lateral()
+	var best := -1
+	var best_d := INF
+	var best_cross := false
+	for i in layout.shelves.size():
+		var s: Dictionary = layout.shelves[i]
+		if str(s["size"]) != "pallet":
+			continue
+		var d: Vector2 = s["pos"] - spot
+		# Lastmitte muss nahe der Zinkenmitte liegen
+		if absf(d.dot(f)) > 0.3 or absf(d.dot(l)) > LIFT_SIDE_TOL:
+			continue
+		# Längs oder quer zu den Zinken (Euro-Paletten lassen sich von beiden Seiten unterfahren), um 180° gedreht ist egal
+		var axis := Vector2.RIGHT.rotated(-int(s["rot"]) * PI / 2.0)
+		var is_cross := false
+		if absf(f.cross(axis)) > 0.26:
+			if absf(f.dot(axis)) > 0.26:
+				continue       # schräg: passt nicht auf die Zinken
+			is_cross = true
+		if d.length() < best_d:
+			best_d = d.length()
+			best = i
+			best_cross = is_cross
+	if best < 0:
+		hud.show_message("Die Zinken stecken nicht unter einer Palette.", Color(1, 0.75, 0.2))
+		return
+	var n := int(layout.shelves[best].get("stack", 1))
+	layout.shelves.remove_at(best)
+	player.set_jack_load(n, best_cross)
+	_rebuild_stands()
+
+
+## Die abgesenkte Palette sinkt in 0,4 s die Hubhöhe herunter (nur Optik).
+func _settle_pallets(node: Node3D) -> void:
+	if node == null:
+		return
+	for c in node.get_children():
+		if c is Node3D and not c is CollisionObject3D:
+			var y: float = (c as Node3D).position.y
+			(c as Node3D).position.y = y + Shelf.JACK_LIFT
+			create_tween().tween_property(c, "position:y", y, JackCart.LIFT_TIME)
+
+
+## Hubwagen sofort an der Stelle des Wagens abstellen, ohne Prüfung (Figur teleportiert, schläft, ist zu weit weg).
+## Rot auf 90° gerundet; nichts geht verloren, auch wenn dort etwas steht.
+func jack_abandon() -> void:
+	if not player.driving_jack():
+		return
+	layout.shelves.append({"size": "pallet_jack", "pos": player.jack_center(), "rot": player.jack_rot(),
+			"load": player.jack_load(), "cross": player.jack_cross()})
+	player.clear_carry()
+	_rebuild_stands()
+	hud.show_message("Hubwagen an seiner Stelle abgestellt.", Color(0.9, 0.95, 1.0))
+
+
+## E oder Q beim Fahren: Hubwagen (samt Last) loslassen und an der echten Stelle abstellen. Der Wagen rastet
+## auf 90° ein, wenn er höchstens 15° davon entfernt steht. Fehlertext, leer = abgestellt.
+func jack_park() -> String:
+	if not player.driving_jack():
+		return ""
+	if player.jack_snap_error() > deg_to_rad(JACK_SNAP_DEG):
+		var msg := "Hubwagen gerader ausrichten."
+		hud.show_message(msg, Color(1, 0.75, 0.2))
+		return msg
+	var at: Vector2 = player.jack_center()
+	var rot: int = player.jack_rot()
+	var err := layout.check_shelf("pallet_jack", at, rot, -1, player.jack_load(), player.jack_cross())
+	if err != "":
+		hud.show_message(err, Color(1, 0.75, 0.2))
+		return err
+	layout.shelves.append({"size": "pallet_jack", "pos": at, "rot": rot, "load": player.jack_load(), "cross": player.jack_cross()})
+	player.clear_carry()
+	_rebuild_stands()
+	return ""
+
+
+## Getragene Palette am Punkt (x, z) abstellen, die lange Seite quer zur Blickrichtung. Fehlertext, leer = abgestellt.
+func put_pallet(at: Vector2) -> String:
+	if not player.carrying_pallet():
+		return ""
+	var rot: int = player.pallet_rot()
+	var err := layout.check_shelf("pallet", at, rot)
+	if err != "":
+		hud.show_message(err, Color(1, 0.75, 0.2))
+		return err
+	layout.shelves.append({"size": "pallet", "pos": at, "rot": rot, "stack": 1})
+	player.clear_carry()
+	_rebuild_stands()
+	return ""
+
+
+func place_shelf(moving: int, size_id: String, pos: Vector2, rot: int) -> String:
+	var cargo := 0
+	var cross := false
+	if moving >= 0:
+		cargo = int(layout.shelves[moving].get("load", 0))
+		cross = bool(layout.shelves[moving].get("cross", false))
+	var err := layout.check_shelf(size_id, pos, rot, moving, cargo, cross)
+	if err != "":
+		return err
+	if moving >= 0:
+		layout.shelves[moving]["pos"] = pos
+		layout.shelves[moving]["rot"] = rot
+	else:
+		if int(inventory.get(size_id, 0)) <= 0:
+			return "Dieses Regal wurde nicht gekauft."
+		inventory[size_id] = int(inventory[size_id]) - 1
+		layout.shelves.append({"size": size_id, "pos": pos, "rot": rot})
 	_rebuild_stands()
 	return ""
 
@@ -1565,7 +2350,11 @@ func build_target(hit: Object) -> Dictionary:
 				"rect": Layout.crate_rect(n.size_id, c["pos"], c["rot"])}
 		if n is ChipBin:
 			var b: Dictionary = layout.bins[n.index]
-			return {"kind": "bin", "item": n.size_id, "index": n.index, "title": equipment_title(n.size_id), "rect": Layout.bin_rect(b["pos"], b["rot"])}
+			return {"kind": "bin", "item": n.size_id, "index": n.index, "title": equipment_title(n.size_id), "rect": Layout.bin_rect(b["pos"], b["rot"], n.size_id)}
+		if n is Shelf:
+			var s: Dictionary = layout.shelves[n.index]
+			return {"kind": "shelf", "item": n.size_id, "index": n.index, "title": equipment_title(n.size_id),
+				"rect": Layout.shelf_rect(n.size_id, s["pos"], s["rot"], int(s.get("load", 0)), bool(s.get("cross", false)))}
 		n = n.get_parent()
 	return {}
 
@@ -1581,16 +2370,38 @@ func build_node(kind: String, item: String, index: int) -> Node3D:
 			return crate_nodes[index] if index >= 0 else null
 		"bin":
 			return bin_nodes[index] if index >= 0 else null
+		"shelf":
+			return shelf_nodes[index] if index >= 0 else null
 	return null
 
 
 ## Kisten und Spänebehälter neu aufstellen.
 func _rebuild_stands() -> void:
+	request_reflections()
 	player._focus = null
-	for n in crate_nodes + bin_nodes:
-		n.free()
+	# Nicht sofort free(): der Aufruf kommt oft aus click() genau eines dieser Knoten (Palettenstapel),
+	# der dann gesperrt ist und als Geist mit veraltetem Index stehen bliebe. Aus dem Baum nehmen, später löschen.
+	for n in crate_nodes + bin_nodes + shelf_nodes:
+		if is_instance_valid(n):
+			if n.get_parent():
+				n.get_parent().remove_child(n)
+			n.queue_free()
 	crate_nodes.clear()
 	bin_nodes.clear()
+	shelf_nodes.clear()
+	for i in layout.shelves.size():
+		var s: Dictionary = layout.shelves[i]
+		var sn := Shelf.new()
+		sn.index = i
+		sn.size_id = s["size"]
+		sn.stack = int(s.get("stack", 1))
+		sn.cargo = int(s.get("load", 0))
+		sn.cargo_cross = bool(s.get("cross", false))
+		sn.world = self
+		sn.position = Vector3(s["pos"].x, 0, s["pos"].y)
+		sn.rotation.y = int(s["rot"]) * PI / 2.0
+		add_child(sn)
+		shelf_nodes.append(sn)
 	for i in layout.crates.size():
 		var c: Dictionary = layout.crates[i]
 		var node := Crate.new()
@@ -1598,7 +2409,8 @@ func _rebuild_stands() -> void:
 		node.index = i
 		node.size_id = c["size"]
 		node.items = c["items"]
-		node.position = Vector3(c["pos"].x, 0, c["pos"].y)
+		# Auf der Werkbank steht die Kiste auf der Platte
+		node.position = Vector3(c["pos"].x, ToolBench.TOP_Y if layout.crate_is_on_top(c) else 0.0, c["pos"].y)
 		node.rotation.y = int(c["rot"]) * PI / 2.0
 		add_child(node)
 		crate_nodes.append(node)
@@ -1647,6 +2459,8 @@ func bin_click(i: int) -> void:
 
 ## Spänewanne der Maschine in den Behälter in den Händen leeren.
 func pour_tray(machine: Node) -> String:
+	if machine is Lathe and machine.e50 and machine._bin_fill != null:
+		return _swap_conveyor_bin(machine)
 	if machine.spindle_speed > 5.0:
 		var busy := "Erst die Spindel stoppen."
 		hud.show_message(busy, Color(1, 0.75, 0.2))
@@ -1663,6 +2477,27 @@ func pour_tray(machine: Node) -> String:
 		hud.show_message(why, Color(1, 0.75, 0.2))
 		return why
 	hud.show_message("%d kg Späne im Behälter, jetzt %d von %d kg." % [int(round(moved)), int(chips.kg), int(chips.capacity)], Color(0.7, 0.95, 1.0))
+	return ""
+
+
+## E50: Spänekiste unter dem Späneförderer gegen den leeren großen Behälter in den Händen tauschen.
+## Danach trägt man die volle Kiste; die leere steht unter dem Förderer.
+func _swap_conveyor_bin(machine: Lathe) -> String:
+	var n := int(player.carry["bin"])
+	var b: Dictionary = layout.bins[n]
+	var why := ""
+	if str(b["size"]) != "bin_l":
+		why = "Unter den Späneförderer passt nur der große Spänebehälter."
+	elif machine.conveyor_on:
+		why = "Erst den Späneförderer ausschalten (Schaltkasten vorn am Förderer)."
+	elif not (b["chips"] as ChipTray).is_empty():
+		why = "Der Behälter ist nicht leer: erst im Hof in den Container leeren."
+	if why != "":
+		hud.show_message(why, Color(1, 0.75, 0.2))
+		return why
+	b["chips"] = machine.swap_chip_bin(b["chips"])
+	bin_nodes[n].show_state((b["chips"] as ChipTray).fraction(), true)
+	hud.show_message("Spänekiste gewechselt: %d kg Späne in den Händen. Jetzt den Förderer wieder einschalten." % int(round((b["chips"] as ChipTray).kg)), Color(0.7, 0.95, 1.0))
 	return ""
 
 
@@ -1781,6 +2616,8 @@ func equipment_price(id: String) -> int:
 		return int(Crate.SIZES[id]["price"])
 	if ChipBin.SIZES.has(id):
 		return int(ChipBin.SIZES[id]["price"])
+	if Shelf.SIZES.has(id):
+		return int(Shelf.SIZES[id]["price"])
 	return int(Layout.SPECS[id]["price"])
 
 
@@ -1796,6 +2633,8 @@ func equipment_title(id: String) -> String:
 		return str(Crate.SIZES[id]["title"])
 	if ChipBin.SIZES.has(id):
 		return str(ChipBin.SIZES[id]["title"])
+	if Shelf.SIZES.has(id):
+		return str(Shelf.SIZES[id]["title"])
 	return str(Layout.SPECS[id]["title"])
 
 
@@ -2100,7 +2939,13 @@ func _apply_layout(d: Dictionary) -> void:
 		inventory["bin_s"] = int(inventory.get("bin_s", 0)) + 1
 	layout.crates = []
 	layout.bins = []
+	layout.shelves = []
 	if saved is Dictionary:
+		for s in saved.get("shelves", []):
+			if Shelf.SIZES.has(str(s["size"])):
+				layout.shelves.append({"size": str(s["size"]), "pos": Vector2(s["pos"][0], s["pos"][1]), "rot": int(s["rot"]),
+						"stack": clampi(int(s.get("stack", 1)), 1, Shelf.MAX_STACK),
+						"load": clampi(int(s.get("load", 0)), 0, Shelf.MAX_STACK), "cross": bool(s.get("cross", false))})
 		for c in saved.get("crates", []):
 			var items = c.get("items", [])
 			layout.crates.append({"size": str(c["size"]), "pos": Vector2(c["pos"][0], c["pos"][1]), "rot": int(c["rot"]),
@@ -2110,6 +2955,14 @@ func _apply_layout(d: Dictionary) -> void:
 			chips.load_state(b.get("chips", {}))
 			layout.bins.append({"size": str(b["size"]), "pos": Vector2(b["pos"][0], b["pos"][1]), "rot": int(b["rot"]),
 				"chips": chips, "out": bool(b.get("out", false))})
+	# Paletten, Hubwagen und Sackkarre stehen von Anfang an im Lager, auch in älteren Spielständen
+	if not (saved is Dictionary and bool(saved.get("starter_transport", false))):
+		for st in Shelf.STARTER:
+			var pos := Vector2(float(st[1]), float(st[2]))
+			if layout.check_shelf(str(st[0]), pos, int(st[3])) == "":
+				layout.shelves.append({"size": str(st[0]), "pos": pos, "rot": int(st[3])})
+			else:
+				inventory[str(st[0])] = int(inventory.get(str(st[0]), 0)) + 1
 	_rebuild_stands()
 	site.show_areas(layout)
 
@@ -2301,12 +3154,36 @@ func _apply_pending(d: Dictionary) -> void:
 	lathe.refresh_tray()
 	mill.refresh_tray()
 	_apply_skills()
+	var saved_places = d.get("places", {})
+	places.from_state(saved_places if saved_places is Dictionary else {})
 	if d.has("player") and d["player"] is Dictionary:
 		player.set_state(d["player"])
+		# Gespeichert unterwegs: Der Ort muss stehen, bevor die Figur dort landet
+		if player.location != Places.SITE and places.place(player.location) == null:
+			player.location = Places.SITE
+			player.global_position = site_entry()
 		var h = d["player"].get("held", {})
 		if h is Dictionary and h.has("id"):
 			var hm: Node3D = _machine_node(str(h.get("machine", "lathe")))
 			player.set_held(hm if hm != null else lathe, str(h["id"]))
+	# Fallen Gelassenes liegt wieder da
+	var saved_drops = d.get("dropped", [])
+	if saved_drops is Array:
+		for s in saved_drops:
+			if s is Dictionary and s.get("item") is Dictionary and s.get("pos") is Array and s["pos"].size() == 3:
+				var it: Dictionary = s["item"]
+				if str(it.get("kind", "")) == "tool" and _machine_node(str(it.get("machine", ""))) == null:
+					continue
+				DroppedItem.restore(self, player, s)
+	var saved_pins = d.get("pins", [])
+	if saved_pins is Array:
+		for p in saved_pins:
+			if p is Dictionary and p.get("job") is Dictionary and p.get("xf") is Array and p["xf"].size() == 12:
+				var f: Array = p["xf"]
+				var xf := Transform3D(Vector3(f[0], f[1], f[2]), Vector3(f[3], f[4], f[5]), Vector3(f[6], f[7], f[8]), Vector3(f[9], f[10], f[11]))
+				_add_pin(p["job"], xf, null)
+		if not pins.is_empty():
+			_anchor_pins.call_deferred()
 	_refresh_hud()
 
 
@@ -2320,6 +3197,8 @@ func save_game() -> bool:
 		"day": day, "day_time": day_time, "day_over": day_over, "day_started": day_started, "day_stats": day_stats, "last_day_stats": last_day_stats, "deadlines": deadlines,
 		"reputation": company.reputation, "rep_log": company.rep_log,
 		"accepted": accepted, "tracked": tracked, "containers": containers.map(func(c: ChipTray) -> Dictionary: return c.to_state()),
+		"pins": _pin_states(), "places": places.to_state(),
+		"dropped": get_tree().get_nodes_in_group(DroppedItem.GROUP).map(func(n: DroppedItem) -> Dictionary: return n.get_state()),
 	}
 	return SaveManager.write_slot(GameState.current_slot, data)
 

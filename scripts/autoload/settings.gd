@@ -17,7 +17,7 @@ const MSAA_NAMES := ["Aus", "2x MSAA", "4x MSAA", "8x MSAA"]
 const HANDWHEEL_STEPS := [0.001, 0.01, 0.1]
 const HANDWHEEL_NAMES := ["0,001 mm", "0,01 mm", "0,1 mm"]
 ## Bei Änderung der Standardbelegung erhöhen -> alte gespeicherte Belegung wird verworfen.
-const CONTROLS_VERSION := 2
+const CONTROLS_VERSION := 3
 
 ## [Aktion, Anzeigename, Gruppe, Typ ("k" Taste / "m" Maustaste), Code]
 const BINDINGS := [
@@ -29,6 +29,7 @@ const BINDINGS := [
 	["sprint", "Rennen", "Bewegung", "k", KEY_SHIFT],
 	["crouch", "Ducken", "Bewegung", "k", KEY_CTRL],
 	["interact", "Interagieren / Maschine bedienen", "Bewegung", "k", KEY_E],
+	["drop", "Getragenes fallen lassen", "Bewegung", "k", KEY_Q],
 	["toggle_view", "Kamera 1./3. Person", "Bewegung", "k", KEY_V],
 	["lathe_z_minus", "Bettschlitten zum Futter (Z-)", "Drehmaschine", "k", KEY_A],
 	["lathe_z_plus", "Bettschlitten weg vom Futter (Z+)", "Drehmaschine", "k", KEY_D],
@@ -58,6 +59,7 @@ const BINDINGS := [
 	["cam_panel", "Blick auf das Bedienpult (an/aus)", "Kamera an der Maschine", "k", KEY_F4],
 	["pause", "Pause-Menü", "Allgemein", "k", KEY_ESCAPE],
 	["show_drawing", "Werkstückzeichnung ein / aus", "Allgemein", "k", KEY_P],
+	["smoke", "Zigarette anzünden / ausmachen", "Allgemein", "k", KEY_K],
 	["job_menu", "Angenommene Aufträge (nicht an Maschinen)", "Allgemein", "k", KEY_TAB],
 	["build_menu", "Baumenü (nicht an Maschinen)", "Allgemein", "k", KEY_B],
 ]
@@ -110,12 +112,15 @@ func load_settings() -> void:
 		audio[k] = cfg.get_value("audio", k, audio[k])
 	for k in mouse.keys():
 		mouse[k] = cfg.get_value("mouse", k, mouse[k])
-	if int(cfg.get_value("meta", "controls_version", 1)) < CONTROLS_VERSION:
+	var cv := int(cfg.get_value("meta", "controls_version", 1))
+	if cv < 2:
 		# Steuerung wurde vereinfacht: alte Belegung und alte Handrad-Stufen nicht übernehmen
 		mouse["handwheel_step"] = 1
 		return
 	for k in controls.keys():
 		controls[k] = str(cfg.get_value("controls", k, controls[k]))
+	if cv < 3:
+		controls["drop"] = "k:%d" % KEY_Q      # Fallenlassen liegt jetzt auf Q
 
 
 func save_settings() -> void:

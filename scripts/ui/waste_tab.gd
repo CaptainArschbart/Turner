@@ -13,22 +13,33 @@ var _result: Label
 
 func _ready() -> void:
 	add_theme_constant_override("separation", 10)
-	_money = Label.new()
-	_money.add_theme_font_size_override("font_size", 16)
-	_money.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+	_money = UITheme.money_label()
+	_money.visible = false            # die Kasse steht in der Kopfzeile des PCs
 	add_child(_money)
-	var hint := Label.new()
-	hint.text = "Späne: Spänebehälter aufnehmen, an der Maschine die Wanne hineinleeren, im Hof in den passenden Container kippen. Sorten werden nicht gemischt, nur Stahlarten untereinander. Ein voller Container wird abgeholt und bezahlt."
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.add_theme_font_size_override("font_size", 14)
-	hint.add_theme_color_override("font_color", UITheme.MUTED)
-	add_child(hint)
+	add_child(UITheme.section("Spänecontainer im Hof"))
 	list = VBoxContainer.new()
 	list.add_theme_constant_override("separation", 8)
 	add_child(list)
-	_result = Label.new()
-	_result.add_theme_font_size_override("font_size", 15)
+	_result = UITheme.note("", 15, UITheme.TEXT)
 	add_child(_result)
+	var sp := Control.new()
+	sp.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	add_child(sp)
+	add_child(UITheme.section("So geht's"))
+	var steps := GridContainer.new()
+	steps.columns = 2
+	steps.add_theme_constant_override("h_separation", 12)
+	steps.add_theme_constant_override("v_separation", 4)
+	add_child(steps)
+	for s in [["1", "Spänebehälter aufnehmen und an der Maschine die Wanne hineinleeren."],
+			["2", "Im Hof in den passenden Container kippen. Sorten nicht mischen, nur Stahlarten untereinander."],
+			["3", "Ein voller Container wird hier abgeholt und bezahlt."]]:
+		var n := UITheme.title(s[0], 15)
+		n.add_theme_color_override("font_color", UITheme.ACCENT)
+		steps.add_child(n)
+		var t := UITheme.note(s[1], 14)
+		t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		steps.add_child(t)
 	refresh()
 
 
@@ -42,20 +53,30 @@ func refresh() -> void:
 	buttons.clear()
 	for i in shop.containers.size():
 		var chips: ChipTray = shop.containers[i]
-		var row := PanelContainer.new()
-		row.add_theme_stylebox_override("panel", UITheme.sb(Color(0.1, 0.11, 0.12), Color(0.24, 0.26, 0.29)))
 		var h := HBoxContainer.new()
-		h.add_theme_constant_override("separation", 14)
-		row.add_child(h)
-		var l := Label.new()
+		h.add_theme_constant_override("separation", 18)
+		var row := UITheme.card(h, 0.0, chips.is_full())
+		var col := VBoxContainer.new()
+		col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		col.add_theme_constant_override("separation", 4)
+		h.add_child(col)
+		var top := HBoxContainer.new()
+		col.add_child(top)
+		var l := UITheme.title("Container %s" % ChipTray.SORT_TITLES[chips.only], 17)
 		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		l.add_theme_font_size_override("font_size", 16)
-		l.text = "Container %s: %d von %d kg (%d %%)   Wert beim Recycling: %d EUR" % [
-			ChipTray.SORT_TITLES[chips.only], int(chips.kg), int(chips.capacity), int(chips.fraction() * 100.0), int(shop.container_value(i))]
-		h.add_child(l)
-		var b := UITheme.button("Abholen lassen" if chips.is_full() else "Noch nicht voll", _collect.bind(i), 220)
-		b.focus_mode = Control.FOCUS_NONE
+		top.add_child(l)
+		top.add_child(UITheme.note("%d von %d kg  ·  %d %%" % [int(chips.kg), int(chips.capacity), int(chips.fraction() * 100.0)], 14, UITheme.TEXT))
+		var bar := ProgressBar.new()
+		bar.show_percentage = false
+		bar.custom_minimum_size.y = 8
+		bar.value = chips.fraction() * 100.0
+		col.add_child(bar)
+		col.add_child(UITheme.note("Wert beim Recycling: %d EUR" % int(shop.container_value(i)), 13))
+		var b := UITheme.small_button("Abholen lassen" if chips.is_full() else "Noch nicht voll", _collect.bind(i), 200)
+		b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		b.disabled = not chips.is_full()
+		if chips.is_full():
+			UITheme.primary(b)
 		h.add_child(b)
 		buttons.append(b)
 		list.add_child(row)
@@ -64,5 +85,5 @@ func refresh() -> void:
 func _collect(i: int) -> void:
 	var pay: int = shop.collect_container(i)
 	_result.text = "Container abgeholt: %d EUR für recyceltes Material." % pay
-	_result.add_theme_color_override("font_color", Color(0.5, 0.9, 0.5))
+	_result.add_theme_color_override("font_color", UITheme.GOOD)
 	refresh()

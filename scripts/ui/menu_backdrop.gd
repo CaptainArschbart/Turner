@@ -75,7 +75,7 @@ void sky() {
 	float top = smoothstep(0.82, 0.9, d.y);
 	float strip = smoothstep(0.05, 0.0, abs(d.y - 0.42)) * smoothstep(0.1, 0.5, d.z);
 	float warm = smoothstep(0.75, 0.95, dot(d, normalize(vec3(0.6, 0.2, -0.75))));
-	c += vec3(0.9, 0.95, 1.0) * top * 1.4 + vec3(0.8, 0.88, 1.0) * strip * 0.9 + vec3(1.0, 0.55, 0.25) * warm * 0.12;
+	c += vec3(0.9, 0.95, 1.0) * top * 0.8 + vec3(0.8, 0.88, 1.0) * strip * 0.9 + vec3(1.0, 0.55, 0.25) * warm * 0.12;
 	COLOR = c;
 }
 """
@@ -88,7 +88,7 @@ void sky() {
 	env.ambient_light_energy = 0.35
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 1.05
+	env.tonemap_exposure = 0.95
 	env.tonemap_white = 6.0
 	env.glow_enabled = true
 	env.glow_normalized = false
@@ -103,7 +103,7 @@ void sky() {
 	env.set_glow_level(3, 0.8)
 	env.set_glow_level(4, 0.4)
 	env.adjustment_enabled = true
-	env.adjustment_contrast = 1.08
+	env.adjustment_contrast = 1.0
 	env.adjustment_saturation = 1.05
 	env.fog_enabled = true
 	env.fog_light_color = Color(0.05, 0.065, 0.09)
@@ -174,9 +174,9 @@ func _build_machine() -> void:
 	raw.metallic = 0.5
 	raw.roughness = 0.78
 	var cut := StandardMaterial3D.new()
-	cut.albedo_color = Color(0.8, 0.81, 0.83)
+	cut.albedo_color = Color(0.6, 0.61, 0.63)
 	cut.metallic = 1.0
-	cut.roughness = 0.2
+	cut.roughness = 0.3
 	var raw_len := TIP_X + 0.03 - 0.0015
 	Build.cyl(_spindle, R_RAW, raw_len, Vector3(-0.03 + raw_len * 0.5, 0, 0), raw, Build.AXIS_X, false, 64)
 	# kurzer Kegel an der Schulter (Einstellwinkel der Schneide)
@@ -199,50 +199,162 @@ func _build_tool() -> void:
 	Build.box(tool, Vector3(0.26, 0.05, 0.36), Vector3(0.02, -0.115, 0.17), lightgrey)
 	Build.box(tool, Vector3(0.4, 0.06, 0.4), Vector3(0.02, -0.17, 0.19), blue)
 
-	# KSS-Gelenkschlauch (blau/orange Segmente) mit Düse auf die Schneide
-	var hose_a := Build.mat(Color(0.05, 0.14, 0.42), 0.45)
-	var hose_b := Build.mat(Color(0.95, 0.5, 0.1), 0.35)
-	var nozzle := Vector3(0.006, 0.05, -0.012)
+	_build_coolant(tool)
+
+
+## KSS-Versorgung: Gelenkschlauch aus Kugel-Pfannen-Gliedern (Loc-Line-Art), Rundstrahldüse,
+## klarer Strahl mit Lichtbrechung.
+func _build_coolant(tool: Node3D) -> void:
+	var hose_m := StandardMaterial3D.new()
+	hose_m.albedo_color = Color(0.035, 0.11, 0.42)
+	hose_m.roughness = 0.35
+	hose_m.clearcoat_enabled = true
+	hose_m.clearcoat = 0.7
+	hose_m.clearcoat_roughness = 0.15
+	hose_m.rim_enabled = true
+	hose_m.rim = 0.1
+	var orange := StandardMaterial3D.new()
+	orange.albedo_color = Color(1.0, 0.45, 0.05)
+	orange.roughness = 0.3
+	orange.clearcoat_enabled = true
+	orange.clearcoat = 0.6
+	var steel := Build.mat(Color(0.7, 0.71, 0.73), 0.22, 1.0)
+
+	# Strahlrichtung und Düsenlage (lokal zum Werkzeug, Schneide ~ Ursprung)
+	var aim := Vector3(0.0006, 0.0012, 0.0012)
+	var dir := Vector3(-0.08, -1.0, 0.3).normalized()       # von der Düse zur Schneide
+	var mouth := aim - dir * 0.036
+	const NOZZLE_L := 0.016
+	var nozzle_base := mouth - dir * NOZZLE_L
+
+	# Schlauchverlauf: von oben hinten in einem ruhigen Bogen zur Düse
 	var curve := Curve3D.new()
-	curve.add_point(Vector3(-0.02, 0.32, -0.16), Vector3.ZERO, Vector3(0, -0.08, 0.02))
-	curve.add_point(Vector3(-0.005, 0.13, -0.06), Vector3(0, 0.05, -0.03), Vector3(0, -0.03, 0.02))
-	curve.add_point(nozzle, Vector3(0.0, 0.03, -0.02), Vector3.ZERO)
+	curve.bake_interval = 0.001
+	curve.add_point(Vector3(-0.05, 0.34, -0.17), Vector3.ZERO, Vector3(0.0, -0.09, 0.0))
+	curve.add_point(Vector3(-0.03, 0.17, -0.09), Vector3(-0.004, 0.06, -0.03), Vector3(0.004, -0.06, 0.03))
+	curve.add_point(nozzle_base, -dir * 0.05, Vector3.ZERO)
 	var blen := curve.get_baked_length()
-	var n := int(blen / 0.0065)
-	for i in n + 1:
-		var p := curve.sample_baked(blen * i / float(n))
-		var sm := Build.sphere(tool, 0.0042, p, hose_a)
-		sm.scale = Vector3.ONE
+
+	# Ein Glied: Kugel unten, Hals, aufgeweitete Pfanne oben mit Lippe (Achse +Y)
+	const PITCH := 0.0094
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var ball := SphereMesh.new()
+	ball.radius = 0.0041
+	ball.height = 0.0082
+	ball.radial_segments = 20
+	ball.rings = 10
+	st.append_from(ball, 0, Transform3D.IDENTITY)
+	var neck := CylinderMesh.new()
+	neck.bottom_radius = 0.0029
+	neck.top_radius = 0.0034
+	neck.height = 0.003
+	neck.radial_segments = 20
+	neck.rings = 1
+	neck.cap_top = false
+	neck.cap_bottom = false
+	st.append_from(neck, 0, Transform3D(Basis(), Vector3(0, 0.0042, 0)))
+	var cup := CylinderMesh.new()
+	cup.bottom_radius = 0.0034
+	cup.top_radius = 0.0049
+	cup.height = 0.0036
+	cup.radial_segments = 20
+	cup.rings = 2
+	cup.cap_top = false
+	cup.cap_bottom = false
+	st.append_from(cup, 0, Transform3D(Basis(), Vector3(0, 0.0075, 0)))
+	var lip := TorusMesh.new()
+	lip.inner_radius = 0.0043
+	lip.outer_radius = 0.0052
+	lip.rings = 20
+	lip.ring_segments = 8
+	st.append_from(lip, 0, Transform3D(Basis(), Vector3(0, 0.0093, 0)))
+	var seg_mesh := st.commit()
+
+	var count := int(blen / PITCH)
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = seg_mesh
+	mm.instance_count = count
+	for i in count:
+		# Kugel des Glieds i sitzt in der Pfanne des vorherigen; Glieder liegen exakt auf dem Bogen
+		var d := blen - (i + 1) * PITCH
+		var p := curve.sample_baked(d)
+		var q := curve.sample_baked(d + PITCH)
+		var t := (q - p).normalized()
+		var b := Basis(Quaternion(Vector3.UP, t))
+		b = b.rotated(t, i * 0.7)     # leicht verdrehte Glieder wie im echten Schlauch
+		mm.set_instance_transform(i, Transform3D(b, p))
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.material_override = hose_m
+	tool.add_child(mmi)
+
+	# Anschluss oben (Sechskant) und Rundstrahldüse (orange) mit Messingmündung
+	var start := curve.sample_baked(0.0)
+	Build.cyl(tool, 0.0075, 0.012, start + Vector3(0, 0.004, 0), steel, Build.AXIS_Y, false, 6)
+	var nz := MeshInstance3D.new()
+	var cone := CylinderMesh.new()
+	cone.bottom_radius = 0.0047
+	cone.top_radius = 0.0017
+	cone.height = NOZZLE_L
+	cone.radial_segments = 24
+	nz.mesh = cone
+	nz.material_override = orange
+	nz.basis = Basis(Quaternion(Vector3.UP, dir))
+	nz.position = nozzle_base + dir * NOZZLE_L * 0.5
+	tool.add_child(nz)
+	var tipc := MeshInstance3D.new()
+	var tc := CylinderMesh.new()
+	tc.bottom_radius = 0.0019
+	tc.top_radius = 0.0016
+	tc.height = 0.0022
+	tc.radial_segments = 20
+	tipc.mesh = tc
+	tipc.material_override = Build.mat(Color(0.85, 0.66, 0.32), 0.25, 1.0)
+	tipc.basis = nz.basis
+	tipc.position = mouth - dir * 0.0008
+	tool.add_child(tipc)
+
+	# Strahl: glasklarer, leicht pulsierender Rundstrahl, bricht den Hintergrund
 	_stream_mat = ShaderMaterial.new()
 	var sh := Shader.new()
 	sh.code = """
 shader_type spatial;
-render_mode blend_mix, cull_disabled, depth_draw_never, specular_schlick_ggx;
-uniform float time_scale = 1.0;
+render_mode blend_mix, cull_back, depth_draw_never, specular_schlick_ggx;
+uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
+void vertex() {
+	float w = sin(UV.y * 46.0 + TIME * 26.0 + UV.x * 6.283) * sin(UV.y * 17.0 + TIME * 11.0);
+	VERTEX.xz *= 1.0 + 0.16 * w * smoothstep(0.0, 0.25, UV.y);
+}
 void fragment() {
-	float n = sin(UV.y * 90.0 - TIME * 40.0 + sin(UV.x * 6.283) * 3.0) * 0.5 + 0.5;
-	ALBEDO = vec3(0.86, 0.9, 0.94);
-	ROUGHNESS = 0.05;
-	METALLIC = 0.2;
-	SPECULAR = 0.9;
-	ALPHA = 0.18 + 0.22 * n;
+	float fres = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 2.5);
+	float streak = smoothstep(0.6, 1.0, sin(UV.y * 60.0 + TIME * 48.0 + sin(UV.x * 12.566 + UV.y * 7.0) * 2.2) * 0.5 + 0.5);
+	vec3 bg = textureLod(screen_tex, SCREEN_UV - NORMAL.xy * 0.01, 1.0).rgb;
+	ALBEDO = vec3(0.03, 0.035, 0.04);
+	EMISSION = bg * vec3(0.9, 0.96, 1.0) + vec3(0.75, 0.85, 1.0) * (streak * 0.35 + fres * 0.45);
+	ROUGHNESS = 0.03;
+	SPECULAR = 1.0;
+	METALLIC = 0.0;
+	ALPHA = clamp(0.82 + fres * 0.18, 0.0, 1.0);
 }
 """
 	_stream_mat.shader = sh
-	var tip_local := Vector3(0.0005, 0.001, 0.001)
-	var dir := tip_local - nozzle
 	var stream := MeshInstance3D.new()
 	var cm := CylinderMesh.new()
-	cm.top_radius = 0.0009
-	cm.bottom_radius = 0.0006
-	cm.height = dir.length()
-	cm.radial_segments = 12
+	cm.top_radius = 0.0016      # an der Düse
+	cm.bottom_radius = 0.0014
+	cm.height = (aim - mouth).length()
+	cm.radial_segments = 16
+	cm.rings = 40
+	cm.cap_top = false
+	cm.cap_bottom = false
 	stream.mesh = cm
 	stream.material_override = _stream_mat
+	stream.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	tool.add_child(stream)
-	stream.position = (nozzle + tip_local) * 0.5
-	stream.basis = Basis(Quaternion(Vector3.UP, -dir.normalized()))
-	Build.cyl(tool, 0.003, 0.012, nozzle + Vector3(0, 0.005, -0.003), hose_b, Build.AXIS_Y, false, 16).rotation = Vector3(0.45, 0, 0.1)
+	stream.position = (mouth + aim) * 0.5
+	stream.basis = Basis(Quaternion(Vector3.UP, -dir))
 
 
 func _build_chip() -> void:
@@ -319,47 +431,105 @@ void fragment() {
 	sparks.color_ramp = g
 	add_child(sparks)
 
-	# KSS: Spritzer an der Schneide und Tropfen, die vom Werkstück abfallen
+	# KSS: gestreckte Spritzer an der Schneide, feiner Nebel, Tropfen unter dem Werkstück
 	var drop_m := StandardMaterial3D.new()
-	drop_m.albedo_color = Color(0.86, 0.91, 0.96, 0.55)
+	drop_m.albedo_color = Color(0.82, 0.88, 0.95, 0.5)
 	drop_m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	drop_m.roughness = 0.02
-	drop_m.metallic = 0.3
-	drop_m.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	drop_m.metallic = 0.2
+	drop_m.rim_enabled = true
+	drop_m.rim = 0.6
+	drop_m.vertex_color_use_as_albedo = true
 	var dm := SphereMesh.new()
-	dm.radius = 0.0007
-	dm.height = 0.0014
+	dm.radius = 0.0006
+	dm.height = 0.0028
 	dm.radial_segments = 8
 	dm.rings = 4
 	dm.material = drop_m
+	var fade := Gradient.new()
+	fade.set_color(0, Color(1, 1, 1, 0.9))
+	fade.set_color(1, Color(1, 1, 1, 0.0))
 	var splash := CPUParticles3D.new()
 	splash.mesh = dm
-	splash.amount = 60
-	splash.lifetime = 0.7
-	splash.position = _tip + Vector3(0.002, 0.002, 0.002)
-	splash.direction = Vector3(0.6, 0.4, 1.0)
-	splash.spread = 50
-	splash.initial_velocity_min = 0.08
-	splash.initial_velocity_max = 0.35
+	splash.amount = 70
+	splash.lifetime = 0.6
+	splash.position = _tip + Vector3(0.002, 0.0025, 0.002)
+	splash.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	splash.emission_sphere_radius = 0.0015
+	splash.direction = Vector3(0.45, 0.55, 1.0)
+	splash.spread = 55
+	splash.initial_velocity_min = 0.1
+	splash.initial_velocity_max = 0.4
 	splash.gravity = Vector3(0, -9.8, 0)
-	splash.scale_amount_min = 0.5
-	splash.scale_amount_max = 1.6
+	splash.scale_amount_min = 0.4
+	splash.scale_amount_max = 1.3
 	splash.particle_flag_align_y = true
+	splash.color_ramp = fade
 	add_child(splash)
+
+	# Nebel: weiche, kaum sichtbare Schwaden um die Schneide (fangen das Gegenlicht)
+	var mist_m := ShaderMaterial.new()
+	var msh := Shader.new()
+	msh.code = """
+shader_type spatial;
+render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabled;
+void vertex() {
+	mat4 mv = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
+	MODELVIEW_MATRIX = mv * mat4(vec4(length(MODEL_MATRIX[0].xyz), 0.0, 0.0, 0.0),
+		vec4(0.0, length(MODEL_MATRIX[1].xyz), 0.0, 0.0), vec4(0.0, 0.0, length(MODEL_MATRIX[2].xyz), 0.0),
+		vec4(0.0, 0.0, 0.0, 1.0));
+}
+void fragment() {
+	float a = smoothstep(1.0, 0.0, length(UV - 0.5) * 2.0);
+	ALBEDO = vec3(0.8, 0.88, 1.0) * a * a * COLOR.a;
+}
+"""
+	mist_m.shader = msh
+	var qm := QuadMesh.new()
+	qm.size = Vector2(0.012, 0.012)
+	qm.material = mist_m
+	var mist := CPUParticles3D.new()
+	mist.mesh = qm
+	mist.amount = 26
+	mist.lifetime = 1.6
+	mist.position = _tip + Vector3(0.003, 0.004, 0.003)
+	mist.direction = Vector3(0.4, 0.6, 0.8)
+	mist.spread = 70
+	mist.initial_velocity_min = 0.01
+	mist.initial_velocity_max = 0.04
+	mist.gravity = Vector3(0, 0.004, 0)
+	mist.damping_min = 0.01
+	mist.damping_max = 0.02
+	mist.angle_min = -180
+	mist.angle_max = 180
+	mist.scale_amount_min = 0.6
+	mist.scale_amount_max = 1.5
+	var grow := Curve.new()
+	grow.add_point(Vector2(0, 0.3))
+	grow.add_point(Vector2(1, 1.6))
+	mist.scale_amount_curve = grow
+	var mc := Gradient.new()
+	mc.set_color(0, Color(0.85, 0.9, 1.0, 0.0))
+	mc.add_point(0.2, Color(0.85, 0.9, 1.0, 0.12))
+	mc.set_color(mc.get_point_count() - 1, Color(0.85, 0.9, 1.0, 0.0))
+	mist.color_ramp = mc
+	add_child(mist)
+
 	var drip := CPUParticles3D.new()
 	drip.mesh = dm
-	drip.amount = 24
+	drip.amount = 20
 	drip.lifetime = 0.9
-	drip.position = Vector3(TIP_X + 0.05, -R_CUT - 0.001, 0.0)
+	drip.position = Vector3(TIP_X + 0.03, -R_CUT - 0.001, 0.0)
 	drip.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
-	drip.emission_box_extents = Vector3(0.05, 0.0, 0.006)
+	drip.emission_box_extents = Vector3(0.03, 0.0, 0.004)
 	drip.direction = Vector3(0, -1, 0)
-	drip.spread = 5
+	drip.spread = 3
 	drip.initial_velocity_min = 0.0
-	drip.initial_velocity_max = 0.05
+	drip.initial_velocity_max = 0.04
 	drip.gravity = Vector3(0, -9.8, 0)
 	drip.scale_amount_min = 0.8
-	drip.scale_amount_max = 1.8
+	drip.scale_amount_max = 1.5
+	drip.particle_flag_align_y = true
 	add_child(drip)
 
 
@@ -367,7 +537,7 @@ func _build_lights() -> void:
 	var key := SpotLight3D.new()
 	key.position = _tip + Vector3(0.12, 0.42, 0.24)
 	key.light_color = Color(0.92, 0.96, 1.0)
-	key.light_energy = 5.0
+	key.light_energy = 3.2
 	key.spot_range = 1.5
 	key.spot_angle = 13
 	key.spot_angle_attenuation = 0.8
@@ -481,9 +651,13 @@ func _chip_mesh(s0: float, s1: float, base_shift := 0.0) -> ArrayMesh:
 			width *= 0.6 + 0.4 * s / 0.0015
 		var heat := clampf(1.0 - s / 0.022, 0.0, 1.0)
 		var col := _temper(s)
+		# Span liegt komplett auf der gedrehten Seite neben der Schulter (nicht im Rohmaterial)
+		p += w * (width * 0.5 + 0.00015)
 		var hw := w * width * 0.5
 		var ht := nn * CHIP_T * 0.5
 		var corners := [p + hw + ht, p - hw + ht, p - hw - ht, p + hw - ht]
+		for k in 4:
+			corners[k] = _outside_stock(corners[k])
 		var side_n := [nn, -w, -nn, w]
 		for f in 4:
 			verts.append(corners[f])
@@ -508,6 +682,22 @@ func _chip_mesh(s0: float, s1: float, base_shift := 0.0) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
 	return mesh
+
+
+## Schiebt einen Punkt radial aus dem Werkstück heraus (Rohteil, Schulterkegel, gedrehter Teil).
+func _outside_stock(v: Vector3) -> Vector3:
+	var req := R_CUT
+	if v.x < TIP_X - 0.0015:
+		req = R_RAW
+	elif v.x < TIP_X:
+		req = lerpf(R_RAW, R_CUT, (v.x - (TIP_X - 0.0015)) / 0.0015)
+	req += 0.00012
+	var rho := Vector2(v.y, v.z).length()
+	if rho < req and rho > 0.0:
+		var k := req / rho
+		v.y *= k
+		v.z *= k
+	return v
 
 
 ## Anlauffarben je Abstand zur Schneide: strohgelb -> braun -> violett -> blau

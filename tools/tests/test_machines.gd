@@ -41,6 +41,14 @@ func turn_to(l, job: Dictionary) -> void:
 		for i in l.profile.size():
 			if (i + 0.5) * l.SEG > float(job["length"]):
 				l.profile[i] = 0.0
+## Abgeben wie im Spiel: ausspannen und im Qualitätsmanagement prüfen lassen.
+func submit(w, m) -> void:
+	if m.grinder_type != "":
+		w._on_grind_submit(m)
+	elif m.has_method("is_untouched"):
+		w._on_submit(m)
+	else:
+		w._on_mill_submit(m)
 func _initialize() -> void:
 	await process_frame
 	root.get_node("GameState").pending = {"unlock_all": true}
@@ -146,7 +154,7 @@ func _initialize() -> void:
 	c.new_workpiece(60.0, 160.0)
 	turn_to(c, Jobs.LIST[0])
 	var cash0: int = w.money
-	c.request_submit()
+	submit(w, c)
 	ok(w.money == cash0 + int(Jobs.LIST[0]["reward"]) and w.accepted.is_empty(), "Drehauftrag auf der CNC-Maschine bezahlt")
 	ok(not c.has_part, "Maschine leer")
 	# Einspannen geht an die richtige Maschine
@@ -217,7 +225,7 @@ func _initialize() -> void:
 	ok(dr.tool_wear() >= 0.0, "Bohrer hat Verschleiß")
 	var cash1: int = w.money
 	var xp1: int = co.skills.xp
-	dr.request_submit()
+	submit(w, dr)
 	ok(w.money == cash1 + int(dj["reward"]), "Bohrauftrag bezahlt")
 	ok(co.skills.xp == xp1 + int(dj["reward"]), "Erfahrung")
 	ok(not dr.has_part and not w.accepted.has("drill:0"), "Abgegeben")
@@ -285,7 +293,7 @@ func _initialize() -> void:
 	ok(not m.estop and float(m.evaluate(MillJobs.LIST[0])["score"]) >= 0.999, "Frästeil in Toleranz")
 	var cash2: int = w.money
 	var xp2: int = co.skills.xp
-	m.request_submit()
+	submit(w, m)
 	ok(w.money == cash2 + int(MillJobs.LIST[0]["reward"]), "Fräsen wird bezahlt")
 	ok(co.skills.xp == xp2, "Erfahrung erst nach dem Schleifen")
 	ok(p.carrying_semi() and str(p.carry["key"]) == "mill:0", "Teil in den Händen")
@@ -334,7 +342,7 @@ func _initialize() -> void:
 	stop(fg)
 	var cash4: int = w.money
 	var xp4: int = co.skills.xp
-	fg.request_submit()
+	submit(w, fg)
 	ok(w.money == cash4 + int(MillJobs.LIST[0]["grind"]["reward"]), "Schleifen wird bezahlt")
 	ok(co.skills.xp == xp4 + int(MillJobs.LIST[0]["reward"]), "Jetzt gibt es die Erfahrung")
 	ok(not fg.has_part and fg.semi_key == "" and w.grind_jobs.is_empty(), "Auftrag fertig")
@@ -419,7 +427,7 @@ func _initialize() -> void:
 	var pre: Dictionary = l.evaluate(job5)
 	ok(float(pre["score"]) >= 0.999, "Drehteil in Toleranz: " + str(pre["lines"]))
 	var cash5: int = w.money
-	l.request_submit()
+	submit(w, l)
 	ok(w.money == cash5 + int(job5["reward"]) and p.carrying_semi(), "Drehen bezahlt, Teil in den Händen")
 	ok(str(p.carry["type"]) == "round", "Es muss rund geschliffen werden")
 	ok(w.clamp_carried(fg) != "", "Nicht auf die Flachschleifmaschine")
@@ -450,7 +458,7 @@ func _initialize() -> void:
 	ok(float(res5["score"]) >= 0.999, "Schleifprüfung: " + str(res5["lines"]))
 	stop(rg)
 	var cash6: int = w.money
-	rg.request_submit()
+	submit(w, rg)
 	ok(w.money == cash6 + int(job5["grind"]["reward"]) and not rg.has_part, "Rundschleifen bezahlt")
 	ok(w.grind_jobs.is_empty(), "Fertig")
 	var rstore = co.tools["round_grinder"]
@@ -472,7 +480,7 @@ func _initialize() -> void:
 	rg.semi_key = "lathe:4"
 	stop(rg)
 	var cash7: int = w.money
-	rg.request_submit()
+	submit(w, rg)
 	ok(w.money == cash7 and not rg.has_part and w.grind_jobs.is_empty(), "Falsche Maße: Ausschuss, keine Vergütung")
 
 	# ---------------------------------------------------- Kundenaufträge mit Keramik
@@ -530,7 +538,7 @@ func _initialize() -> void:
 	ok(float(cres["score"]) >= 0.999, "Keramikfläche in Ordnung: " + str(cres["lines"]))
 	stop(fg)
 	var cash8: int = w.money
-	fg.request_submit()
+	submit(w, fg)
 	ok(w.money == cash8 + int(round(float(cj["reward"]) * co.pay_factor())) and w.grind_jobs.is_empty() and not w.deadlines.has("ceramic:0"), "Kundenauftrag bezahlt")
 	ok(not fg.has_part and not fg.ceramic_part, "Fertig")
 
@@ -583,19 +591,35 @@ func _initialize() -> void:
 	l.new_workpiece(60.0, 160.0)
 	turn_to(l, Jobs.LIST[0])
 	var cash9: int = w.money
-	l.request_submit()
+	submit(w, l)
 	ok(w.money > cash9 and w.accepted.is_empty(), "Das aktuelle Teil lässt sich am Feierabend noch abgeben")
 	w.set_free_mode(true)
 	ok(w.buy_tool("lathe", "T7", "hm") == "", "Testmodus: Feierabend sperrt nichts")
 	w.set_free_mode(false)
-	# Nächster Tag über den PC
-	o2.day_app.end_button.pressed.emit()
-	ok(w.day == day0 + 1 and not w.day_over and w.day_time == 0.0 and not w.day_started, "Nächster Tag wartet auf den Start")
+	# Am Feierabend kein "Tag beenden" mehr am Whiteboard, sondern nach Hause und schlafen
+	ok(not w.whiteboard.overlay.day_app.end_button.visible, "Am Feierabend kein Knopf zum Beenden")
+	ok(w.sleep_error() == "", "Nach Feierabend lässt sich schlafen")
+	w.autosave = false
+	ok(w.go_sleep(w.player) == "", "Zuhause geschlafen")
+	ok(w.day == day0 + 1 and not w.day_over and w.day_time == 0.0 and w.day_started, "Nach dem Schlafen beginnt der nächste Tag")
+	ok(w.player.location == "home:local", "Aufwachen zuhause")
+	ok(w.places.travel(w.player, "site") == "" and w.player.location == "site", "Zurück zur Werkstatt")
+	ok(w.sleep_error() != "", "Gleich wieder schlafen geht nicht")
+	# Tag vorzeitig über das Whiteboard beenden
+	w.whiteboard.overlay.day_app.end_button.pressed.emit()
+	ok(w.day_over and w.day == day0 + 1, "Whiteboard beendet den Tag: Feierabend")
+	ok(w.go_sleep(w.player) == "" and w.day == day0 + 2, "Wieder geschlafen")
+	w.places.travel(w.player, "site")
+	# Ohne Schlafen bleibt ein neuer Tag ungestartet
+	w.next_day()
+	ok(w.day == day0 + 3 and not w.day_over and w.day_time == 0.0 and not w.day_started, "Nächster Tag wartet auf den Start")
 	ok(w.accept_job("lathe:0").contains("nicht begonnen"), "Vor Tagesbeginn kein Auftrag")
 	ok(w.buy_tool("lathe", "T7", "hm").contains("nicht begonnen"), "Vor Tagesbeginn kein Einkauf")
 	ok(w._work_blocked(w.lathe, true), "Vor Tagesbeginn wird nichts bearbeitet")
 	ok(not w._work_blocked(w.office_pc, true), "Der PC geht immer")
-	o2.day_app.start_button.pressed.emit()
+	ok(not w._work_blocked(w.whiteboard, true), "Das Whiteboard geht immer")
+	ok(w.whiteboard._state.text.contains("nicht gestartet"), "Das Whiteboard sagt, dass der Tag noch nicht läuft")
+	w.whiteboard.overlay.day_app.start_button.pressed.emit()
 	ok(w.day_started and not w._work_blocked(w.lathe, true), "Tag gestartet")
 	# Frist
 	ok(JobBoard.days_for("lathe:0") == 2 and JobBoard.days_for("lathe:3") == 5, "Aufträge haben verschiedene Fristen")
@@ -635,7 +659,7 @@ func _initialize() -> void:
 	turn_to(l, Jobs.LIST[0])
 	var cash10: int = w.money
 	var rep1: float = co.reputation
-	l.request_submit()
+	submit(w, l)
 	ok(w.money == cash10 + int(round(float(Jobs.LIST[0]["reward"]) * 1.3)), "Vergütung steigt mit dem Ansehen")
 	ok(co.reputation == rep1 + w.REP_DONE, "Erfolg erhöht das Ansehen")
 	w.job_menu.close()

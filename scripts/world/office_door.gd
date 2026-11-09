@@ -8,13 +8,15 @@ const OPEN_ANGLE := -1.7
 const SPEED := 3.0
 
 var opened := false
+var title := "Bürotür"                     # Name im Interaktionshinweis
+var tint := Color(0.86, 0.87, 0.84)        # Farbe des Türblatts, vor dem Einhängen setzen
 var _leaf: Node3D
 
 
 func _ready() -> void:
 	_leaf = Node3D.new()
 	add_child(_leaf)
-	var panel := Build.mat(Color(0.86, 0.87, 0.84), 0.5)
+	var panel := Build.mat(tint, 0.5)
 	var dark := Build.mat(Color(0.15, 0.16, 0.18), 0.5, 0.4)
 	var w := WIDTH - 0.04
 	var x0 := WIDTH * 0.5 - 0.25
@@ -34,7 +36,7 @@ func _ready() -> void:
 
 
 func get_prompt() -> String:
-	return "[%s] Bürotür %s" % [Settings.binding_text("interact"), "schließen" if opened else "öffnen"]
+	return "[%s] %s %s" % [Settings.binding_text("interact"), title, "schließen" if opened else "öffnen"]
 
 
 func interact(_p: Node) -> void:

@@ -1,70 +1,240 @@
 class_name UITheme
 extends RefCounted
-## Einheitliches dunkles Industrie-Theme für alle Menüs.
+## Einheitliches Theme: Alle Oberflächen folgen dem Stil von Haupt- und Pausenmenü (Anthrazit, Weiß,
+## Weiler-Blau, Bahnschrift). build() ist das Theme im Spiel (HUD, PC, Maschinen), menu() das der Menüs.
 
-const ACCENT := Color("e8892b")
-const TEXT := Color(0.92, 0.93, 0.94)
-const MUTED := Color(0.62, 0.65, 0.68)
+const ACCENT := Color("5d8dff")         # = BLUE_HI, Hervorhebung im Spiel
+const TEXT := Color(0.95, 0.96, 0.97)   # = WHITE
+const MUTED := Color(0.66, 0.70, 0.76)  # = SOFT
+const GOOD := Color(0.45, 0.85, 0.55)
+const WARN := Color(0.98, 0.76, 0.36)
+const BAD := Color(1.0, 0.42, 0.36)
+const MONEY := Color(0.55, 0.92, 0.62)
+const VALUE := Color(0.55, 0.85, 1.0)   # Messwerte und Achsanzeigen
 
 static var _cached: Theme
 
 
+## Theme der Oberflächen im Spiel: wie das Menü, aber mit kompakteren Flächen für HUD und Fenster.
 static func build() -> Theme:
 	if _cached:
 		return _cached
-	var t := Theme.new()
-	t.default_font_size = 18
+	var t: Theme = menu().duplicate(true)
+	t.default_font_size = 17
+	t.set_stylebox("panel", "PanelContainer", hud_style())
+	t.set_stylebox("panel", "Panel", hud_style())
+	t.set_font_size("font_size", "TabContainer", 15)
+	var tab_sel := (t.get_stylebox("tab_selected", "TabContainer") as StyleBoxFlat).duplicate() as StyleBoxFlat
+	var tab_un := (t.get_stylebox("tab_unselected", "TabContainer") as StyleBoxFlat).duplicate() as StyleBoxFlat
+	var tab_hov := (t.get_stylebox("tab_hovered", "TabContainer") as StyleBoxFlat).duplicate() as StyleBoxFlat
+	for st in [tab_sel, tab_un, tab_hov]:
+		st.content_margin_left = 16
+		st.content_margin_right = 16
+		st.content_margin_top = 7
+		st.content_margin_bottom = 7
+	t.set_stylebox("tab_selected", "TabContainer", tab_sel)
+	t.set_stylebox("tab_unselected", "TabContainer", tab_un)
+	t.set_stylebox("tab_hovered", "TabContainer", tab_hov)
+	t.set_stylebox("tab_disabled", "TabContainer", tab_un)
+	t.set_color("font_disabled_color", "TabContainer", Color(1, 1, 1, 0.25))
+	var tp := sb(Color(1, 1, 1, 0.02), Color(1, 1, 1, 0.06), 1, 3)
+	tp.content_margin_left = 14
+	tp.content_margin_right = 14
+	tp.content_margin_top = 12
+	tp.content_margin_bottom = 12
+	t.set_stylebox("panel", "TabContainer", tp)
 
-	var normal := sb(Color(0.15, 0.16, 0.18, 0.96), Color(0.30, 0.32, 0.35), 1)
-	var hover := sb(Color(0.21, 0.22, 0.25, 0.98), ACCENT, 2)
-	var pressed := sb(ACCENT.darkened(0.25), ACCENT, 2)
-	var disabled := sb(Color(0.11, 0.11, 0.12, 0.8), Color(0.2, 0.2, 0.2), 1)
-	for type in ["Button", "OptionButton", "CheckButton"]:
-		t.set_stylebox("normal", type, normal)
-		t.set_stylebox("hover", type, hover)
-		t.set_stylebox("pressed", type, pressed)
-		t.set_stylebox("hover_pressed", type, pressed)
-		t.set_stylebox("disabled", type, disabled)
-		t.set_stylebox("focus", type, sb(Color(0, 0, 0, 0), ACCENT.lightened(0.2), 1))
-		t.set_color("font_color", type, TEXT)
-		t.set_color("font_hover_color", type, Color.WHITE)
-		t.set_color("font_pressed_color", type, Color.WHITE)
-		t.set_color("font_disabled_color", type, Color(0.45, 0.45, 0.45))
-
-	var panel := sb(Color(0.07, 0.08, 0.09, 0.93), Color(0.24, 0.26, 0.29), 1, 10)
-	panel.content_margin_left = 22
-	panel.content_margin_right = 22
-	panel.content_margin_top = 18
-	panel.content_margin_bottom = 18
-	t.set_stylebox("panel", "PanelContainer", panel)
-	t.set_stylebox("panel", "Panel", panel)
-
-	t.set_stylebox("panel", "TabContainer", sb(Color(0.10, 0.11, 0.12, 0.9), Color(0.24, 0.26, 0.29), 1, 6))
-	t.set_stylebox("tab_selected", "TabContainer", sb(Color(0.20, 0.21, 0.24), ACCENT, 2, 6))
-	t.set_stylebox("tab_unselected", "TabContainer", sb(Color(0.12, 0.13, 0.14), Color(0.25, 0.26, 0.28), 1, 6))
-	t.set_stylebox("tab_hovered", "TabContainer", sb(Color(0.18, 0.19, 0.21), Color(0.4, 0.4, 0.42), 1, 6))
-	t.set_color("font_selected_color", "TabContainer", Color.WHITE)
-	t.set_color("font_unselected_color", "TabContainer", MUTED)
-
-	t.set_stylebox("normal", "LineEdit", sb(Color(0.05, 0.05, 0.06), Color(0.3, 0.32, 0.35), 1))
-	t.set_stylebox("focus", "LineEdit", sb(Color(0.05, 0.05, 0.06), ACCENT, 2))
-	t.set_color("font_color", "LineEdit", TEXT)
-
-	var track := sb(Color(0.05, 0.05, 0.06), Color(0.3, 0.3, 0.32), 1, 4)
-	track.content_margin_top = 3
-	track.content_margin_bottom = 3
-	t.set_stylebox("slider", "HSlider", track)
-	var fill := sb(ACCENT.darkened(0.1), ACCENT, 0, 4)
-	fill.content_margin_top = 3
-	fill.content_margin_bottom = 3
-	t.set_stylebox("grabber_area", "HSlider", fill)
-	t.set_stylebox("grabber_area_highlight", "HSlider", fill)
-
-	t.set_color("font_color", "Label", TEXT)
-	t.set_stylebox("panel", "PopupMenu", sb(Color(0.1, 0.11, 0.12), Color(0.3, 0.32, 0.35), 1))
-	t.set_stylebox("hover", "PopupMenu", sb(ACCENT.darkened(0.3), ACCENT, 0))
+	# Fortschrittsbalken: dünne Spur, blaue Füllung
+	t.set_stylebox("background", "ProgressBar", sb(Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 0, 2))
+	t.set_stylebox("fill", "ProgressBar", sb(BLUE_HI, Color(0, 0, 0, 0), 0, 2))
+	t.set_color("font_color", "ProgressBar", WHITE)
+	# Trennlinien
+	var line := StyleBoxLine.new()
+	line.color = Color(1, 1, 1, 0.08)
+	line.thickness = 1
+	t.set_stylebox("separator", "HSeparator", line)
+	t.set_constant("separation", "HSeparator", 10)
+	for st in ["scroll", "grabber", "grabber_highlight", "grabber_pressed"]:
+		t.set_stylebox(st, "HScrollBar", t.get_stylebox(st, "VScrollBar"))
+	# Überschriften (UITheme.title): Label mit theme_type_variation "Heading"
+	t.set_type_variation("Heading", "Label")
+	t.set_font("font", "Heading", font(600, 1))
+	t.set_color("font_color", "Heading", Color.WHITE)
+	# Abschnittstitel in Versalien (UITheme.section): theme_type_variation "Section"
+	t.set_type_variation("Section", "Label")
+	t.set_font("font", "Section", font(600, 2))
+	t.set_font_size("font_size", "Section", 13)
+	t.set_color("font_color", "Section", SOFT)
 	_cached = t
 	return t
+
+
+## Kompakte Fläche für HUD-Felder und Unterfenster: Anthrazit-Glas mit feiner blauer Oberkante.
+static func hud_style() -> StyleBoxFlat:
+	var p := sb(Color(ANTHRACITE, 0.86), Color(1, 1, 1, 0.07), 1, 3)
+	p.border_color = Color(BLUE_HI, 0.85)
+	p.set_border_width_all(0)
+	p.border_width_top = 2
+	p.shadow_color = Color(0, 0, 0, 0.3)
+	p.shadow_size = 10
+	p.shadow_offset = Vector2(0, 3)
+	p.content_margin_left = 16
+	p.content_margin_right = 16
+	p.content_margin_top = 12
+	p.content_margin_bottom = 12
+	return p
+
+
+## Große Fenster im Spiel (PC, Aufträge, Lager): wie die Unterfenster des Hauptmenüs.
+static func window_style() -> StyleBoxFlat:
+	var p := panel_style()
+	p.bg_color = Color(ANTHRACITE, 0.97)
+	p.content_margin_left = 28
+	p.content_margin_right = 28
+	p.content_margin_top = 22
+	p.content_margin_bottom = 20
+	return p
+
+
+## Karte innerhalb eines Fensters: zurückhaltende Fläche mit feinem Rand. hot = hervorgehoben.
+static func card_style(hot := false) -> StyleBoxFlat:
+	var c := sb(Color(1, 1, 1, 0.035) if not hot else Color(BLUE, 0.16), Color(1, 1, 1, 0.08) if not hot else Color(BLUE_HI, 0.7), 1, 3)
+	c.content_margin_left = 16
+	c.content_margin_right = 16
+	c.content_margin_top = 12
+	c.content_margin_bottom = 12
+	return c
+
+
+## Inhalt in eine Karte legen.
+static func card(content: Control, min_w := 0.0, hot := false) -> PanelContainer:
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", card_style(hot))
+	p.custom_minimum_size.x = min_w
+	p.add_child(content)
+	return p
+
+
+## Abschnittstitel: kurze blaue Marke und Text in Versalien.
+static func section(text: String) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 8)
+	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bar := ColorRect.new()
+	bar.color = BLUE_HI
+	bar.custom_minimum_size = Vector2(3, 13)
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_child(bar)
+	var l := Label.new()
+	l.text = text.to_upper()
+	l.theme_type_variation = "Section"
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_child(l)
+	return h
+
+
+## Erklärender Text: gedämpft und umbrechend.
+static func note(text: String, size := 14, col := MUTED) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_color_override("font_color", col)
+	return l
+
+
+## Anzeige der Werkstattkasse (Kopfzeilen der Fenster).
+static func money_label(size := 16) -> Label:
+	var l := Label.new()
+	l.add_theme_font_override("font", font(500, 1))
+	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_color_override("font_color", MONEY)
+	return l
+
+
+## Rückmeldung nach einer Aktion: leer = Erfolg (grün) mit ok_text, sonst der Fehler (rot).
+static func feedback(l: Label, err: String, ok_text: String) -> void:
+	l.text = ok_text if err == "" else err
+	l.add_theme_color_override("font_color", GOOD if err == "" else BAD)
+
+
+## Kompakter Knopf für Listen und Karten, nimmt keinen Tastaturfokus.
+static func small_button(text: String, cb: Callable, min_w := 160.0) -> Button:
+	var b := button(text, cb, min_w)
+	b.custom_minimum_size.y = 36
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 15)
+	return b
+
+
+## Hauptaktion eines Fensters (Kaufen, Bestellen, Sägen ...): gefülltes Blau.
+static func primary(b: Button) -> Button:
+	var n := sb(Color(BLUE, 0.75), BLUE_HI, 1, 3)
+	var h := sb(BLUE, Color.WHITE, 1, 3)
+	b.add_theme_stylebox_override("normal", n)
+	b.add_theme_stylebox_override("hover", h)
+	b.add_theme_stylebox_override("pressed", sb(BLUE_DEEP, BLUE_HI, 1, 3))
+	b.add_theme_stylebox_override("hover_pressed", sb(BLUE_DEEP, BLUE_HI, 1, 3))
+	b.add_theme_font_override("font", font(500, 1))
+	return b
+
+
+## Abgedunkeltes, weichgezeichnetes Spielbild hinter Fenstern, wie im Pausenmenü.
+static func backdrop() -> ColorRect:
+	var r := ColorRect.new()
+	var mat := ShaderMaterial.new()
+	var sh := Shader.new()
+	sh.code = """
+shader_type canvas_item;
+uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
+void fragment() {
+	vec3 c = textureLod(screen_tex, SCREEN_UV, 2.6).rgb;
+	float v = smoothstep(1.1, 0.35, length(UV - vec2(0.5)));
+	c = mix(c, vec3(0.015, 0.02, 0.03), 0.5 + 0.25 * (1.0 - v));
+	COLOR = vec4(c, 1.0);
+}
+"""
+	mat.shader = sh
+	r.material = mat
+	r.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	return r
+
+
+## Kopfzeile eines Fensters: blaue Marke, kleine Brotkrume darüber, Titel. Gibt {"box", "crumb", "title"}.
+static func window_head(title_text: String, crumb := "") -> Dictionary:
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 10)
+	v.add_child(top)
+	var bar := ColorRect.new()
+	bar.color = BLUE_HI
+	bar.custom_minimum_size = Vector2(34, 3)
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top.add_child(bar)
+	var c := Label.new()
+	c.text = crumb.to_upper()
+	c.theme_type_variation = "Section"
+	top.add_child(c)
+	var l := Label.new()
+	l.text = title_text
+	l.add_theme_font_override("font", font(600, 1))
+	l.add_theme_font_size_override("font_size", 30)
+	l.add_theme_color_override("font_color", Color.WHITE)
+	v.add_child(l)
+	return {"box": v, "crumb": c, "title": l}
+
+
+## Fußzeile mit Tastenhinweisen, z. B. "Esc  ·  zurück".
+static func key_hint(text: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_override("font", font(400, 1))
+	l.add_theme_font_size_override("font_size", 13)
+	l.add_theme_color_override("font_color", Color(1, 1, 1, 0.36))
+	return l
 
 
 # ======================================================================= Menü-Stil
@@ -353,9 +523,11 @@ static func sb(bg: Color, border: Color, bw := 1, radius := 6) -> StyleBoxFlat:
 	return s
 
 
+## Überschrift im Spiel (Bahnschrift halbfett, weiß), Schrift kommt aus der Variante "Heading" des Themes.
 static func title(text: String, size := 30) -> Label:
 	var l := Label.new()
 	l.text = text
+	l.theme_type_variation = "Heading"
 	l.add_theme_font_size_override("font_size", size)
 	return l
 

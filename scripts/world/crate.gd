@@ -18,9 +18,16 @@ var items: Array = []
 var _content: Node3D
 
 
-## Darf das Stück überhaupt in eine Kiste? Fertigschnitte und abgesägte Teile ja, Stangen nein.
+## Darf das Stück überhaupt in eine Kiste? Fertigschnitte, abgesägte und ausgespannte Teile ja, Stangen nein.
 static func accepts(item: Dictionary) -> bool:
-	return str(item.get("kind", "")) == Materials.KIND_CUT or bool(item.get("sawn", false))
+	return str(item.get("kind", "")) in [Materials.KIND_CUT, "part"] or bool(item.get("sawn", false))
+
+
+## Rundes Stück: Rundmaterial oder ein gedrehtes Teil.
+static func is_round(it: Dictionary) -> bool:
+	if str(it.get("kind", "")) == "part":
+		return str(it.get("shape", "")) == "round"
+	return str(it.get("kind", "")) == Materials.KIND_ROUND
 
 
 ## Außenmaß in Metern (Länge, Breite).
@@ -30,7 +37,7 @@ static func outer(id: String) -> Vector2:
 
 
 static func _footprint(it: Dictionary) -> Dictionary:
-	if str(it["kind"]) == Materials.KIND_ROUND:
+	if is_round(it):
 		return {"l": float(it["l"]), "w": float(it["d"]), "h": float(it["d"])}
 	return {"l": float(it["l"]), "w": float(it["w"]), "h": float(it["h"])}
 
@@ -139,7 +146,10 @@ func refresh() -> void:
 			(float(p["across"]) + pw * 0.5 - float(s["w"]) * 0.5) * 0.001)
 		var id := str(it["material"])
 		var m := Build.mat(Materials.raw_color(id).lerp(Materials.cut_color(id), 0.25), 0.55, 0.2)
-		if str(it["kind"]) == Materials.KIND_ROUND:
+		# Bearbeitete Teile glänzen blank
+		if str(it.get("kind", "")) == "part":
+			m = Build.mat(Materials.cut_color(id), 0.3, 0.6)
+		if is_round(it):
 			var axis: int = Build.AXIS_Z if p["rot"] else Build.AXIS_X
 			Build.cyl(_content, float(it["d"]) * 0.0005, float(it["l"]) * 0.001, at, m, axis, false, 16)
 		else:

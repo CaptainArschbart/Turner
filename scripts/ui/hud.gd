@@ -24,7 +24,6 @@ var _job: Label
 var _money: Label
 var _xp: Label
 var _chip: PanelContainer
-var _free: Label
 var _overlay: ControlsOverlay
 var _result_panel: PanelContainer
 var _result: Label
@@ -41,6 +40,26 @@ var _clock: Label
 var _machine_title: Label
 var _target_panel: PanelContainer
 var _targets: Label
+const CravingGauge := preload("res://scripts/ui/craving_gauge.gd")
+var cigarette: Cigarette          # Sucht-Meter: Wert kommt von der Zigarette des Spielers
+var _gauge: Control
+var _withdrawal: ColorRect        # Entzug: Bildrand verschwimmt und pulsiert rötlich
+var _withdrawal_amt := 0.0
+const WITHDRAWAL_SHADER := """
+shader_type canvas_item;
+uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
+uniform float amount = 0.0;
+uniform float pulse = 0.0;
+void fragment() {
+	vec2 d = SCREEN_UV - vec2(0.5);
+	float edge = smoothstep(0.18, 0.75, length(d * vec2(1.3, 1.0)));
+	vec3 col = textureLod(screen_tex, SCREEN_UV, edge * 3.5 * amount).rgb;
+	float grey = dot(col, vec3(0.3, 0.59, 0.11));
+	col = mix(col, vec3(grey), 0.45 * amount);
+	col = mix(col, col * vec3(0.55, 0.22, 0.2), edge * amount * (0.55 + 0.25 * pulse));
+	COLOR = vec4(col, 1.0);
+}
+"""
 
 
 func _ready() -> void:
@@ -79,7 +98,7 @@ func _ready() -> void:
 	_held.offset_top = -130
 	_held.offset_bottom = -100
 	_held.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_held.add_theme_color_override("font_color", Color(0.95, 0.85, 0.55))
+	_held.add_theme_color_override("font_color", UITheme.WARN)
 	_root.add_child(_held)
 
 	_msg = _label(24)
@@ -99,7 +118,7 @@ func _ready() -> void:
 	var dv := VBoxContainer.new()
 	_dro_panel.add_child(dv)
 	_dro = _label(26)
-	_dro.add_theme_color_override("font_color", Color(0.55, 0.95, 1.0))
+	_dro.add_theme_color_override("font_color", UITheme.VALUE)
 	dv.add_child(_dro)
 	_main = _label(18)
 	dv.add_child(_main)
@@ -110,12 +129,13 @@ func _ready() -> void:
 	_details.visible = false
 	dv.add_child(_details)
 	_details.add_child(HSeparator.new())
-	_machine_title = _label(16)
+	_machine_title = _label(14)
 	_machine_title.text = "DREHMASCHINE"
+	_machine_title.add_theme_font_override("font", UITheme.font(600, 2))
 	_machine_title.add_theme_color_override("font_color", UITheme.ACCENT)
 	_details.add_child(_machine_title)
 	_hw = _label(17)
-	_hw.add_theme_color_override("font_color", UITheme.ACCENT)
+	_hw.add_theme_color_override("font_color", UITheme.VALUE)
 	_details.add_child(_hw)
 	_status = _label(16)
 	_details.add_child(_status)
@@ -136,13 +156,18 @@ func _ready() -> void:
 	_job_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(_job_panel)
 	var jv := VBoxContainer.new()
+	jv.add_theme_constant_override("separation", 4)
 	_job_panel.add_child(jv)
-	_money = _label(20)
-	_money.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+	_money = _label(19)
+	_money.add_theme_font_override("font", UITheme.font(500, 1))
+	_money.add_theme_color_override("font_color", UITheme.MONEY)
 	jv.add_child(_money)
-	_xp = _label(16)
-	_xp.add_theme_color_override("font_color", Color(0.65, 0.8, 1.0))
+	_xp = _label(15)
+	_xp.add_theme_color_override("font_color", UITheme.VALUE)
 	jv.add_child(_xp)
+	var jsep := HSeparator.new()
+	jsep.add_theme_constant_override("separation", 6)
+	jv.add_child(jsep)
 	_job = _label(16)
 	_job.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_job.custom_minimum_size.x = 420
@@ -159,6 +184,7 @@ func _ready() -> void:
 	_result_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	_result_panel.visible = false
 	_result_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_result_panel.add_theme_stylebox_override("panel", UITheme.window_style())
 	_root.add_child(_result_panel)
 	_result = _label(19)
 	_result_panel.add_child(_result)
@@ -192,15 +218,6 @@ func _ready() -> void:
 	_overlay.add_extra("Bedienpult", _panel)
 	_overlay.add_extra("Bedienknöpfe", _conv_buttons())
 
-	_free = _label(18)
-	_free.text = "TESTMODUS: alles gratis (^ schaltet aus)"
-	_free.add_theme_color_override("font_color", Color(1.0, 0.55, 0.3))
-	_free.anchor_left = 0
-	_free.anchor_right = 1
-	_free.offset_top = 28
-	_free.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_free.visible = false
-	_root.add_child(_free)
 
 	# Bedienfeld der konventionellen Drehmaschine: eigene kleine Anzeige, unten in der Mitte
 	_lever_box = PanelContainer.new()
@@ -220,6 +237,7 @@ func _ready() -> void:
 	_lever_box.add_child(_lever_info)
 
 	_clock = _label(17)
+	_clock.add_theme_font_override("font", UITheme.font(500, 2))
 	_clock.anchor_left = 0
 	_clock.anchor_right = 1
 	_clock.offset_top = 56
@@ -232,6 +250,27 @@ func _ready() -> void:
 	_fps.offset_top = 6
 	_fps.add_theme_color_override("font_color", Color(1, 1, 0.5))
 	_root.add_child(_fps)
+
+	# Entzug: liegt unter allen Anzeigen, nur sichtbar, solange er wirkt
+	_withdrawal = ColorRect.new()
+	_withdrawal.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_withdrawal.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sm := ShaderMaterial.new()
+	sm.shader = Shader.new()
+	sm.shader.code = WITHDRAWAL_SHADER
+	_withdrawal.material = sm
+	_withdrawal.visible = false
+	_root.add_child(_withdrawal)
+	_root.move_child(_withdrawal, 0)
+	# Sucht-Meter unten links
+	_gauge = CravingGauge.new()
+	_gauge.anchor_top = 1
+	_gauge.anchor_bottom = 1
+	_gauge.offset_left = 20
+	_gauge.offset_top = -20 - CravingGauge.H
+	_gauge.offset_right = 20 + CravingGauge.W
+	_gauge.offset_bottom = -20
+	_root.add_child(_gauge)
 	Settings.changed.connect(_refresh_pages)
 	set_operating(false)
 
@@ -295,7 +334,7 @@ static func target_text(job: Dictionary, grind := false) -> String:
 func _alert_label() -> Label:
 	var l := _label(18)
 	l.text = "!!! NOT-HALT AKTIV !!!"
-	l.add_theme_color_override("font_color", Color(1.0, 0.35, 0.3))
+	l.add_theme_color_override("font_color", UITheme.BAD)
 	l.visible = false
 	return l
 
@@ -331,7 +370,7 @@ func set_job(text: String, detail := "") -> void:
 
 func set_clock(text: String, closed: bool) -> void:
 	_clock.text = text
-	_clock.add_theme_color_override("font_color", Color(1.0, 0.6, 0.35) if closed else Color(0.9, 0.93, 0.96))
+	_clock.add_theme_color_override("font_color", UITheme.WARN if closed else UITheme.TEXT)
 
 
 func set_skill_info(text: String) -> void:
@@ -386,8 +425,9 @@ func set_other_machine(on: bool) -> void:
 	_apply_mode()
 
 
-func set_free_mode(on: bool) -> void:
-	_free.visible = on
+## Der Testmodus zeigt sich nur im Debug-Menü und in der Kopfzeile am PC, nicht als Hinweis im Bild.
+func set_free_mode(_on: bool) -> void:
+	pass
 
 
 func _apply_mode() -> void:
@@ -478,9 +518,10 @@ func _refresh_pages() -> void:
 				[b.call("new_workpiece"), "Rohteil anfordern: Hinweis, im Testmodus gratis"],
 				[b.call("submit_part"), "Teil prüfen und abgeben"],
 				[b.call("show_drawing"), "Werkstückzeichnung ein / aus"],
+				[b.call("smoke"), "Zigarette anzünden / ausmachen"],
 				[b.call("interact"), "Maschine verlassen"],
 				["Alt links", "Alle Werte und Auftrag anzeigen (halten)"],
-				["^", "Testmodus an / aus: alles gratis"],
+				["^", "Debug-Menü: Testmodus, Noclip, Zeit, Geld"],
 			]},
 		]
 	else:
@@ -494,12 +535,14 @@ func _refresh_pages() -> void:
 			[b.call("jump"), "Springen"],
 			[b.call("interact"), "Interagieren"],
 			["Linksklick", "Werkzeug, Material oder Spänebehälter aufnehmen, ablegen, einsetzen; Lagerregal ansehen"],
+			[b.call("drop"), "Getragenes fallen lassen (mit Linksklick wieder aufheben)"],
 			[b.call("toggle_view"), "Kamera 1. / 3. Person"],
 			[b.call("job_menu"), "Angenommene Aufträge, einen oben rechts anzeigen"],
 			[b.call("show_drawing"), "Werkstückzeichnung des gewählten Auftrags"],
+			[b.call("smoke"), "Zigarette anzünden / ausmachen (Hände bleiben frei)"],
 			[b.call("build_menu"), "Baumodus: anvisieren und E nehmen, Linksklick abstellen"],
 			[b.call("pause"), "Menü"],
-			["^", "Testmodus an / aus: alles gratis"],
+			["^", "Debug-Menü: Testmodus, Noclip, Zeit, Geld"],
 		]}]
 	_overlay.set_pages(pages, _operating and not _pult_help, "Bedienknöpfe" if _is_conv() else "Bedienpult")
 	ControlsOverlay.set_chip_text(_chip, "Alt links  Details     Alt rechts  Tasten und Bedienung" if _operating and not _pult_help else ("Alt rechts  Tasten" if _operating else "Tab  Aufträge     B  Baumodus     Alt rechts  Tasten"))
@@ -521,6 +564,7 @@ func _process(delta: float) -> void:
 		_result_t -= delta
 		if _result_t <= 0.0:
 			_result_panel.visible = false
+	_update_craving(delta)
 	_fps.visible = bool(Settings.graphics["show_fps"])
 	if _fps.visible:
 		_fps.text = "%d FPS" % Engine.get_frames_per_second()
@@ -604,3 +648,20 @@ func _vc_hint(vc: float) -> String:
 	if vc > win.y:
 		return "(zu hoch)"
 	return "(gut)"
+
+
+## Sucht-Meter nachführen und im Entzug den Bildrand verschwimmen lassen.
+func _update_craving(delta: float) -> void:
+	_gauge.visible = cigarette != null
+	if cigarette == null:
+		_withdrawal.visible = false
+		return
+	_gauge.value = cigarette.need
+	_gauge.craving = cigarette.craving
+	_gauge.lit = cigarette.lit
+	_withdrawal_amt = move_toward(_withdrawal_amt, 1.0 if cigarette.craving else 0.0, delta * 0.5)
+	_withdrawal.visible = _withdrawal_amt > 0.001
+	if _withdrawal.visible:
+		var sm := _withdrawal.material as ShaderMaterial
+		sm.set_shader_parameter("amount", _withdrawal_amt)
+		sm.set_shader_parameter("pulse", sin(Time.get_ticks_msec() * 0.004))

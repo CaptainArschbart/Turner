@@ -31,8 +31,10 @@ static func glass(c := Color(0.75, 0.85, 0.9, 0.18)) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = c
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.roughness = 0.05
-	m.metallic = 0.3
+	# Glas ist kein Metall: Die Spiegelung kommt allein über Specular und Fresnel, ohne Farbstich
+	m.roughness = 0.04
+	m.metallic = 0.0
+	m.metallic_specular = 0.6
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return m
 

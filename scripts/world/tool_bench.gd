@@ -1,8 +1,9 @@
 class_name ToolBench
 extends Node3D
-## Werkbank am Arbeitsplatz: Die Werkzeuge der Maschine stecken in den Halterungen im unteren Teil. Auf der
-## Platte liegt nichts. Gekaufte Werkzeuge kommen in die nächste freie Halterung, der Spieler kann sie frei
-## umstecken. Ein Klick auf die Bank steckt ein Werkzeug aus der Hand in die nächste freie Halterung.
+## Werkbank am Arbeitsplatz: Die Werkzeuge der Maschine stecken in den Halterungen im unteren Teil, bei der
+## Drehmaschine liegen sie in einer Schaumstoffeinlage auf der Platte. Gekaufte Werkzeuge kommen in die nächste
+## freie Halterung, der Spieler kann sie frei umstecken. Ein Klick auf die Bank legt ein Werkzeug aus der Hand
+## in die nächste freie Halterung.
 
 const WIDTH := 1.8
 const DEPTH := 0.7
@@ -11,6 +12,9 @@ const REFRESH := 0.15
 const HOLDER_W := 0.13            # Breite einer Halterung
 const HOLDER_ROWS := [0.79, 0.57, 0.35]   # Höhe der Halterungsreihen
 const HOLDER_H := 0.21            # so hoch darf ein Werkzeug darin sein
+const MAT_H := 0.012              # Schaumstoffeinlage auf der Platte
+const TOP_ROWS := 3               # Reihen der Ablage auf der Platte
+const TOP_H := 0.07               # so hoch darf ein Werkzeug auf der Platte liegen
 
 ## Maschine mit tool_stock, has_tool(id), tool_name(id), make_tool_model(id), MACHINE_ID
 var machine: Node
@@ -18,6 +22,9 @@ var player: Node
 var width := WIDTH
 var depth := DEPTH
 var holders: Array[HolderSlot] = []
+## Werkzeuge liegen auf der Platte statt in Halterungen darunter (Drehmaschinen)
+var on_top := false
+var _cell_d := 0.0                # Tiefe eines Platzes auf der Platte
 var _refresh_t := 0.0
 
 
@@ -39,7 +46,7 @@ class BenchBody extends Node:
 class HolderSlot extends Node:
 	var bench: ToolBench
 	var index := 0
-	var at := Vector3.ZERO
+	var at := Vector3.ZERO        # Mitte der Halterung, auf der Platte: Mitte der Auflage
 	var shown := ""
 	var model: Node3D
 
@@ -54,8 +61,12 @@ class HolderSlot extends Node:
 
 
 func _ready() -> void:
+	on_top = machine is Lathe
 	_build_table()
-	_build_holders()
+	if on_top:
+		_build_top_slots()
+	else:
+		_build_holders()
 	refresh()
 
 
@@ -100,6 +111,34 @@ func _build_holders() -> void:
 			n += 1
 
 
+## Schaumstoffeinlage auf der Platte, je Werkzeug eine Mulde. Rasterweite wie die Halterungen unten.
+func _build_top_slots() -> void:
+	var foam := Build.mat(Color(0.13, 0.15, 0.17), 0.95)
+	var pocket := Build.mat(Color(0.32, 0.36, 0.4), 0.9)
+	var cols := int((width - 0.16) / HOLDER_W)
+	var x0 := -HOLDER_W * cols * 0.5
+	var z_back := -depth * 0.5 + 0.06          # vor der Rückwand bleibt etwas Platz
+	var z_front := depth * 0.5 - 0.03
+	_cell_d = (z_front - z_back) / TOP_ROWS
+	Build.box(self, Vector3(HOLDER_W * cols + 0.03, MAT_H, z_front - z_back + 0.02), Vector3(0, TOP_Y + MAT_H * 0.5, (z_back + z_front) * 0.5), foam)
+	var n := 0
+	for r in TOP_ROWS:
+		var z := z_back + _cell_d * (r + 0.5)
+		for c in cols:
+			var x := x0 + HOLDER_W * (c + 0.5)
+			Build.box(self, Vector3(HOLDER_W - 0.025, 0.002, _cell_d - 0.03), Vector3(x, TOP_Y + MAT_H + 0.001, z), pocket)
+			var h := HolderSlot.new()
+			h.bench = self
+			h.index = n
+			h.at = Vector3(x, TOP_Y + MAT_H, z)
+			add_child(h)
+			holders.append(h)
+			# Flacher Fühler über der Mulde, damit der Blick den Platz trifft
+			var hit := Build.collider(self, Vector3(HOLDER_W - 0.005, 0.04, _cell_d - 0.005), Vector3(x, TOP_Y + MAT_H + 0.02, z))
+			hit.set_meta("interact", h)
+			n += 1
+
+
 ## Modell in die Halterung setzen: stehend, notfalls verkleinert, damit es in die Zelle passt.
 func _show_holder(h: HolderSlot, id: String) -> void:
 	h.shown = id
@@ -113,12 +152,15 @@ func _show_holder(h: HolderSlot, id: String) -> void:
 	var m: Node3D = machine.make_bench_model(id) if machine.has_method("make_bench_model") else machine.make_tool_model(id)
 	add_child(m)
 	var box := Build.bounds(m)
-	var fit := minf(minf((HOLDER_W - 0.02) / maxf(box.size.x, 0.001), HOLDER_H / maxf(box.size.y, 0.001)), 0.16 / maxf(box.size.z, 0.001))
+	var max_h := TOP_H if on_top else HOLDER_H
+	var max_d := _cell_d - 0.04 if on_top else 0.16
+	var fit := minf(minf((HOLDER_W - 0.02) / maxf(box.size.x, 0.001), max_h / maxf(box.size.y, 0.001)), max_d / maxf(box.size.z, 0.001))
 	if fit < 1.0:
 		m.scale = Vector3.ONE * fit
 		box = Build.bounds(m)
 	var center := box.get_center()
-	m.position += Vector3(h.at.x - center.x, h.at.y - HOLDER_H * 0.5 + box.size.y * 0.5 - center.y, h.at.z - center.z)
+	var floor_y := h.at.y if on_top else h.at.y - HOLDER_H * 0.5
+	m.position += Vector3(h.at.x - center.x, floor_y + box.size.y * 0.5 - center.y, h.at.z - center.z)
 	h.model = m
 	transform = keep
 
@@ -161,8 +203,18 @@ func _out(id: String) -> bool:
 	return machine.has_tool(id) or _holds(id)
 
 
+## Ist ein Stück in der Hand oder liegt fallen gelassen herum?
 func _holds(id: String) -> bool:
-	return player != null and not player.held.is_empty() and player.held["machine"] == machine.MACHINE_ID and player.held["id"] == id
+	if player != null and not player.held.is_empty() and player.held["machine"] == machine.MACHINE_ID and player.held["id"] == id:
+		return true
+	if not is_inside_tree():
+		return false
+	# Gruppe von DroppedItem, ohne die Klasse zu laden (die zieht die Oberfläche mit)
+	for n in get_tree().get_nodes_in_group("dropped_item"):
+		var it: Dictionary = n.item
+		if str(it.get("kind", "")) == "tool" and str(it.get("machine", "")) == str(machine.MACHINE_ID) and str(it.get("id", "")) == id:
+			return true
+	return false
 
 
 ## Nächste freie Halterung, -1 = alle belegt.
@@ -196,12 +248,16 @@ func holder_prompt(i: int) -> String:
 	if not player.held.is_empty():
 		if player.held["machine"] != machine.MACHINE_ID:
 			return "%s gehört nicht auf diese Werkbank" % player.held["name"]
+		if on_top:
+			return "Platz belegt: %s" % machine.tool_name(id) if id != "" else "[Linksklick] %s hinlegen" % player.held["name"]
 		return "Halterung belegt: %s" % machine.tool_name(id) if id != "" else "[Linksklick] %s in die Halterung stecken" % player.held["name"]
 	if id == "":
-		return "Halterung frei"
+		return "Platz frei" if on_top else "Halterung frei"
 	if machine.has_tool(id):
 		return "%s: Ein Stück ist schon an der Maschine" % machine.tool_name(id)
-	return "[Linksklick] %s aus der Halterung nehmen" % machine.tool_name(id)
+	if _holds(id):
+		return "%s: Ein Stück liegt schon herum, erst aufheben" % machine.tool_name(id)
+	return "[Linksklick] %s %s nehmen" % [machine.tool_name(id), "von der Werkbank" if on_top else "aus der Halterung"]
 
 
 func holder_click(i: int, p: Node) -> void:
@@ -214,7 +270,7 @@ func holder_click(i: int, p: Node) -> void:
 			store.activate(str(p.held["id"]))
 			if store.place(str(p.held["id"]), i):
 				p.clear_held()
-	elif id != "" and not machine.has_tool(id):
+	elif id != "" and not machine.has_tool(id) and not _holds(id):
 		store.take(i)
 		p.set_held(machine, id)
 	refresh()
@@ -229,7 +285,11 @@ func body_prompt() -> String:
 		return ""
 	if player.held["machine"] != machine.MACHINE_ID:
 		return "%s gehört nicht auf diese Werkbank" % player.held["name"]
-	return "[Linksklick] %s in die nächste freie Halterung" % player.held["name"] if free_holder() >= 0 else "Alle Halterungen sind belegt"
+	if free_holder() < 0:
+		return "Alle Plätze sind belegt" if on_top else "Alle Halterungen sind belegt"
+	if on_top:
+		return "[Linksklick] %s auf die Werkbank legen" % player.held["name"]
+	return "[Linksklick] %s in die nächste freie Halterung" % player.held["name"]
 
 
 func body_click(p: Node) -> void:

@@ -74,12 +74,45 @@ func _initialize() -> void:
 	await press("pause")
 	ok(not pc.overlay.visible, "Esc schließt den PC")
 	ok(not w.pause_menu.visible, "Esc öffnet dabei nicht das Pause-Menü")
+	# Whiteboard an der Ostwand: Tagesbericht mit Tag starten
+	var board = w.whiteboard
+	ok(board != null, "Whiteboard hängt im Büro")
+	p.velocity = Vector3.ZERO
+	p.global_position = Vector3(9.6, 0.05, 10.3)
+	p.yaw = -PI / 2.0
+	p.pitch = -0.05
+	for i in 10:
+		await physics_frame
+	ok(p._focus == board, "Whiteboard lässt sich anvisieren: %s" % str(p._focus))
+	ok(p._prompt.contains("Tagesbericht"), "Hinweis am Whiteboard: " + p._prompt)
+	await press("interact")
+	ok(p.operating == board and board.overlay.visible, "Interagieren öffnet den Tagesbericht")
+	ok(not w.hud.visible, "HUD beim Whiteboard ausgeblendet")
+	var day_texts := []
+	collect(board.overlay, day_texts)
+	ok(day_texts.has("Gewinn / Verlust"), "Tagesbericht zeigt Gewinn und Verlust")
+	if w.day_started:
+		board.overlay.day_app.end_button.pressed.emit()
+		ok(w.day_over, "Knopf am Whiteboard beendet den Tag")
+	else:
+		board.overlay.day_app.start_button.pressed.emit()
+		ok(w.day_started, "Knopf am Whiteboard startet den Tag")
+	await press("pause")
+	ok(not board.overlay.visible and p.operating == null, "Esc schließt das Whiteboard")
+	ok(w.hud.visible and not w.pause_menu.visible, "HUD wieder da, Pause-Menü zu")
+	ok(meshes(board) > 10, "Whiteboard hat Rahmen, Ablage und Stifte")
+	ok(w.office_clock != null and meshes(w.office_clock) > 10, "Wanduhr hängt im Büro")
 	# Bürotür: von der Halle aus öffnen und hindurchgehen
 	var hit_door = null
+	var qm_door = null
 	for c in w.get_children():
-		if c.has_method("get_prompt") and c.get("opened") != null:
-			hit_door = c
+		if c.has_method("get_prompt") and c.get("opened") != null and c.get("title") != null:
+			if c.title == "Bürotür":
+				hit_door = c
+			else:
+				qm_door = c
 	ok(hit_door != null, "Bürotür gibt es")
+	ok(qm_door != null and qm_door.title.contains("Qualitätsmanagement"), "QM-Raum hat eine eigene Tür")
 	p.velocity = Vector3.ZERO
 	p.global_position = Vector3(7.55, 0.05, 6.6)
 	p.yaw = PI
@@ -102,6 +135,24 @@ func _initialize() -> void:
 	ok(p.global_position.z > 8.8, "Offene Tür: Spielfigur kommt ins Büro: %.2f" % p.global_position.z)
 	p.move_and_collide(Vector3(0, 0, -3.0))
 	ok(p.global_position.z < 7.0, "Und wieder hinaus: %.2f" % p.global_position.z)
+	# QM-Tür: geschlossen sperrt sie, geöffnet kommt man in den Messraum
+	var qx: float = qm_door.global_position.x + 0.55     # Scharnier + halbe Türbreite
+	p.global_position = Vector3(qx, 0.05, 6.6)
+	p.velocity = Vector3.ZERO
+	for i in 10:
+		await physics_frame
+	ok(p._focus == qm_door and p._prompt.contains("Qualitätsmanagement"), "QM-Tür lässt sich anvisieren: " + p._prompt)
+	p.move_and_collide(Vector3(0, 0, 3.0))
+	ok(p.global_position.z < 8.0, "Geschlossene QM-Tür sperrt: %.2f" % p.global_position.z)
+	await press("interact")
+	ok(qm_door.opened, "E öffnet die QM-Tür")
+	for i in 60:
+		await process_frame
+	await physics_frame
+	await physics_frame
+	p.move_and_collide(Vector3(0, 0, 3.0))
+	ok(p.global_position.z > 8.8, "Offene QM-Tür: Spielfigur kommt in den Messraum: %.2f" % p.global_position.z)
+	p.move_and_collide(Vector3(0, 0, -3.0))
 	# In der Türöffnung und im Büro steht keine Außenhaut mehr
 	var skin_in_room := false
 	var umgebung = w.find_child("Umgebung", true, false)

@@ -6,6 +6,7 @@ extends CanvasLayer
 var world: Node
 var drawing: PartDrawing
 var close_button: Button
+var take_button: Button
 
 
 func _ready() -> void:
@@ -26,6 +27,26 @@ func _ready() -> void:
 	close_button.focus_mode = Control.FOCUS_NONE
 	close_button.position = Vector2(drawing.custom_minimum_size.x - 170.0, 16.0)
 	drawing.add_child(close_button)
+	take_button = UITheme.button("In die Hand nehmen", take, 210)
+	take_button.theme = UITheme.build()
+	take_button.custom_minimum_size.y = 36
+	take_button.focus_mode = Control.FOCUS_NONE
+	take_button.position = Vector2(drawing.custom_minimum_size.x - 400.0, 16.0)
+	drawing.add_child(take_button)
+
+
+## Ausgedruckte Zeichnung in die Hand nehmen, um sie irgendwo anzupinnen.
+func take() -> void:
+	var job := drawing.job
+	# Am PC ausgedruckt: Der Spieler steht auf und hat das Blatt in der Hand
+	if world.player.operating == world.office_pc:
+		world.office_pc.overlay.close()
+		world.office_pc.stop_using()
+	var err: String = world.take_drawing(job)
+	if err != "":
+		world.hud.show_message(err, Color(1, 0.75, 0.2))
+		return
+	close()
 
 
 ## Eine bestimmte Zeichnung zeigen, zum Beispiel aus dem Entwicklerprogramm.

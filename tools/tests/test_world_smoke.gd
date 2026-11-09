@@ -18,6 +18,7 @@ func _initialize() -> void:
 	w.buy_equipment("cnc_lathe")
 	ok(w.place_machine("cnc_lathe", Vector2(-1.0, 4.0), 0) == "", "CNC-Drehmaschine aufgestellt")
 	var cnc = w.cnc_lathe
+	cnc.power_on(true)
 	cnc.interact(w.player)
 	for i in 30:
 		await physics_frame

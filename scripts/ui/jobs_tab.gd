@@ -11,10 +11,20 @@ var _result: Label
 
 
 func _ready() -> void:
-	add_theme_constant_override("separation", 14)
+	add_theme_constant_override("separation", 20)
 	offers = _column("Angebote")
+	var line := VSeparator.new()
+	line.add_theme_stylebox_override("separator", _vline())
+	add_child(line)
 	taken = _column("Angenommen")
 	refresh()
+
+
+func _vline() -> StyleBoxLine:
+	var s := StyleBoxLine.new()
+	s.vertical = true
+	s.color = Color(1, 1, 1, 0.08)
+	return s
 
 
 func _column(title: String) -> VBoxContainer:
@@ -22,11 +32,9 @@ func _column(title: String) -> VBoxContainer:
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.add_theme_constant_override("separation", 8)
 	add_child(v)
-	var t := UITheme.title(title, 20)
-	t.add_theme_color_override("font_color", UITheme.ACCENT)
-	v.add_child(t)
+	v.add_child(UITheme.section(title))
 	if title == "Angebote":
-		_result = _small("", Color(1.0, 0.45, 0.35))
+		_result = _small("", UITheme.BAD)
 		v.add_child(_result)
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -73,16 +81,25 @@ static func days_text(left: int) -> String:
 
 
 func _card(key: String, frist := "") -> PanelContainer:
-	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UITheme.sb(Color(0.1, 0.11, 0.12), Color(0.24, 0.26, 0.29)))
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 6)
-	card.add_child(v)
-	var l := Label.new()
-	l.text = summary(key, shop.company.pay_factor() if shop else 1.0, frist)
-	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	l.add_theme_font_size_override("font_size", 14)
-	v.add_child(l)
+	var card := UITheme.card(v)
+	# Kopf: Titel des Auftrags, rechts die Frist. Darunter Werkstoff, Rohteil, Ziele und Vergütung.
+	var lines := summary(key, shop.company.pay_factor() if shop else 1.0).split("\n")
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 10)
+	v.add_child(head)
+	var t := UITheme.title(lines[0], 17)
+	t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(t)
+	if frist != "":
+		var f := UITheme.note(frist, 13, UITheme.WARN if frist.contains("heute") else UITheme.VALUE)
+		f.autowrap_mode = TextServer.AUTOWRAP_OFF
+		f.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		head.add_child(f)
+	lines.remove_at(0)
+	v.add_child(UITheme.note("\n".join(lines), 14, Color(UITheme.TEXT, 0.85)))
 	var row := HBoxContainer.new()
 	row.name = "Knoepfe"
 	row.add_theme_constant_override("separation", 8)
@@ -92,10 +109,7 @@ func _card(key: String, frist := "") -> PanelContainer:
 
 
 func _button(text: String, cb: Callable) -> Button:
-	var b := UITheme.button(text, cb, 180)
-	b.custom_minimum_size.y = 36
-	b.focus_mode = Control.FOCUS_NONE
-	return b
+	return UITheme.small_button(text, cb, 170)
 
 
 func show_drawing(key: String) -> void:
@@ -116,13 +130,13 @@ func refresh() -> void:
 		var reason: String = shop.accept_error(key)
 		var card := _card(key, "Frist: %d Tage ab Annahme" % JobBoard.days_for(key))
 		var v: VBoxContainer = card.get_child(0)
-		var b := _button("Annehmen", accept.bind(key))
+		var b := UITheme.primary(_button("Annehmen", accept.bind(key)))
 		b.disabled = reason != ""
 		var row: HBoxContainer = v.get_node("Knoepfe")
 		row.add_child(b)
 		row.move_child(b, 0)
 		if reason != "":
-			v.add_child(_small(reason, Color(0.95, 0.7, 0.35)))
+			v.add_child(_small(reason, UITheme.WARN))
 		offers.add_child(card)
 	if shop.accepted.is_empty() and shop.grind_jobs.is_empty():
 		taken.add_child(_small("Noch kein Auftrag angenommen.", UITheme.MUTED))
@@ -137,7 +151,7 @@ func refresh() -> void:
 		row.add_child(b)
 		row.move_child(b, 0)
 		taken.add_child(card)
-	taken.add_child(_small("Mit der Taste Tab wählst du außerhalb des PCs aus, welcher Auftrag oben rechts steht.", UITheme.MUTED))
+	taken.add_child(_small("Taste %s außerhalb des PCs: wählen, welcher Auftrag oben rechts steht." % Settings.binding_text("job_menu"), UITheme.MUTED))
 
 
 func accept(key: String) -> void:

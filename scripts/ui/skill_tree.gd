@@ -74,7 +74,7 @@ class Canvas extends Control:
 					continue
 				var a: Vector2 = buttons[r].position + Vector2(NODE.x, NODE.y * 0.5)
 				var b: Vector2 = buttons[id].position + Vector2(0, NODE.y * 0.5)
-				var col := Color(0.4, 0.85, 0.45) if sk.has(id) else (UITheme.ACCENT if sk.has(str(r)) else Color(0.32, 0.34, 0.37))
+				var col := UITheme.GOOD if sk.has(id) else (UITheme.ACCENT if sk.has(str(r)) else Color(0.32, 0.34, 0.37))
 				var mid := (a.x + b.x) * 0.5
 				draw_polyline(PackedVector2Array([a, Vector2(mid, a.y), Vector2(mid, b.y), b]), col, 2.0, true)
 
@@ -86,8 +86,9 @@ func _ready() -> void:
 	left.add_theme_constant_override("separation", 8)
 	add_child(left)
 	_points = Label.new()
+	_points.add_theme_font_override("font", UITheme.font(500, 1))
 	_points.add_theme_font_size_override("font_size", 16)
-	_points.add_theme_color_override("font_color", Color(0.65, 0.8, 1.0))
+	_points.add_theme_color_override("font_color", UITheme.VALUE)
 	left.add_child(_points)
 	_bar = ProgressBar.new()
 	_bar.show_percentage = false
@@ -112,26 +113,25 @@ func _ready() -> void:
 
 func _side() -> Control:
 	var v := VBoxContainer.new()
-	v.custom_minimum_size.x = 280
+	v.custom_minimum_size.x = 290
 	v.add_theme_constant_override("separation", 10)
-	_name = UITheme.title("Skill wählen", 20)
-	_name.add_theme_color_override("font_color", UITheme.ACCENT)
+	v.add_child(UITheme.section("Auswahl"))
+	_name = UITheme.title("Skill wählen", 22)
 	_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(_name)
-	_desc = Label.new()
-	_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_desc.add_theme_font_size_override("font_size", 15)
+	_desc = UITheme.note("", 15, UITheme.TEXT)
 	v.add_child(_desc)
-	_state = Label.new()
-	_state.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_state.add_theme_font_size_override("font_size", 14)
-	_state.add_theme_color_override("font_color", UITheme.MUTED)
+	v.add_child(HSeparator.new())
+	_state = UITheme.note("", 14)
 	v.add_child(_state)
-	_unlock = UITheme.button("Freischalten", unlock, 260)
-	_unlock.focus_mode = Control.FOCUS_NONE
+	var sp := Control.new()
+	sp.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	v.add_child(sp)
+	_unlock = UITheme.primary(UITheme.small_button("Freischalten", unlock, 260))
+	_unlock.custom_minimum_size.y = 42
 	_unlock.disabled = true
 	v.add_child(_unlock)
-	return v
+	return UITheme.card(v)
 
 
 func select(id: String) -> void:
@@ -171,7 +171,7 @@ func refresh() -> void:
 func _style(b: Button, id: String, sk: Skills) -> void:
 	var col: Color
 	if sk.has(id):
-		col = Color(0.3, 0.75, 0.38)
+		col = UITheme.GOOD
 	elif Skills.NODES[id].get("soon", false):
 		col = Color(0.25, 0.26, 0.28)
 	elif sk.unlock_error(id, true) == "":
@@ -179,8 +179,8 @@ func _style(b: Button, id: String, sk: Skills) -> void:
 	else:
 		col = Color(0.3, 0.32, 0.35)
 	var border := 3 if id == selected else 1
-	var bg := Color(col, 0.22) if sk.has(id) else Color(0.12, 0.13, 0.14)
-	var box := UITheme.sb(bg, Color.WHITE if id == selected else col, border)
+	var bg := Color(col, 0.22) if sk.has(id) else Color(1, 1, 1, 0.04)
+	var box := UITheme.sb(bg, Color.WHITE if id == selected else col, border, 3)
 	box.content_margin_left = 4
 	box.content_margin_right = 4
 	box.content_margin_top = 2
@@ -194,7 +194,7 @@ func _show_selected(sk: Skills) -> void:
 	_unlock.text = "Freischalten"
 	if selected == "":
 		_name.text = "Skill wählen"
-		_desc.text = "Grün: freigeschaltet. Orange: als Nächstes möglich. Grau: Voraussetzung fehlt."
+		_desc.text = "Grün: freigeschaltet.  Blau: als Nächstes möglich.  Grau: Voraussetzung fehlt."
 		_state.text = "Skillpunkte gibt es für Erfahrung aus erfolgreichen Aufträgen."
 		return
 	var n: Dictionary = Skills.NODES[selected]

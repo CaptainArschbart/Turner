@@ -132,37 +132,56 @@ class SiteMap extends Control:
 
 
 func _ready() -> void:
-	add_theme_constant_override("separation", 14)
+	add_theme_constant_override("separation", 16)
 	map = SiteMap.new()
 	map.tab = self
-	add_child(map)
+	var frame := PanelContainer.new()
+	var fs := UITheme.card_style()
+	fs.set_content_margin_all(4)
+	frame.add_theme_stylebox_override("panel", fs)
+	frame.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	frame.add_child(map)
+	add_child(frame)
 	var side := VBoxContainer.new()
 	side.custom_minimum_size.x = 340
 	side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	side.add_theme_constant_override("separation", 10)
 	add_child(side)
-	_money = Label.new()
-	_money.add_theme_font_size_override("font_size", 16)
-	_money.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+	_money = UITheme.money_label()
+	_money.visible = false            # die Kasse steht in der Kopfzeile des PCs
 	side.add_child(_money)
-	_info = Label.new()
-	_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_info.add_theme_font_size_override("font_size", 15)
+	side.add_child(UITheme.section("Gelände"))
+	_info = UITheme.note("", 15, UITheme.TEXT)
 	side.add_child(_info)
-	buy_button = UITheme.button("Kachel wählen", buy, 300)
-	buy_button.custom_minimum_size.y = 44
+	buy_button = UITheme.primary(UITheme.small_button("Kachel wählen", buy, 300))
+	buy_button.custom_minimum_size.y = 42
 	buy_button.disabled = true
 	side.add_child(buy_button)
-	_result = Label.new()
-	_result.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_result.add_theme_font_size_override("font_size", 15)
+	_result = UITheme.note("", 15, UITheme.TEXT)
 	side.add_child(_result)
-	var legend := Label.new()
-	legend.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	legend.add_theme_font_size_override("font_size", 14)
-	legend.add_theme_color_override("font_color", UITheme.MUTED)
-	legend.text = "Orange: Werkstatt, je Kachel 4 x 4 m\nCyan: Lager, je Kachel 6 x 7,6 m mit Platz für ein Regal (blau, 6 Fächer)\nHell umrandet: kann gekauft werden, grenzt an den Bereich\nGelb: Maschinenbereiche\nGrün: Rolltore"
+	var sp := Control.new()
+	sp.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	side.add_child(sp)
+	side.add_child(UITheme.section("Legende"))
+	var legend := GridContainer.new()
+	legend.columns = 2
+	legend.add_theme_constant_override("h_separation", 10)
+	legend.add_theme_constant_override("v_separation", 6)
 	side.add_child(legend)
+	for e in [[SiteMap.ORANGE, "Werkstatt, je Kachel 4 x 4 m"],
+			[SiteMap.CYAN, "Lager, je Kachel 6 x 7,6 m, Platz für ein Regal"],
+			[Color(0.2, 0.4, 0.75), "Regal mit 6 Fächern"],
+			[Color(0.75, 0.77, 0.8), "Hell umrandet: kaufbar, grenzt an den Bereich"],
+			[Color(0.95, 0.8, 0.1), "Maschinenbereiche"],
+			[Color(0.3, 1.0, 0.4), "Rolltore"]]:
+		var sw := ColorRect.new()
+		sw.color = e[0]
+		sw.custom_minimum_size = Vector2(14, 14)
+		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		legend.add_child(sw)
+		var l := UITheme.note(e[1], 13)
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		legend.add_child(l)
 	refresh()
 
 
@@ -177,7 +196,7 @@ func buy() -> void:
 		return
 	var err: String = shop.buy_tile(selected["area"], selected["cell"])
 	_result.text = "Gekauft." if err == "" else err
-	_result.add_theme_color_override("font_color", Color(0.5, 0.9, 0.5) if err == "" else Color(1.0, 0.45, 0.35))
+	_result.add_theme_color_override("font_color", UITheme.GOOD if err == "" else UITheme.BAD)
 	if err == "":
 		selected = {}
 	refresh()

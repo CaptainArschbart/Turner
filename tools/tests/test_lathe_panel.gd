@@ -19,6 +19,35 @@ func _initialize() -> void:
 	var l = load("res://scripts/machine/lathe.gd").new()
 	root.add_child(l)
 	await process_frame
+
+	# --- Ein/Aus: CNC-Maschine steht anfangs aus, Steuerung rechnet nicht, Bedienen geht nicht
+	ok(l.has_power_switch() and not l.powered, "CNC-Drehmaschine startet ausgeschaltet")
+	ok(l.screen.process_mode == Node.PROCESS_MODE_DISABLED and not l.screen.visible, "Steuerung aus: Bildschirm dunkel und angehalten")
+	if l.e50:
+		ok((l.model.mach.get("lamps", []) as Array).size() == 3, "E50 hat drei Signallampen (2 Verkleidung, 1 Tür)")
+		ok(l._lamp_mat != null and not l._lamp_mat.emission_enabled, "Signallampen aus, solange die Maschine aus ist")
+	var dummy := Node3D.new()
+	root.add_child(dummy)
+	l.interact(dummy)
+	ok(not l.operating, "Ausgeschaltet lässt sich die Maschine nicht bedienen")
+	var targets: Array = l.get_children().filter(func(c): return "off_switch" in c)
+	ok(targets.size() == 2, "Ein-Knopf und Not-Aus haben Interaktionsziele")
+	var on_btn = targets.filter(func(c): return not c.off_switch)[0]
+	on_btn.interact(dummy)
+	ok(l.powered and l.booting > 0.0 and not l.is_ready(), "Grüner Knopf fährt hoch")
+	if l._lamp_mat:
+		ok(l._lamp_mat.emission_enabled, "Signallampen leuchten nach dem Einschalten")
+		ok(l._lamp_lights.size() == 3 and l._lamp_lights.all(func(s): return s.visible), "Lampen beleuchten den Arbeitsraum")
+	l._process(l.BOOT_TIME + 0.1)
+	ok(l.is_ready() and l.screen.visible and l.screen.process_mode == Node.PROCESS_MODE_INHERIT, "Nach dem Hochfahren ist die Steuerung bereit")
+	l.spindle_on = true
+	l.power_off()
+	ok(not l.powered and not l.spindle_on and not l.screen.visible, "Herunterfahren stoppt Spindel und Bildschirm")
+	if l._lamp_mat:
+		ok(not l._lamp_mat.emission_enabled, "Signallampen gehen beim Herunterfahren aus")
+		ok(not l._lamp_lights.any(func(s): return s.visible), "Lampenlicht aus beim Herunterfahren")
+	dummy.free()
+	l.power_on(true)
 	l.new_workpiece(60.0, 160.0)
 
 	# --- Drehrichtung: Oberfläche an der Schneide (Bedienerseite +Z) läuft nach unten
@@ -114,11 +143,11 @@ func _initialize() -> void:
 	# Linksmeißel: Schaft schließt zur Reitstockseite mit der Platte ab
 	var sp2: Vector2 = l._shank_span(LatheTools.get_tool(LatheTools.index_of("T2")))
 	ok(is_equal_approx(sp2.y, float(LatheTools.get_tool(LatheTools.index_of("T2"))["zmax"])), "T2-Schaft bündig zur Reitstockseite")
-	# Stechschwert: Platte sitzt außen am Blockhalter (L2 ~110 mm), weggedreht reicht die Spitze
-	# bis etwa 110 mm unter die Kopfachse -> bei X Ø80 trifft es das Ø60-Teil, bei Ø120 frei
+	# Stechschwert: Platte sitzt außen am Blockhalter (L2 ~150 mm, Werkzeuge vergrößert), weggedreht reicht die Spitze
+	# bis etwa 150 mm unter die Kopfachse -> bei X Ø80 trifft es das Ø60-Teil, bei Ø170 frei
 	ok(l.slot_status(1)["level"] != 0, "Platz 2 (Stechschwert) bei X Ø80 über dem Ø60-Teil: %s" % l.slot_status(1)["text"])
-	l.tool_x = 60.0
-	ok(l.slot_status(1)["level"] == 0, "Platz 2 bei X Ø120 über dem Ø60-Teil frei: %s" % l.slot_status(1)["text"])
+	l.tool_x = 85.0
+	ok(l.slot_status(1)["level"] == 0, "Platz 2 bei X Ø170 über dem Ø60-Teil frei: %s" % l.slot_status(1)["text"])
 	# vorgedrehtes Teil: Ø60 bis Z 60, danach Ø38
 	for i in l.profile.size():
 		if i * l.SEG >= 60.0:
@@ -251,6 +280,7 @@ func _initialize() -> void:
 	var state: Dictionary = l.get_state()
 	var l2 = load("res://scripts/machine/lathe.gd").new()
 	root.add_child(l2)
+	l2.power_on(true)
 	await process_frame
 	l2.set_state(state)
 	ok(l2.holder == l.holder and l2.active_slot == 2, "Halterbestückung geladen %s" % str(l2.holder))
@@ -374,6 +404,34 @@ func _initialize() -> void:
 	l2.set_view("back")
 	ok(not l2._panel_view, "Pultansicht verlassen")
 	l2.operating = false
+
+	# --- E50: Späneförderer trägt die Wanne in die große Spänekiste, Kiste tauschen
+	if l2.e50:
+		l2.power_on(true)
+		ok(l2._bin_fill != null and is_equal_approx(l2.chip_bin.capacity, float(ChipBin.SIZES["bin_l"]["kg"])), "E50 hat den großen Spänebehälter unter dem Förderer")
+		l2.tray.clear()
+		l2.chip_bin.clear()
+		l2.conveyor_on = true
+		l2.tray.add("baustahl", 4.0)
+		l2._physics_process(0.016)
+		ok(l2.tray.is_empty() and is_equal_approx(l2.chip_bin.kg, 4.0), "Laufender Förderer leert die Wanne in die Kiste")
+		ok(l2._bin_fill.visible, "Späne in der Kiste sichtbar")
+		l2.set_conveyor(false)
+		l2.tray.add("baustahl", 2.0)
+		l2._physics_process(0.016)
+		ok(is_equal_approx(l2.tray.kg, 2.0) and is_equal_approx(l2.chip_bin.kg, 4.0), "Förderer aus: Späne bleiben in der Wanne")
+		var empty := ChipTray.new(l2.chip_bin.capacity)
+		var full: ChipTray = l2.swap_chip_bin(empty)
+		ok(is_equal_approx(full.kg, 4.0) and l2.chip_bin == empty and not l2._bin_fill.visible, "Kiste gewechselt: volle raus, leere drunter")
+		l2.set_conveyor(true)
+		l2._physics_process(0.016)
+		ok(is_equal_approx(l2.chip_bin.kg, 2.0) and l2.tray.is_empty(), "Förderer wieder an: Rest landet in der neuen Kiste")
+		var cst: Dictionary = l2.get_state()
+		l2.chip_bin.clear()
+		l2.conveyor_on = true
+		cst["conveyor"] = false
+		l2.set_state(cst)
+		ok(is_equal_approx(l2.chip_bin.kg, 2.0) and not l2.conveyor_on, "Kiste und Förderer werden gespeichert")
 
 	print("CHECKS %d FAILS %d" % [checks, fails])
 	quit()

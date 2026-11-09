@@ -23,11 +23,12 @@ var _result: Label
 
 
 func _ready() -> void:
-	add_theme_constant_override("separation", 12)
-	_money = Label.new()
-	_money.add_theme_font_size_override("font_size", 16)
-	_money.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+	add_theme_constant_override("separation", 10)
+	_money = UITheme.money_label()
+	_money.visible = false            # die Kasse steht in der Kopfzeile des PCs
 	add_child(_money)
+	add_child(UITheme.note("Maschinen der Werkstatt. Gekauftes wird im Baumodus (Taste B) aufgestellt." if machines
+		else "Ausstattung für Werkstatt und Lager. Gekauftes wird im Baumodus (Taste B) aufgestellt."))
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -44,14 +45,8 @@ func _ready() -> void:
 				grid.add_child(_card(id, Layout.SPECS[id]["title"], text))
 	else:
 		_fill_items(grid)
-	_result = Label.new()
-	_result.add_theme_font_size_override("font_size", 15)
+	_result = UITheme.note("", 15, UITheme.TEXT)
 	add_child(_result)
-	var hint := Label.new()
-	hint.text = "Aufstellen: Taste B außerhalb des PCs."
-	hint.add_theme_font_size_override("font_size", 14)
-	hint.add_theme_color_override("font_color", UITheme.MUTED)
-	add_child(hint)
 	refresh()
 
 
@@ -64,29 +59,28 @@ func _fill_items(grid: GridContainer) -> void:
 		grid.add_child(_card(id, c["title"], "Für Fertigschnitte und abgesägte Teile, neben der Werkbank. Innen %d x %d x %d mm, bis %d Teile." % [int(c["l"]), int(c["w"]), int(c["h"]), int(c["max"])]))
 	for id in ChipBin.SIZES:
 		grid.add_child(_card(id, ChipBin.SIZES[id]["title"], "Trägt die Späne von der Spänewanne zum Container im Hof. Fasst %d kg." % int(ChipBin.SIZES[id]["kg"])))
+	for id in Shelf.SIZES:
+		if not Shelf.in_shop(id):
+			continue
+		var f: Vector2 = Shelf.SIZES[id]["foot"]
+		var text := str(Shelf.SIZES[id].get("text", "Steckregal mit sechs OSB-Böden, steht frei in der Werkstatt."))
+		grid.add_child(_card(id, Shelf.SIZES[id]["title"], "%s %d x %d cm, %.1f m hoch." % [text, int(f.x * 100), int(f.y * 100), float(Shelf.SIZES[id]["height"])]))
 
 
 func _card(id: String, title: String, text: String) -> Control:
-	var card := PanelContainer.new()
-	card.custom_minimum_size.x = 370
-	card.add_theme_stylebox_override("panel", UITheme.sb(Color(0.1, 0.11, 0.12), Color(0.24, 0.26, 0.29)))
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 6)
-	card.add_child(v)
-	var t := UITheme.title(title, 20)
-	t.add_theme_color_override("font_color", UITheme.ACCENT)
-	v.add_child(t)
-	var d := Label.new()
-	d.text = text
-	d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	d.add_theme_font_size_override("font_size", 14)
-	d.add_theme_color_override("font_color", UITheme.MUTED)
+	var card := UITheme.card(v, 370)
+	v.add_child(UITheme.title(title, 20))
+	var d := UITheme.note(text, 14)
+	d.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	v.add_child(d)
-	var info := Label.new()
-	info.add_theme_font_size_override("font_size", 14)
+	v.add_child(HSeparator.new())
+	var info := UITheme.note("", 14, UITheme.TEXT)
 	v.add_child(info)
 	_info[id] = info
-	var b := UITheme.button("Kaufen", _buy.bind(id), 200)
+	var b := UITheme.primary(UITheme.small_button("Kaufen", _buy.bind(id), 200))
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.add_child(b)
 	buttons[id] = b
 	return card
@@ -95,7 +89,7 @@ func _card(id: String, title: String, text: String) -> Control:
 func _buy(id: String) -> void:
 	var err: String = shop.buy_equipment(id)
 	_result.text = "Gekauft. Mit Taste B aufstellen." if err == "" else err
-	_result.add_theme_color_override("font_color", Color(0.5, 0.9, 0.5) if err == "" else Color(1.0, 0.45, 0.35))
+	_result.add_theme_color_override("font_color", UITheme.GOOD if err == "" else UITheme.BAD)
 	refresh()
 
 
@@ -116,7 +110,8 @@ func refresh() -> void:
 		if locked:
 			_info[id].text = "Im Skilltree freischalten: %s" % Skills.title_of(skill)
 		else:
-			_info[id].text = "Nicht aufgestellt: %d" % waiting if waiting > 0 else ("Steht in der Werkstatt" if owned else "")
+			_info[id].text = "Nicht aufgestellt: %d" % waiting if waiting > 0 else ("Steht in der Werkstatt" if owned else "Verfügbar")
+		_info[id].add_theme_color_override("font_color", UITheme.WARN if locked else (UITheme.GOOD if owned or waiting > 0 else UITheme.MUTED))
 		if locked:
 			b.text = "Gesperrt"
 		elif owned:

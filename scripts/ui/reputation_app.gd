@@ -12,28 +12,24 @@ var _log: VBoxContainer
 
 
 func _ready() -> void:
-	add_theme_constant_override("separation", 10)
+	add_theme_constant_override("separation", 14)
+	# Stand: große Zahl, Balken, Wirkung auf die Vergütung
+	var top := VBoxContainer.new()
+	top.add_theme_constant_override("separation", 8)
+	add_child(UITheme.card(top, 0.0, true))
 	_value = UITheme.title("", 28)
-	_value.add_theme_color_override("font_color", UITheme.ACCENT)
-	add_child(_value)
+	top.add_child(_value)
 	_bar = ProgressBar.new()
 	_bar.max_value = 100.0
 	_bar.show_percentage = false
-	_bar.custom_minimum_size.y = 16
-	add_child(_bar)
-	_effect = Label.new()
-	_effect.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_effect.add_theme_font_size_override("font_size", 16)
-	add_child(_effect)
-	var note := Label.new()
-	note.text = "Erfolgreich abgeschlossene Aufträge erhöhen das Ansehen, verpasste Fristen und Ausschuss senken es."
-	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.add_theme_font_size_override("font_size", 14)
-	note.add_theme_color_override("font_color", UITheme.MUTED)
-	add_child(note)
+	_bar.custom_minimum_size.y = 10
+	top.add_child(_bar)
+	_effect = UITheme.note("", 16, UITheme.TEXT)
+	top.add_child(_effect)
+	top.add_child(UITheme.note("Erfolgreich abgeschlossene Aufträge erhöhen das Ansehen, verpasste Fristen und Ausschuss senken es.", 13))
 	var h := HBoxContainer.new()
 	h.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	h.add_theme_constant_override("separation", 16)
+	h.add_theme_constant_override("separation", 14)
 	add_child(h)
 	_due = _column(h, "Laufende Fristen")
 	_log = _column(h, "Zuletzt")
@@ -42,12 +38,11 @@ func _ready() -> void:
 
 func _column(parent: Control, title: String) -> VBoxContainer:
 	var v := VBoxContainer.new()
-	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	v.add_theme_constant_override("separation", 6)
-	parent.add_child(v)
-	var t := UITheme.title(title, 20)
-	t.add_theme_color_override("font_color", UITheme.ACCENT)
-	v.add_child(t)
+	v.add_theme_constant_override("separation", 8)
+	var card := UITheme.card(v)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(card)
+	v.add_child(UITheme.section(title))
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -90,4 +85,4 @@ func refresh() -> void:
 	for i in range(co.rep_log.size() - 1, -1, -1):
 		var e: Dictionary = co.rep_log[i]
 		var d := int(e["change"])
-		_line(_log, "Tag %d: %+d  %s" % [int(e["day"]), d, str(e["text"])], Color(0.5, 0.9, 0.5) if d > 0 else Color(1.0, 0.5, 0.4))
+		_line(_log, "Tag %d: %+d  %s" % [int(e["day"]), d, str(e["text"])], UITheme.GOOD if d > 0 else Color(1.0, 0.5, 0.4))

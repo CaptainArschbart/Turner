@@ -17,6 +17,8 @@ func aim(p, from: Vector3, target: Vector3) -> void:
 	p.pitch = atan2(d.y, Vector2(d.x, d.z).length())
 	for i in 6:
 		await physics_frame
+func get_root_drops() -> Array:
+	return get_nodes_in_group("dropped_item")
 ## Linksklick auf das anvisierte Ziel. Headless lässt sich die Maus nicht fangen, deshalb direkt.
 func click(p) -> void:
 	p.click_focus()
@@ -164,5 +166,76 @@ func _initialize() -> void:
 	m.stop_operating()
 	ok(p._hand.visible, "Hand danach wieder sichtbar")
 	p.clear_held()
+
+	# Drehmaschine: Werkzeuge liegen auf der Platte
+	lb.refresh()
+	var t5 := -1
+	for h in lb.holders:
+		var hid: String = l.tool_stock.holder_id(h.index)
+		if hid != "" and not l.has_tool(hid):
+			t5 = h.index
+			break
+	var tid: String = l.tool_stock.holder_id(t5) if t5 >= 0 else ""
+	ok(lb.on_top and not mb.on_top, "Nur die Drehmaschine legt auf die Platte")
+	ok(t5 >= 0 and lb.holders[t5].model != null, "Ein Drehwerkzeug liegt auf der Werkbank")
+	if t5 >= 0:
+		var tb: AABB = Build.bounds(lb.holders[t5].model)
+		ok(tb.position.y >= lb.TOP_Y - 0.001, "%s liegt auf der Platte, nicht darunter" % tid)
+		var lstand: Vector3 = lb.to_global(Vector3(lb.holders[t5].at.x, 0, 0.75))
+		lstand.y = 0.05
+		await aim(p, lstand, lb.to_global(lb.holders[t5].at + Vector3(0, 0.035, 0)))
+		ok(p._focus == lb.holders[t5], "Platz auf der Platte lässt sich anvisieren")
+		click(p)
+		ok(p.held.get("id", "") == tid, "%s von der Werkbank genommen" % tid)
+
+	# Fallen lassen: Werkzeug
+	var drop_at: Vector3 = Vector3(3.0, 0.05, 3.0)
+	await aim(p, drop_at, drop_at + Vector3(0, 0.5, -3))
+	var dt = p.drop()
+	ok(dt != null and p.hands_free(), "Werkzeug fallen gelassen")
+	for i in 900:
+		await physics_frame
+		if i > 30 and dt != null and dt.resting:
+			break
+	ok(dt != null and dt.resting and Build.bounds(dt).position.y < 0.03, "Werkzeug liegt am Boden")
+	lb.refresh()
+	ok(lb.holder_of(tid) < 0, "Werkbank holt das liegende Werkzeug nicht zurück")
+	var other: int = lb.holder_of(tid)
+	ok(other < 0 or lb.holder_prompt(other).contains("liegt schon"), "Zweites Stück wird nicht genommen")
+	var saved_drop: Dictionary = JSON.parse_string(JSON.stringify(dt.get_state())) if dt != null else {}
+	if dt != null:
+		await aim(p, drop_at, dt.global_position)
+		ok(p._focus == dt, "Liegendes Werkzeug lässt sich anvisieren")
+		click(p)
+		ok(p.held.get("id", "") == tid and (not is_instance_valid(dt) or dt.is_queued_for_deletion()), "Werkzeug wieder aufgehoben")
+	p.clear_held()
+	await process_frame
+
+	# Fallen lassen: Stange in voller Länge, aufheben, Speichern
+	var bar := {"material": "S235", "kind": "round", "d": 60.0, "w": 0.0, "h": 0.0, "l": 2000.0}
+	p.set_carry(bar)
+	await aim(p, drop_at, drop_at + Vector3(0, 0.5, -3))
+	var db = p.drop()
+	ok(db != null and p.carry.is_empty(), "Stange fallen gelassen")
+	for i in 900:
+		await physics_frame
+		if i > 30 and db.resting:
+			break
+	var bb: AABB = Build.bounds(db)
+	ok(db.resting and (bb.size.x > 1.9 or bb.size.z > 1.9), "Stange liegt in voller Länge")
+	ok(absf(db.global_position.y - 0.03) < 0.006, "Stange liegt auf dem Boden, nicht darin")
+	var gs: Array = get_root_drops()
+	ok(gs.size() == 1, "Ein Gegenstand liegt herum")
+	await aim(p, drop_at, db.global_position)
+	click(p)
+	ok(str(p.carry.get("kind", "")) == "round" and float(p.carry["l"]) == 2000.0, "Stange wieder aufgehoben")
+	p.clear_carry()
+	await process_frame
+
+	# Laden: liegendes Werkzeug ist wieder da
+	w._apply_pending({"player": p.get_state(), "mill": m.get_state(), "lathe": l.get_state(), "name": "T", "dropped": [saved_drop]})
+	await process_frame
+	gs = get_root_drops()
+	ok(gs.size() == 1 and gs[0].is_tool(), "Liegendes Werkzeug geladen")
 	print("CHECKS %d FAILS %d" % [checks, fails])
 	quit()

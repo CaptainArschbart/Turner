@@ -50,6 +50,8 @@ func nc_start(p: Dictionary) -> bool:
 		return _refuse("Not-Halt aktiv - erst quittieren.")
 	if not lathe.door_closed():
 		return _refuse("Schutztür offen - Zyklusstart nur bei geschlossener Tür.")
+	if not lathe.guard_closed():
+		return _refuse("Futterschutz offen - Zyklusstart nur bei geschlossenem Futterschutz.")
 	if state == "hold":
 		state = "run"
 		hold_reason = ""
@@ -137,11 +139,11 @@ func step(delta: float) -> void:
 	if lathe.estop:
 		_fail("Not-Halt - Programm abgebrochen.")
 		return
-	if not lathe.door_closed():
+	if not lathe.door_closed() or not lathe.guard_closed():
 		if state == "run":
 			state = "hold"
-			hold_reason = "Schutztür offen"
-			lathe._warn("Schutztür geöffnet - Vorschub und Spindel gestoppt.")
+			hold_reason = "Schutztür offen" if not lathe.door_closed() else "Futterschutz offen"
+			lathe._warn("%s - Vorschub und Spindel gestoppt." % hold_reason)
 		lathe.spindle_on = false
 		return
 	if state != "run":

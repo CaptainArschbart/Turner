@@ -1,17 +1,23 @@
 class_name ClampDialog
 extends CanvasLayer
-## Kleines Fenster beim Einspannen: Spanntiefe angeben. Linksklick spannt normal, Rechtsklick andersherum.
+## Fenster beim Einspannen und für das eingespannte Teil. Mit Material in der Hand: Spanntiefe angeben und
+## einspannen (Rechtsklick spannt andersherum). Mit freien Händen auf dem Teil: ausspannen, umspannen oder
+## nur die Spanntiefe ändern.
 
 const LATHE_DEPTH := 8.0          # voreingestellte Spanntiefe im Futter (mm), Aufträge lassen 10 mm frei
 
-## Spielwelt: player, finish_clamp(machine, flip, depth), clamp_limit(machine)
+## Spielwelt: player, finish_clamp(machine, flip, depth), clamp_limit(machine), unclamp_part(machine)
 var world: Node
 var machine: Node
 var flip := false
+var clamped := false              # Teil sitzt schon in der Maschine, die Hände sind frei
 var spin: SpinBox
 var _title: Label
 var _info: Label
 var _error: Label
+var _confirm: Button
+var _turn: Button
+var _out: Button
 var _pitch := 0.0
 
 
@@ -29,7 +35,7 @@ func _ready() -> void:
 	center.add_child(panel)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)
-	v.custom_minimum_size = Vector2(460, 0)
+	v.custom_minimum_size = Vector2(520, 0)
 	panel.add_child(v)
 	_title = UITheme.title("Einspannen")
 	_title.add_theme_color_override("font_color", UITheme.ACCENT)
@@ -57,8 +63,13 @@ func _ready() -> void:
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 10)
 	v.add_child(buttons)
-	buttons.add_child(UITheme.button("Einspannen", confirm, 220))
-	buttons.add_child(UITheme.button("Abbrechen", close, 180))
+	_confirm = UITheme.button("Einspannen", confirm, 200)
+	buttons.add_child(_confirm)
+	_turn = UITheme.button("Umspannen", turn_over, 160)
+	buttons.add_child(_turn)
+	_out = UITheme.button("Ausspannen", take_out, 160)
+	buttons.add_child(_out)
+	buttons.add_child(UITheme.button("Abbrechen", close, 140))
 
 
 func open(m: Node, turned: bool) -> void:
@@ -67,18 +78,30 @@ func open(m: Node, turned: bool) -> void:
 		return
 	machine = m
 	flip = turned
+	clamped = player.carry.is_empty() and m.get("has_part") == true
 	var limit: Vector2 = world.clamp_limit(m)
 	spin.min_value = limit.x
 	spin.max_value = limit.y
 	var is_lathe: bool = m is Lathe
-	spin.set_value_no_signal(clampf(LATHE_DEPTH if is_lathe else limit.y * 0.5, limit.x, limit.y))
-	if is_lathe:
+	var start: float = LATHE_DEPTH if is_lathe else limit.y * 0.5
+	if clamped and float(m.get("clamp_depth")) >= 0.0:
+		start = float(m.get("clamp_depth"))
+	spin.set_value_no_signal(clampf(start, limit.x, limit.y))
+	_turn.visible = clamped
+	_out.visible = clamped
+	if clamped:
+		_title.text = "Eingespanntes Teil"
+		_confirm.text = "Umgedreht spannen" if flip else "Spanntiefe ändern"
+		_info.text = "Ausspannen: Das Teil kommt in die Hände, zum Abgeben im Qualitätsmanagement oder zum Ablegen in einer Kiste.\nUmspannen: Das Teil umdrehen und mit der eingestellten Spanntiefe neu spannen."
+	elif is_lathe:
 		_title.text = "Umgedreht einspannen" if flip else "Einspannen"
+		_confirm.text = "Einspannen"
 		_info.text = "So viele Millimeter stecken im Futter. Dort kommt der Meißel nicht hin."
 		if flip:
 			_info.text += " Das andere Ende zeigt nach außen, gespannt wird auf der schon gedrehten Seite."
 	else:
 		_title.text = "Kopfüber einspannen" if flip else "Einspannen"
+		_confirm.text = "Einspannen"
 		_info.text = "So viele Millimeter stecken zwischen den Backen. Tiefer lässt sich neben dem Teil nicht fräsen."
 		if flip:
 			_info.text += " Die Unterseite zeigt nach oben."
@@ -97,14 +120,36 @@ func close() -> void:
 	player.pitch = _pitch
 
 
-func confirm() -> void:
+func _depth() -> float:
 	if spin.get_line_edit().has_focus():
 		spin.apply()
+	return spin.value
+
+
+## Einspannen bzw. mit der neuen Spanntiefe neu spannen, in der Lage, mit der das Fenster geöffnet wurde.
+func confirm() -> void:
+	_finish(flip)
+
+
+## Teil umdrehen und neu spannen.
+func turn_over() -> void:
+	_finish(true)
+
+
+func _finish(turned: bool) -> void:
 	var keep := machine
-	var depth := spin.value
-	var turned := flip
+	var depth := _depth()
 	close()
 	var err: String = world.finish_clamp(keep, turned, depth)
+	if err != "":
+		world.hud.show_message(err, Color(1, 0.75, 0.2))
+
+
+## Teil aus der Maschine in die Hände nehmen.
+func take_out() -> void:
+	var keep := machine
+	close()
+	var err: String = world.unclamp_part(keep)
 	if err != "":
 		world.hud.show_message(err, Color(1, 0.75, 0.2))
 

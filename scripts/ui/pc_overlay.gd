@@ -2,7 +2,7 @@ class_name PCOverlay
 extends CanvasLayer
 ## Oberfläche des Büro-PCs: Beim Öffnen zeigt er den Desktop mit den Programmen. Der Shop verkauft
 ## Maschinen, Werkzeuge, Rohmaterial, Gebäude und Einkauf. Dazu kommen die Aufträge, der Skilltree, die
-## Maschinenübersicht, das Ansehen, das Lager und die Entsorgung. Oben lässt sich der Tag beenden.
+## Maschinenübersicht, das Ansehen, das Lager und die Entsorgung. Den Tagesbericht gibt es am Whiteboard im Büro.
 
 signal closed
 
@@ -24,8 +24,6 @@ var reputation_app: ReputationApp
 var dev_app: DevApp
 var dev_win: Control
 var dev_icon: Button
-var day_app: DayApp
-var day_win: Control
 var desktop: Control
 var shop_win: Control
 var skill_win: Control
@@ -57,14 +55,6 @@ class ProgramIcon extends Control:
 			draw_polyline(PackedVector2Array([c + Vector2(-14, -24), c + Vector2(-36, 0), c + Vector2(-14, 24)]), d, 6.0, true)
 			draw_polyline(PackedVector2Array([c + Vector2(14, -24), c + Vector2(36, 0), c + Vector2(14, 24)]), d, 6.0, true)
 			draw_line(c + Vector2(8, -28), c + Vector2(-8, 28), d, 5.0, true)
-		elif kind == "day":
-			# Kalenderblatt
-			var page := Color(0.9, 0.92, 0.95)
-			draw_rect(Rect2(c + Vector2(-34, -30), Vector2(68, 66)), page)
-			draw_rect(Rect2(c + Vector2(-34, -36), Vector2(68, 16)), Color(0.85, 0.3, 0.25))
-			for row in 3:
-				for col in 4:
-					draw_rect(Rect2(c + Vector2(-26 + col * 14, -12 + row * 14), Vector2(9, 9)), Color(0.35, 0.4, 0.48))
 		elif kind == "stock":
 			# Regal mit Stangen
 			var s := Color(0.6, 0.7, 0.85)
@@ -128,6 +118,28 @@ class ProgramIcon extends Control:
 				draw_circle(p, 6.5, g)
 
 
+## Programme auf dem Desktop: Titel und kurze Beschreibung, dazu die Gruppen.
+const PROGRAMS := {
+	"jobs": {"title": "Aufträge", "sub": "Angebote ansehen und annehmen"},
+	"reputation": {"title": "Ansehen", "sub": "Ruf, Fristen und Vergütung"},
+	"stock": {"title": "Lager", "sub": "Was in den Regalen liegt"},
+	"waste": {"title": "Entsorgung", "sub": "Spänecontainer abholen lassen"},
+	"shop": {"title": "Shop", "sub": "Maschinen, Werkzeuge, Material, Gebäude"},
+	"skills": {"title": "Skilltree", "sub": "Maschinen, Werkstoffe, Werkzeuge"},
+	"overview": {"title": "Maschinenübersicht", "sub": "Alle Maschinen im Spiel"},
+	"dev": {"title": "Entwickler", "sub": "Alle Aufträge prüfen (Testmodus)"},
+}
+const GROUPS := [
+	{"title": "Tagesgeschäft", "ids": ["jobs", "reputation", "stock", "waste"]},
+	{"title": "Werkstatt ausbauen", "ids": ["shop", "skills", "overview", "dev"]},
+]
+
+var _crumb: Label
+var _money: Label
+var _clock: Label
+var _footer: Label
+
+
 func _ready() -> void:
 	layer = 15
 	visible = false
@@ -136,30 +148,47 @@ func _ready() -> void:
 	root.theme = UITheme.build()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(root)
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.75)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(dim)
+	root.add_child(UITheme.backdrop())
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(center)
 
 	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", UITheme.window_style())
 	center.add_child(panel)
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 12)
+	v.add_theme_constant_override("separation", 14)
 	panel.add_child(v)
 
+	# Kopfzeile: Brotkrume und Titel links, rechts Kasse und Uhr, dann die Knöpfe
 	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 10)
+	head.add_theme_constant_override("separation", 14)
 	v.add_child(head)
-	_title = UITheme.title("Werkstatt-PC")
-	_title.add_theme_color_override("font_color", UITheme.ACCENT)
-	_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(_title)
-	_back = UITheme.button("Zum Desktop", show_desktop, 180)
+	var wh := UITheme.window_head("Werkstatt-PC", "Büro")
+	_title = wh["title"]
+	_crumb = wh["crumb"]
+	head.add_child(wh["box"])
+	var info := VBoxContainer.new()
+	info.alignment = BoxContainer.ALIGNMENT_END
+	info.add_theme_constant_override("separation", 2)
+	head.add_child(info)
+	_money = UITheme.money_label(18)
+	_money.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	info.add_child(_money)
+	_clock = UITheme.note("", 14)
+	_clock.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_clock.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	info.add_child(_clock)
+	var gap := Control.new()
+	gap.custom_minimum_size.x = 8
+	head.add_child(gap)
+	_back = UITheme.button("‹  Desktop", show_desktop, 150)
+	_back.size_flags_vertical = Control.SIZE_SHRINK_END
 	head.add_child(_back)
-	head.add_child(UITheme.button("PC verlassen", close, 180))
+	var leave := UITheme.button("PC verlassen", close, 170)
+	leave.size_flags_vertical = Control.SIZE_SHRINK_END
+	head.add_child(leave)
+	v.add_child(HSeparator.new())
 
 	desktop = _build_desktop()
 	v.add_child(desktop)
@@ -189,11 +218,6 @@ func _ready() -> void:
 	dev_app.custom_minimum_size = SIZE
 	dev_win = dev_app
 	v.add_child(dev_app)
-
-	day_app = DayApp.new()
-	day_app.custom_minimum_size = SIZE
-	day_win = day_app
-	v.add_child(day_app)
 
 	stock_view = StockView.new()
 	stock_view.custom_minimum_size = SIZE
@@ -226,53 +250,56 @@ func _ready() -> void:
 	reputation_app.custom_minimum_size = SIZE
 	reputation_win = reputation_app
 	v.add_child(reputation_app)
+
+	_footer = UITheme.key_hint("")
+	v.add_child(_footer)
 	show_desktop()
 
 
+## Desktop: Programme in zwei Gruppen, Tagesgeschäft und Ausbau der Werkstatt.
 func _build_desktop() -> Control:
-	var d := PanelContainer.new()
+	var d := VBoxContainer.new()
 	d.custom_minimum_size = SIZE
-	d.add_theme_stylebox_override("panel", UITheme.sb(Color(0.09, 0.2, 0.3), Color(0.2, 0.32, 0.42), 1, 4))
-	var h := GridContainer.new()
-	h.columns = 5
-	h.add_theme_constant_override("h_separation", 10)
-	h.add_theme_constant_override("v_separation", 10)
-	d.add_child(h)
-	h.add_child(_desktop_icon("shop", "Shop", "Maschinen, Werkzeuge,\nMaterial, Gebäude"))
-	h.add_child(_desktop_icon("jobs", "Aufträge", "Angebote ansehen\nund annehmen"))
-	h.add_child(_desktop_icon("skills", "Skilltree", "Maschinen, Werkstoffe\nund Werkzeuge"))
-	h.add_child(_desktop_icon("overview", "Maschinen", "Alle Maschinen, die es\nim Spiel gibt"))
-	h.add_child(_desktop_icon("reputation", "Ansehen", "Ruf der Werkstatt,\nFristen, Vergütung"))
-	dev_icon = _desktop_icon("dev", "Entwickler", "Alle Aufträge prüfen,\nnur im Testmodus")
-	h.add_child(dev_icon)
-	h.add_child(_desktop_icon("day", "Tagesbericht", "Tag starten und beenden,\nGewinn und Verlust"))
-	h.add_child(_desktop_icon("stock", "Lager", "Was in den Regalen\nliegt und wo"))
-	h.add_child(_desktop_icon("waste", "Entsorgung", "Spänecontainer im Hof\nabholen lassen"))
+	d.add_theme_constant_override("separation", 12)
+	for g in GROUPS:
+		d.add_child(UITheme.section(g["title"]))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		d.add_child(row)
+		for kind in g["ids"]:
+			var b := _desktop_icon(kind, PROGRAMS[kind]["title"], PROGRAMS[kind]["sub"])
+			row.add_child(b)
+			if kind == "dev":
+				dev_icon = b
+		var sp := Control.new()
+		sp.custom_minimum_size.y = 6
+		d.add_child(sp)
 	return d
 
 
 func _desktop_icon(kind: String, title: String, text: String) -> Button:
 	var b := Button.new()
 	b.name = "Programm_%s" % kind
-	b.custom_minimum_size = Vector2(222, 210)
-	b.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	b.custom_minimum_size = Vector2(0, 236)
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b.focus_mode = Control.FOCUS_NONE
-	b.flat = false
-	var clear := UITheme.sb(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.1), 1, 8)
-	b.add_theme_stylebox_override("normal", clear)
-	b.add_theme_stylebox_override("hover", UITheme.sb(Color(1, 1, 1, 0.14), UITheme.ACCENT, 2, 8))
-	b.add_theme_stylebox_override("pressed", UITheme.sb(Color(1, 1, 1, 0.2), UITheme.ACCENT, 2, 8))
+	b.add_theme_stylebox_override("normal", UITheme.card_style())
+	b.add_theme_stylebox_override("hover", UITheme.card_style(true))
+	var pressed := UITheme.card_style(true)
+	pressed.bg_color = Color(UITheme.BLUE, 0.35)
+	b.add_theme_stylebox_override("pressed", pressed)
 	b.pressed.connect(open_program.bind(kind))
 	var v := VBoxContainer.new()
 	v.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_theme_constant_override("separation", 6)
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	b.add_child(v)
 	var icon := ProgramIcon.new()
 	icon.kind = kind
 	icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	v.add_child(icon)
-	var t := UITheme.title(title, 24)
+	var t := UITheme.title(title, 22)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	t.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(t)
@@ -310,11 +337,12 @@ func show_desktop() -> void:
 	overview_win.visible = false
 	reputation_win.visible = false
 	stock_win.visible = false
-	day_win.visible = false
 	dev_win.visible = false
 	waste_win.visible = false
 	_back.visible = false
 	_title.text = "Werkstatt-PC"
+	_crumb.text = "BÜRO"
+	_update_footer()
 
 
 ## Programm vom Desktop starten.
@@ -327,18 +355,26 @@ func open_program(kind: String) -> void:
 	overview_win.visible = kind == "overview"
 	reputation_win.visible = kind == "reputation"
 	stock_win.visible = kind == "stock"
-	day_win.visible = kind == "day"
 	dev_win.visible = kind == "dev"
 	waste_win.visible = kind == "waste"
 	_back.visible = true
-	_title.text = {"shop": "Shop", "jobs": "Aufträge", "skills": "Skilltree", "overview": "Maschinenübersicht", "reputation": "Ansehen", "stock": "Lager", "waste": "Entsorgung", "day": "Tagesbericht", "dev": "Entwickler"}[kind]
+	_title.text = str(PROGRAMS[kind]["title"])
+	_crumb.text = "WERKSTATT-PC"
+	_update_footer()
 	refresh_all()
+
+
+func _update_footer() -> void:
+	var e := Settings.binding_text("interact")
+	if program != "":
+		_footer.text = "Esc  ·  zurück zum Desktop          %s  ·  PC verlassen" % e
+	else:
+		_footer.text = "Esc / %s  ·  PC verlassen" % e
 
 
 func refresh_all() -> void:
 	raw.refresh()
 	stock_view.refresh()
-	day_app.refresh()
 	# Das Entwicklerprogramm gibt es nur im Testmodus
 	var dev_on: bool = world != null and world.free_mode
 	dev_icon.visible = dev_on
@@ -353,6 +389,24 @@ func refresh_all() -> void:
 	waste_tab.refresh()
 	skill_app.refresh()
 	reputation_app.refresh()
+	_update_head()
+
+
+## Kasse und Uhrzeit in der Kopfzeile.
+func _update_head() -> void:
+	if world == null:
+		_money.text = ""
+		_clock.text = ""
+		return
+	_money.text = "Werkstattkasse  %d EUR" % int(world.money)
+	if world.free_mode:
+		_money.text += "   ·   TESTMODUS"
+	_clock.text = str(world.clock_text()) if world.has_method("clock_text") else ""
+
+
+func _process(_delta: float) -> void:
+	if visible:
+		_update_head()
 
 
 ## Lagerbestand hat sich geändert.
@@ -397,6 +451,10 @@ func _machine_cards() -> Array[Control]:
 	for m in MachineCatalog.MACHINES:
 		var box := VBoxContainer.new()
 		box.add_child(UITheme.title(m["title"], 22))
+		if m.has("model"):
+			var preview := ToolPreview.new()
+			preview.model_id = m["model"]
+			box.add_child(preview)
 		box.add_child(_text(m["desc"]))
 		if m.has("subs"):
 			for s in m["subs"]:
@@ -420,7 +478,8 @@ func _tool_cards() -> Array[Control]:
 
 func _sub_card(s: Dictionary) -> Control:
 	var box := VBoxContainer.new()
-	var l := UITheme.title(s["title"], 18)
+	box.add_theme_constant_override("separation", 6)
+	var l := UITheme.title(s["title"], 17)
 	l.add_theme_color_override("font_color", UITheme.ACCENT)
 	box.add_child(l)
 	if s.has("model"):
@@ -430,33 +489,22 @@ func _sub_card(s: Dictionary) -> Control:
 	box.add_child(_text(s["desc"]))
 	box.add_child(_status(str(s.get("owned", ""))))
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UITheme.sb(Color(0.13, 0.14, 0.16), Color(0.28, 0.3, 0.33)))
+	var st := UITheme.card_style()
+	st.bg_color = Color(1, 1, 1, 0.03)
+	card.add_theme_stylebox_override("panel", st)
 	card.add_child(box)
 	return card
 
 
 func _card(content: Control) -> Control:
-	var card := PanelContainer.new()
-	card.custom_minimum_size.x = CARD_W
-	card.add_theme_stylebox_override("panel", UITheme.sb(Color(0.1, 0.11, 0.12), Color(0.24, 0.26, 0.29)))
 	content.add_theme_constant_override("separation", 8)
-	card.add_child(content)
-	return card
+	return UITheme.card(content, CARD_W)
 
 
 func _text(t: String) -> Label:
-	var l := Label.new()
-	l.text = t
-	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	l.add_theme_font_size_override("font_size", 15)
-	l.add_theme_color_override("font_color", UITheme.MUTED)
-	return l
+	return UITheme.note(t, 14)
 
 
 func _status(owned: String) -> Label:
-	var l := Label.new()
-	l.text = "Im Spiel: %s" % owned if owned != "" else "Noch nicht bedienbar"
-	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	l.add_theme_font_size_override("font_size", 14)
-	l.add_theme_color_override("font_color", Color(0.5, 0.9, 0.5) if owned != "" else Color(0.45, 0.47, 0.5))
-	return l
+	return UITheme.note("Im Spiel: %s" % owned if owned != "" else "Noch nicht bedienbar", 14,
+		UITheme.GOOD if owned != "" else Color(1, 1, 1, 0.35))

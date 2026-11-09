@@ -37,7 +37,7 @@ var _sb_on: StyleBoxFlat
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	custom_minimum_size.x = panel_w
-	_sb_on = UITheme.sb(UITheme.ACCENT.darkened(0.35), UITheme.ACCENT, 2)
+	_sb_on = UITheme.sb(Color(UITheme.BLUE, 0.85), UITheme.BLUE_HI, 1, 3)
 	var tabs := TabContainer.new()
 	tabs.focus_mode = Control.FOCUS_NONE
 	tabs.get_tab_bar().focus_mode = Control.FOCUS_NONE
@@ -60,6 +60,7 @@ func _build_spindle_tab() -> Control:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 4)
 
+	v.add_child(_sec("Spindel"))
 	var row := HBoxContainer.new()
 	_spindle_btn = _button("Spindel START", func(): lathe.toggle_spindle())
 	_estop_btn = _button("NOT-HALT", func(): lathe.toggle_estop())
@@ -91,6 +92,7 @@ func _build_spindle_tab() -> Control:
 		v.add_child(r)
 		_css_rows.append(r)
 
+	v.add_child(_sec("Vorschub und Handrad"))
 	_feed = _slider_row("Vorschub", Lathe.FEED_MIN, Lathe.FEED_MAX, 0.01, false,
 		func(x): lathe.set_feed(x), func(d): lathe.set_feed(lathe.feed_set + 0.01 * d))
 	v.add_child(_feed["row"])
@@ -151,7 +153,7 @@ func _build_spindle_tab() -> Control:
 	v.add_child(fr)
 
 	_actual = _small_label("")
-	_actual.add_theme_color_override("font_color", Color(0.55, 0.95, 1.0))
+	_actual.add_theme_color_override("font_color", UITheme.VALUE)
 	v.add_child(_actual)
 
 	var pr := HBoxContainer.new()
@@ -188,7 +190,7 @@ func _build_holder_tab() -> Control:
 	_tool_desc = _small_label("")
 	_tool_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_tool_desc.custom_minimum_size.x = panel_w - 24.0
-	_tool_desc.add_theme_color_override("font_color", Color(0.95, 0.85, 0.55))
+	_tool_desc.add_theme_color_override("font_color", UITheme.WARN)
 	v.add_child(_tool_desc)
 	_offset_tbl = _small_label("")
 	_offset_tbl.add_theme_color_override("font_color", Color(0.55, 0.9, 1.0))
@@ -322,3 +324,10 @@ func _mark(b: Button, on: bool) -> void:
 		b.add_theme_stylebox_override("normal", _sb_on)
 	else:
 		b.remove_theme_stylebox_override("normal")
+
+
+## Kleiner Abschnittstitel im Pult.
+func _sec(text: String) -> Control:
+	var s := UITheme.section(text)
+	(s.get_child(1) as Label).add_theme_font_size_override("font_size", maxi(11, font_size - 2))
+	return s

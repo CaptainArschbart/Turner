@@ -52,6 +52,7 @@ func _initialize() -> void:
 	ok(o.program == "" and o.desktop.visible and not o.tabs.visible and not o.skill_app.visible, "PC startet auf dem Desktop")
 	for prog in ["shop", "jobs", "skills", "overview", "reputation", "stock", "waste"]:
 		ok(o.desktop.find_child("Programm_" + prog, true, false) != null, "Programm auf dem Desktop: " + prog)
+	ok(o.desktop.find_child("Programm_day", true, false) == null, "Der Tagesbericht hängt am Whiteboard, nicht am PC")
 	o.desktop.find_child("Programm_skills", true, false).pressed.emit()
 	ok(o.program == "skills" and o.skill_app.visible and not o.desktop.visible, "Skilltree öffnet")
 	var pe := InputEventAction.new()
@@ -329,11 +330,14 @@ func _initialize() -> void:
 	w.inventory["bench"] = 1
 	ok(w.place_bench("", Vector2(0.6, 0.35), 2) == "", "Werkbank steht")
 	ok(w.place_crate(-1, "crate_s", Vector2(11, 7), 0) != "", "Nur neben der Werkbank")
-	ok(w.place_crate(-1, "crate_s", Vector2(0.6, 0.35), 0) != "", "Nicht auf der Werkbank")
+	ok(w.layout.check_crate("crate_s", Vector2(0.6, 0.35), 0) == "", "Ganz auf der Werkbankplatte erlaubt")
+	ok(w.layout.check_crate("crate_s", Vector2(0.6, 0.0), 0) != "", "Halb über der Kante der Werkbank nicht")
 	ok(w.place_crate(-1, "crate_s", Vector2(-1.0, 0.4), 0) == "", "Neben der Werkbank erlaubt: " + w.layout.check_crate("crate_s", Vector2(-1.0, 0.4), 0))
 	ok(w.layout.crates[0]["bench"] == "lathe" and w.crate_nodes.size() == 1, "Kiste gehört zur Werkbank")
 	ok(w.place_crate(-1, "crate_m", Vector2(1.9, 0.4), 0) == "", "Zweite Kiste")
 	ok(w.place_crate(-1, "crate_s", Vector2(-1.5, 1.0), 0) != "", "Neben einer normalen Werkbank haben nur 2 Platz")
+	ok(w.place_crate(-1, "crate_s", Vector2(0.6, 0.35), 0) == "", "Auf der Platte zählt die Grenze nicht")
+	ok(w.layout.crate_is_on_top(w.layout.crates[2]) and is_equal_approx(w.crate_nodes[2].position.y, ToolBench.TOP_Y), "Kiste steht auf der Werkbank")
 	var piece := {"material": "S235", "kind": "cut", "d": 0.0, "w": 60.0, "h": 40.0, "l": 100.0}
 	var bar := {"material": "S235", "kind": "round", "d": 60.0, "w": 0.0, "h": 0.0, "l": 3000.0}
 	var sawn := {"material": "S235", "kind": "round", "d": 60.0, "w": 0.0, "h": 0.0, "l": 160.0, "sawn": true}
@@ -408,7 +412,8 @@ func _initialize() -> void:
 	ok(l.tray.is_full() and is_equal_approx(l.tray.kg, l.tray.capacity), "Wanne läuft nicht über")
 	await physics_frame
 	await physics_frame
-	ok(not l.spindle_on, "Volle Wanne stoppt die Spindel")
+	ok(l.spindle_on, "Volle Wanne stoppt die Spindel nicht")
+	l.spindle_on = false
 	l.spindle_speed = 0.0
 	# Behälter kaufen, aufstellen, tragen
 	ok(w.buy_equipment("bin_s") == "", "Spänebehälter gekauft")

@@ -3,10 +3,12 @@ extends Node3D
 ## Spänebehälter: Mit Linksklick nimmt man ihn auf, ein Klick auf die Maschine schaufelt die Spänewanne
 ## hinein, ein Klick auf einen Container im Hof leert ihn. Abgestellt wird er auf seinem Stellplatz.
 
-const FOOT := Vector2(0.8, 0.6)
+## Maße der Spänekiste in models/non_machine_parts.glb (Breite mit Kippseite, Höhe, Tiefe).
+const MODEL := Vector3(2.66, 1.68, 1.31)
+## scale: Faktor auf die Modellgröße, die Proportionen bleiben erhalten.
 const SIZES := {
-	"bin_s": {"title": "Spänebehälter klein", "price": 50, "kg": 25.0, "height": 0.55},
-	"bin_l": {"title": "Spänebehälter groß", "price": 120, "kg": 60.0, "height": 0.8},
+	"bin_s": {"title": "Spänebehälter klein", "price": 50, "kg": 25.0, "scale": 0.8},
+	"bin_l": {"title": "Spänebehälter groß", "price": 120, "kg": 60.0, "scale": 1.0},
 }
 
 ## Spielwelt: bin_prompt(index), bin_click(index)
@@ -17,33 +19,42 @@ var _body: Node3D
 var _fill: MeshInstance3D
 
 
+static func size_of(id: String) -> Vector3:
+	return MODEL * float(SIZES.get(id, SIZES["bin_s"])["scale"])
+
+
+## Stellfläche (Breite, Tiefe)
+static func foot(id: String) -> Vector2:
+	var s := size_of(id)
+	return Vector2(s.x, s.z)
+
+
+static func height(id: String) -> float:
+	return size_of(id).y
+
+
 func _ready() -> void:
-	var h := float(SIZES[size_id]["height"])
+	var s := size_of(size_id)
 	var yellow := Build.mat(Color(0.95, 0.72, 0.08), 0.6)
-	Build.box(self, Vector3(FOOT.x + 0.1, 0.005, FOOT.y + 0.1), Vector3(0, 0.003, 0), yellow)
-	_body = Node3D.new()
+	Build.box(self, Vector3(s.x + 0.1, 0.005, s.z + 0.1), Vector3(0, 0.003, 0), yellow)
+	# Spänekiste aus dem Modell in Originalproportionen. Die schräge Kippseite zeigt nach +X.
+	_body = Props.make("chip_box", s)
 	add_child(_body)
-	var steel := Build.mat(Color(0.24, 0.3, 0.38), 0.6, 0.2)
-	Build.box(_body, Vector3(FOOT.x, 0.03, FOOT.y), Vector3(0, 0.1, 0), steel)
-	for sz in [-1.0, 1.0]:
-		Build.box(_body, Vector3(FOOT.x, h - 0.1, 0.02), Vector3(0, (h + 0.1) * 0.5, sz * (FOOT.y * 0.5 - 0.01)), steel)
-	for sx in [-1.0, 1.0]:
-		Build.box(_body, Vector3(0.02, h - 0.1, FOOT.y), Vector3(sx * (FOOT.x * 0.5 - 0.01), (h + 0.1) * 0.5, 0), steel)
-		Build.cyl(_body, 0.045, FOOT.y - 0.1, Vector3(sx * (FOOT.x * 0.5 - 0.1), 0.045, 0), Build.mat(Color(0.08, 0.08, 0.09), 0.8), Build.AXIS_Z)
 	var chips := Build.mat(Color(0.8, 0.82, 0.85), 0.6)
-	_fill = Build.box(_body, Vector3(FOOT.x - 0.06, 1.0, FOOT.y - 0.06), Vector3.ZERO, chips)
+	_fill = Build.box(_body, Vector3(s.x * 0.62, 1.0, s.z - 0.08), Vector3.ZERO, chips)
 	_fill.visible = false
-	var hit := Build.collider(self, Vector3(FOOT.x, h, FOOT.y), Vector3(0, h * 0.5, 0))
+	var hit := Build.collider(self, s, Vector3(0, s.y * 0.5, 0))
 	hit.set_meta("interact", self)
 
 
 ## Füllstand 0..1 anzeigen. out = gerade in den Händen, dann bleibt nur die Markierung.
 func show_state(fraction: float, out: bool) -> void:
 	_body.visible = not out
-	var h := float(SIZES[size_id]["height"]) - 0.1
+	var s := size_of(size_id)
+	var h := s.y - 0.1
 	_fill.visible = fraction > 0.001
 	_fill.scale.y = maxf(h * fraction, 0.001)
-	_fill.position.y = 0.1 + h * fraction * 0.5
+	_fill.position = Vector3(-s.x * 0.12, 0.1 + h * fraction * 0.5, 0)
 
 
 func get_prompt() -> String:

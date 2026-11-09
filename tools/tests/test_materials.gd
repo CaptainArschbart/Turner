@@ -314,23 +314,26 @@ func _initialize() -> void:
 		ok(int(jb["reward"]) > c, "%s: %d EUR > Material und Werkzeug %d EUR" % [jb["title"], int(jb["reward"]), c])
 	w.job_index = 0
 	w.mill_job_index = 0
-	# Testmodus auf der Taste ^: alles gratis
+	# Taste ^ öffnet das Debug-Menü, dort schaltet ein Button den Testmodus: alles gratis
 	var caret := InputEventKey.new()
 	caret.physical_keycode = KEY_QUOTELEFT
 	caret.pressed = true
 	ok(not w.free_mode, "Testmodus ist anfangs aus")
-	ok(not w.hud._free.visible, "Kein Hinweis ohne Testmodus")
 	w._input(caret)
-	ok(w.free_mode and w.hud._free.visible, "Taste ^ schaltet ein, Hinweis sichtbar")
+	ok(w.debug_menu.visible and not w.free_mode, "Taste ^ öffnet das Debug-Menü, der Testmodus bleibt aus")
 	caret.echo = true
 	w._input(caret)
-	ok(w.free_mode, "Gehaltene Taste schaltet nicht hin und her")
+	ok(w.debug_menu.visible, "Gehaltene Taste schließt nicht gleich wieder")
 	caret.echo = false
+	(w.debug_menu._toggles["free"] as Button).pressed.emit()
+	ok(w.free_mode, "Button schaltet den Testmodus ein")
 	var other := InputEventKey.new()
 	other.keycode = KEY_A
 	other.pressed = true
 	w._input(other)
-	ok(w.free_mode, "Andere Taste ändert nichts")
+	ok(w.free_mode and w.debug_menu.visible, "Andere Taste ändert nichts")
+	w._input(caret)
+	ok(not w.debug_menu.visible and w.free_mode, "Taste ^ schließt das Menü, der Testmodus bleibt an")
 	w.money = 0
 	w.stock = []
 	raw.pick_for_job("lathe")
@@ -376,15 +379,16 @@ func _initialize() -> void:
 	ok(w.free_mode, "Im Eingabefeld schaltet ^ nicht um")
 	typed.release_focus()
 	w.office_pc.overlay.visible = false
-	w._input(caret)
-	ok(not w.free_mode and not w.hud._free.visible, "Taste ^ schaltet wieder aus")
+	w.player.stop_operating()
 	var dead := InputEventKey.new()
 	dead.keycode = KEY_ASCIICIRCUM
 	dead.pressed = true
 	w._input(dead)
-	ok(w.free_mode, "Auch das Zeichen ^ schaltet")
+	ok(w.debug_menu.visible, "Auch das Zeichen ^ öffnet das Debug-Menü")
+	(w.debug_menu._toggles["free"] as Button).pressed.emit()
+	ok(not w.free_mode, "Button schaltet den Testmodus wieder aus")
 	w._input(dead)
-	ok(not w.free_mode, "Und wieder aus")
+	ok(not w.debug_menu.visible, "Und das Menü wieder zu")
 	w.money = 0
 	raw.pick_for_job("lathe")
 	raw.refresh()

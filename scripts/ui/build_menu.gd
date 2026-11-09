@@ -14,7 +14,7 @@ const MARK := Color(0.95, 0.8, 0.1, 0.4)
 var world: Node
 var active := false          # Baumodus läuft
 var placing := false         # etwas ist in der Hand
-var kind := ""               # "machine", "bench", "crate", "bin" oder "rack"
+var kind := ""               # "machine", "bench", "crate", "bin", "shelf" oder "rack"
 var item := ""               # Maschinen-id, bei Werkbänken die Maschine beim Umstellen, sonst leer,
                              # bei Kisten und Behältern die Größe
 var move_index := -1         # umgestellte Kiste, Behälter oder umgestelltes Regal, sonst -1
@@ -50,8 +50,8 @@ func _ready() -> void:
 	v.add_theme_constant_override("separation", 6)
 	_panel.add_child(v)
 	var t := UITheme.title("Baumodus", 24)
-	t.add_theme_color_override("font_color", UITheme.ACCENT)
 	v.add_child(t)
+	v.add_child(UITheme.key_hint("%s  ·  beenden" % Settings.binding_text("build_menu")))
 	_list = VBoxContainer.new()
 	_list.add_theme_constant_override("separation", 4)
 	v.add_child(_list)
@@ -103,7 +103,7 @@ func _refresh_list() -> void:
 		_list.remove_child(c)
 		c.free()
 	stock_keys.clear()
-	_line("Nicht aufgestellt", UITheme.ACCENT)
+	_list.add_child(UITheme.section("Nicht aufgestellt"))
 	for id in world.inventory:
 		var n := int(world.inventory[id])
 		if n <= 0:
@@ -134,6 +134,8 @@ func take_from_stock(n: int) -> void:
 		start("crate", id)
 	elif ChipBin.SIZES.has(id):
 		start("bin", id)
+	elif Shelf.SIZES.has(id):
+		start("shelf", id)
 	elif id == "rack":
 		start("rack", "rack")
 	else:
@@ -177,6 +179,8 @@ func start(what: String, id: String, moving := -1, big_bench := false) -> void:
 		ghost_rot = world.layout.crates[moving]["rot"]
 	elif what == "bin" and moving >= 0:
 		ghost_rot = world.layout.bins[moving]["rot"]
+	elif what == "shelf" and moving >= 0:
+		ghost_rot = world.layout.shelves[moving]["rot"]
 	placing = true
 	target = {}
 	_free_mark()
@@ -213,6 +217,8 @@ func confirm() -> bool:
 			err = world.place_crate(move_index, item, ghost_pos, ghost_rot)
 		"bin":
 			err = world.place_bin(move_index, item, ghost_pos, ghost_rot)
+		"shelf":
+			err = world.place_shelf(move_index, item, ghost_pos, ghost_rot)
 		"rack":
 			err = world.place_rack(move_index, ghost_pos)
 		_:
@@ -287,10 +293,16 @@ func _update_ghost() -> void:
 			h = float(Crate.SIZES[item]["h"]) * 0.001 + 0.06
 			what = world.equipment_title(item)
 		"bin":
-			error = world.layout.check_bin(ghost_pos, ghost_rot, move_index)
-			area = Layout.bin_rect(ghost_pos, ghost_rot)
+			error = world.layout.check_bin(ghost_pos, ghost_rot, move_index, item)
+			area = Layout.bin_rect(ghost_pos, ghost_rot, item)
 			foot = area
-			h = float(ChipBin.SIZES[item]["height"])
+			h = ChipBin.height(item)
+			what = world.equipment_title(item)
+		"shelf":
+			error = world.layout.check_shelf(item, ghost_pos, ghost_rot, move_index)
+			area = Layout.shelf_rect(item, ghost_pos, ghost_rot)
+			foot = area
+			h = float(Shelf.SIZES[item]["height"])
 			what = world.equipment_title(item)
 		"rack":
 			var cell: Vector2i = world.site.l_cell_at(ghost_pos)

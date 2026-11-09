@@ -15,31 +15,31 @@ func _ready() -> void:
 	root.theme = UITheme.build()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(root)
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.6)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(dim)
+	root.add_child(UITheme.backdrop())
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(center)
 	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", UITheme.window_style())
 	center.add_child(panel)
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 10)
+	v.add_theme_constant_override("separation", 12)
 	v.custom_minimum_size = Vector2(1120, 520)
 	panel.add_child(v)
 	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 14)
 	v.add_child(head)
-	var t := UITheme.title("Lagerbestand")
-	t.add_theme_color_override("font_color", UITheme.ACCENT)
-	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(t)
-	head.add_child(UITheme.button("Schließen", close, 180))
+	head.add_child(UITheme.window_head("Lagerbestand", "Lagerregal")["box"])
+	var close_btn := UITheme.button("Schließen", close, 170)
+	close_btn.size_flags_vertical = Control.SIZE_SHRINK_END
+	head.add_child(close_btn)
+	v.add_child(HSeparator.new())
 	view = StockView.new()
 	view.shop = world
 	view.can_take = true
 	view.taken.connect(close)
 	v.add_child(view)
+	v.add_child(UITheme.key_hint("Esc / %s  ·  schließen" % Settings.binding_text("interact")))
 
 
 func open() -> void:

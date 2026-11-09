@@ -81,7 +81,7 @@ void fragment() {
 			return
 		var o := _origin()
 		var pt := func(x: float, y: float) -> Vector2: return o + Vector2(x, -y) * SCALE
-		var want := Color(UITheme.ACCENT, 0.9)
+		var want := Color(Color("e8892b"), 0.9)   # Soll in Orange, wie auf der Zeichnung
 		for f in job.get("features", []):
 			if str(f["type"]) == "hole":
 				draw_arc(pt.call(float(f["cx"]), float(f["cy"])), float(f["d"]) * 0.5 * SCALE, 0.0, TAU, 32, want, 2.0)
@@ -90,9 +90,9 @@ void fragment() {
 		if not mill.tool_near_part():
 			return
 		var c: Vector2 = pt.call(mill.tool_x, mill.tool_y)
-		draw_arc(c, mill.tool_radius() * SCALE, 0.0, TAU, 48, Color(0.55, 0.95, 1.0), 2.0)
-		draw_line(c - Vector2(6, 0), c + Vector2(6, 0), Color(0.55, 0.95, 1.0), 1.0)
-		draw_line(c - Vector2(0, 6), c + Vector2(0, 6), Color(0.55, 0.95, 1.0), 1.0)
+		draw_arc(c, mill.tool_radius() * SCALE, 0.0, TAU, 48, UITheme.VALUE, 2.0)
+		draw_line(c - Vector2(6, 0), c + Vector2(6, 0), UITheme.VALUE, 1.0)
+		draw_line(c - Vector2(0, 6), c + Vector2(0, 6), UITheme.VALUE, 1.0)
 
 
 func _ready() -> void:
@@ -113,12 +113,12 @@ func _ready() -> void:
 	_dro_panel.add_child(dv)
 	_dro = Label.new()
 	_dro.add_theme_font_size_override("font_size", 26)
-	_dro.add_theme_color_override("font_color", Color(0.55, 0.95, 1.0))
+	_dro.add_theme_color_override("font_color", UITheme.VALUE)
 	dv.add_child(_dro)
 	_alert = Label.new()
 	_alert.text = "!!! NOT-HALT AKTIV !!!"
 	_alert.add_theme_font_size_override("font_size", 18)
-	_alert.add_theme_color_override("font_color", Color(1.0, 0.35, 0.3))
+	_alert.add_theme_color_override("font_color", UITheme.BAD)
 	_alert.visible = false
 	dv.add_child(_alert)
 	_details = VBoxContainer.new()
@@ -127,7 +127,9 @@ func _ready() -> void:
 	_details.add_child(HSeparator.new())
 	var dt := Label.new()
 	dt.text = mill.machine_title() if mill else MachineCatalog.MILL_NAME
-	dt.add_theme_font_size_override("font_size", 16)
+	dt.text = dt.text.to_upper()
+	dt.add_theme_font_override("font", UITheme.font(600, 2))
+	dt.add_theme_font_size_override("font_size", 14)
 	dt.add_theme_color_override("font_color", UITheme.ACCENT)
 	_details.add_child(dt)
 	_status = Label.new()
@@ -142,7 +144,7 @@ func _ready() -> void:
 
 	# Oben rechts: Draufsicht
 	var top_bg := ColorRect.new()
-	top_bg.color = Color(0.08, 0.09, 0.1, 0.85)
+	top_bg.color = Color(UITheme.ANTHRACITE, 0.86)
 	top_bg.anchor_left = 1
 	top_bg.anchor_right = 1
 	top_bg.offset_left = -450
@@ -152,7 +154,8 @@ func _ready() -> void:
 	top_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(top_bg)
 	var top_title := Label.new()
-	top_title.text = "Draufsicht   Orange = Soll   Blau = Werkzeug"
+	top_title.text = "DRAUFSICHT   ·   ORANGE = SOLL   ·   BLAU = WERKZEUG"
+	top_title.theme_type_variation = "Section"
 	top_title.position = Vector2(10, 4)
 	top_title.add_theme_font_size_override("font_size", 13)
 	top_title.add_theme_color_override("font_color", UITheme.MUTED)
@@ -322,9 +325,10 @@ func _refresh_pages() -> void:
 			[b.call("new_workpiece"), "Rohteil anfordern: Hinweis, im Testmodus gratis"],
 			[b.call("submit_part"), "Teil prüfen und abgeben"],
 			[b.call("show_drawing"), "Werkstückzeichnung ein / aus"],
+			[b.call("smoke"), "Zigarette anzünden / ausmachen"],
 			[b.call("interact"), "Maschine verlassen"],
 			["Alt links", "Alle Werte und Auftrag anzeigen (halten)"],
-			["^", "Testmodus an / aus: alles gratis"],
+			["^", "Debug-Menü: Testmodus, Noclip, Zeit, Geld"],
 		]},
 	])
 

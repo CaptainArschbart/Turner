@@ -494,5 +494,35 @@ func _initialize() -> void:
 	ok(not menu.placing, "Laufende Spindel: kein Umstellen")
 	w.mill.spindle_speed = 0.0
 	menu.close_menu()
+
+	# ---- Holzregal kaufen, aufstellen, umstellen. Paletten, Hubwagen und Sackkarre stehen schon im Lager.
+	var pre: int = lay.shelves.size()
+	ok(pre == 5 and lay.shelves.all(func(s): return s["pos"].x > 12.0), "Startausstattung steht im Lager (3 Paletten, Hubwagen, Sackkarre)")
+	ok(w.buy_equipment("shelf_wide") == "", "Holzregal gekauft")
+	ok(int(w.inventory.get("shelf_wide", 0)) == 1, "Wartet aufs Aufstellen")
+	var spot := Vector2.INF
+	for gx in range(-10, 11):
+		for gz in range(-6, 7):
+			var c := Vector2(gx, gz)
+			if spot == Vector2.INF and lay.check_shelf("shelf_wide", c, 0) == "" and not Layout.shelf_rect("shelf_wide", c, 0).has_point(Vector2(p.global_position.x, p.global_position.z)):
+				spot = c
+	ok(spot != Vector2.INF, "Freier Platz für das Regal gefunden")
+	menu.open_menu()
+	menu.take_from_stock(menu.stock_keys.find("shelf_wide"))
+	ok(menu.placing and menu.kind == "shelf", "Regal in der Vorschau")
+	menu.ghost_pos = spot
+	menu.ghost_rot = 0
+	menu._update_ghost()
+	ok(menu.error == "", "Regalplatz frei: " + menu.error)
+	ok(menu.confirm(), "Regal aufgestellt")
+	ok(lay.shelves.size() == pre + 1 and w.shelf_nodes.size() == pre + 1, "Regal steht in der Werkstatt")
+	ok(int(w.inventory.get("shelf_wide", 0)) == 0, "Nicht mehr im Bestand")
+	ok(lay.check_shelf("shelf_narrow", spot, 1) != "", "Zweites Regal nicht auf dem ersten")
+	ok(lay.check_bin(spot, 0) != "", "Spänebehälter nicht im Regal")
+	ok(Props.bounds(w.shelf_nodes[pre]).size.y > 2.0, "Regalmodell geladen")
+	var lst: Dictionary = lay.to_state()
+	ok(lst["shelves"].size() == pre + 1 and lst["shelves"][pre]["size"] == "shelf_wide" and lst["starter_transport"], "Regal wird gespeichert")
+	ok(w.place_shelf(0, "shelf_wide", spot, 1) == "" or lay.check_shelf("shelf_wide", spot, 1, 0) != "", "Drehen am Platz")
+	menu.close_menu()
 	print("CHECKS %d FAILS %d" % [checks, fails])
 	quit()

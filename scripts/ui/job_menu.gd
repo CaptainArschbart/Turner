@@ -21,31 +21,25 @@ func _ready() -> void:
 	root.theme = UITheme.build()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(root)
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.6)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(dim)
+	root.add_child(UITheme.backdrop())
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(center)
 	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", UITheme.window_style())
 	center.add_child(panel)
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 10)
+	v.add_theme_constant_override("separation", 12)
 	panel.add_child(v)
 	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 14)
 	v.add_child(head)
-	var t := UITheme.title("Aufträge")
-	t.add_theme_color_override("font_color", UITheme.ACCENT)
-	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(t)
-	_money = Label.new()
-	_money.add_theme_font_size_override("font_size", 18)
-	_money.add_theme_color_override("font_color", Color(0.6, 1.0, 0.6))
+	head.add_child(UITheme.window_head("Aufträge", "Angenommen")["box"])
+	_money = UITheme.money_label(18)
+	_money.size_flags_vertical = Control.SIZE_SHRINK_END
 	head.add_child(_money)
-	tips_button = UITheme.button("Tipps: aus", toggle_tips, 160)
-	tips_button.custom_minimum_size.y = 36
-	tips_button.focus_mode = Control.FOCUS_NONE
+	tips_button = UITheme.small_button("Tipps: aus", toggle_tips, 160)
+	tips_button.size_flags_vertical = Control.SIZE_SHRINK_END
 	head.add_child(tips_button)
 	tabs = TabContainer.new()
 	tabs.custom_minimum_size = Vector2(1120, 520)
@@ -63,11 +57,7 @@ func _ready() -> void:
 		list.add_theme_constant_override("separation", 10)
 		scroll.add_child(list)
 		pages[c["id"]] = list
-	var hint := Label.new()
-	hint.add_theme_font_size_override("font_size", 14)
-	hint.add_theme_color_override("font_color", UITheme.MUTED)
-	hint.text = "Tab oder Esc schließt"
-	v.add_child(hint)
+	v.add_child(UITheme.key_hint("%s / Esc  ·  schließen          Neue Aufträge gibt es am PC im Büro" % Settings.binding_text("job_menu")))
 
 
 func can_open() -> bool:
@@ -164,37 +154,30 @@ func _empty(c: Dictionary) -> Control:
 
 ## key = Auftrag, der sich oben rechts anzeigen lässt, leer bei abgeleiteten Schleifaufträgen.
 func _card(entry: Dictionary, status: String, key: String) -> Control:
-	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UITheme.sb(Color(0.1, 0.11, 0.12), Color(0.24, 0.26, 0.29)))
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 6)
-	card.add_child(v)
-	var l := Label.new()
-	l.text = str(entry["text"])
-	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	l.add_theme_font_size_override("font_size", 16)
-	v.add_child(l)
+	var card := UITheme.card(v, 0.0, key != "" and world.tracked == key)
+	# Erste Zeile als Titel, der Rest als Angaben darunter
+	var lines := str(entry["text"]).split("\n")
+	var t := UITheme.title(lines[0], 18)
+	t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(t)
+	lines.remove_at(0)
+	if not lines.is_empty():
+		v.add_child(UITheme.note("\n".join(lines), 15, Color(UITheme.TEXT, 0.85)))
 	if status != "":
-		var s := Label.new()
-		s.text = status
-		s.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		s.add_theme_font_size_override("font_size", 15)
-		s.add_theme_color_override("font_color", Color(0.95, 0.85, 0.55))
-		v.add_child(s)
+		v.add_child(UITheme.note(status, 14, UITheme.WARN))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	if key != "":
 		var shown: bool = world.tracked == key
-		var b := UITheme.button("Steht oben rechts" if shown else "Oben rechts anzeigen", select.bind(key), 260)
-		b.custom_minimum_size.y = 38
-		b.focus_mode = Control.FOCUS_NONE
+		var b := UITheme.small_button("✓  Steht oben rechts" if shown else "Oben rechts anzeigen", select.bind(key), 240)
 		b.disabled = shown
+		if not shown:
+			UITheme.primary(b)
 		row.add_child(b)
 	if entry.has("job"):
-		var d := UITheme.button("Zeichnung", show_drawing.bind(entry["job"]), 180)
-		d.custom_minimum_size.y = 38
-		d.focus_mode = Control.FOCUS_NONE
-		row.add_child(d)
+		row.add_child(UITheme.small_button("Zeichnung", show_drawing.bind(entry["job"]), 160))
 	if row.get_child_count() > 0:
 		v.add_child(row)
 	return card

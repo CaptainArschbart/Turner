@@ -26,7 +26,7 @@ static func alt_side(event: InputEvent) -> int:
 ## Kleiner Hinweis unten rechts, solange die Übersicht zu ist.
 static func make_chip() -> PanelContainer:
 	var chip := PanelContainer.new()
-	var box := UITheme.sb(Color(0.07, 0.08, 0.09, 0.75), Color(0.24, 0.26, 0.29), 1, 6)
+	var box := UITheme.sb(Color(UITheme.ANTHRACITE, 0.72), Color(1, 1, 1, 0.08), 1, 3)
 	box.content_margin_left = 12
 	box.content_margin_right = 12
 	box.content_margin_top = 5
@@ -68,8 +68,8 @@ func _ready() -> void:
 	v.add_theme_constant_override("separation", 8)
 	add_child(v)
 	var title := Label.new()
-	title.text = "Tasten und Bedienung  -  Alt rechts schließt"
-	title.add_theme_font_size_override("font_size", 14)
+	title.text = "TASTEN UND BEDIENUNG   ·   ALT RECHTS SCHLIESST"
+	title.theme_type_variation = "Section"
 	title.add_theme_color_override("font_color", UITheme.ACCENT)
 	v.add_child(title)
 	tabs = TabContainer.new()
@@ -124,7 +124,7 @@ func _key_grid(rows: Array) -> GridContainer:
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 14)
 	grid.add_theme_constant_override("v_separation", 6)
-	var cap := UITheme.sb(Color(0.17, 0.18, 0.21), Color(0.36, 0.38, 0.42), 1, 4)
+	var cap := UITheme.sb(Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.16), 1, 3)
 	cap.content_margin_left = 8
 	cap.content_margin_right = 8
 	cap.content_margin_top = 2

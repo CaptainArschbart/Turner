@@ -1,2 +1,7 @@
 .godot/
 *.import
+CLAUDE.local.md
+*_claude.md
+
+# graphify (lokal erzeugter Wissensgraph)
+graphify-out/

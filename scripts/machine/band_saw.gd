@@ -152,8 +152,6 @@ func start_cut(mm: float) -> String:
 	var section := float(bar["d"]) if str(bar["kind"]) == Materials.KIND_ROUND else maxf(float(bar["w"]), float(bar["h"]))
 	if section > MAX_SECTION:
 		return "Der Querschnitt ist zu groß: höchstens %d mm." % int(MAX_SECTION)
-	if tray.is_full():
-		return "Die Spänewanne ist voll: Erst in den Spänebehälter leeren."
 	var mix: String = world._tray_conflict(self, str(bar["material"]))
 	if mix != "":
 		return mix

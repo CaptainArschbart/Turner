@@ -1,8 +1,8 @@
 class_name DayApp
 extends VBoxContainer
-## Programm Tagesbericht am Büro-PC: Zahlen des laufenden Tages und der Knopf, der den Tag startet oder beendet.
+## Tagesbericht am Whiteboard im Meisterbüro: Zahlen des laufenden Tages und der Knopf, der den Tag startet oder beendet.
 
-## Spielwelt: day, day_started, day_over, day_stats, last_day_stats, clock_text(), start_day(), next_day(), office_pc
+## Spielwelt: day, day_started, day_over, day_stats, last_day_stats, clock_text(), start_day(), end_day()
 var shop: Node = null
 var start_button: Button
 var end_button: Button
@@ -19,7 +19,7 @@ func _ready() -> void:
 	add_child(_title)
 	_state = Label.new()
 	_state.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_state.add_theme_font_size_override("font_size", 16)
+	_state.add_theme_font_size_override("font_size", 20)
 	add_child(_state)
 	var grid := GridContainer.new()
 	grid.columns = 2
@@ -33,7 +33,7 @@ func _ready() -> void:
 	_row(grid, "profit", "Gewinn / Verlust")
 	_last = Label.new()
 	_last.add_theme_font_size_override("font_size", 15)
-	_last.add_theme_color_override("font_color", UITheme.MUTED)
+	_last.add_theme_color_override("font_color", Color(0.3, 0.33, 0.38))
 	add_child(_last)
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -63,12 +63,13 @@ func _row(grid: GridContainer, key: String, title: String) -> void:
 
 func _start() -> void:
 	shop.start_day()
-	shop.office_pc.overlay.refresh_all()
+	refresh()
 
 
+## Tag vorzeitig beenden: Feierabend, danach geht es am Hoftor nach Hause ins Bett.
 func _end() -> void:
-	shop.next_day()
-	shop.office_pc.overlay.refresh_all()
+	shop.end_day()
+	refresh()
 
 
 ## Gewinn oder Verlust aus Einnahmen und Ausgaben.
@@ -87,7 +88,7 @@ func refresh() -> void:
 	if not shop.day_started:
 		_state.text = "Der Tag hat noch nicht begonnen. Vorher lässt sich nichts bestellen, annehmen oder bearbeiten."
 	elif shop.day_over:
-		_state.text = "Feierabend: Das laufende Teil lässt sich noch abgeben, dann den Tag beenden."
+		_state.text = "Feierabend: Das laufende Teil lässt sich noch abgeben. Dann am Hoftor nach Hause gehen und schlafen, das beginnt den nächsten Tag."
 	else:
 		_state.text = "Der Tag läuft."
 	var s: Dictionary = shop.day_stats
@@ -97,8 +98,8 @@ func refresh() -> void:
 	values["spent"].text = "%d EUR" % int(s.get("spent", 0))
 	var profit := profit_of(s)
 	values["profit"].text = _money_text(profit)
-	values["profit"].add_theme_color_override("font_color", Color(0.5, 0.9, 0.5) if profit >= 0 else Color(1.0, 0.45, 0.35))
+	values["profit"].add_theme_color_override("font_color", Color(0.05, 0.5, 0.15) if profit >= 0 else Color(0.8, 0.12, 0.08))
 	var last: Dictionary = shop.last_day_stats
 	_last.text = "Vortag: %d abgeschlossen, %s" % [int(last.get("done", 0)), _money_text(profit_of(last))] if not last.is_empty() else ""
 	start_button.visible = not shop.day_started
-	end_button.visible = shop.day_started
+	end_button.visible = shop.day_started and not shop.day_over
