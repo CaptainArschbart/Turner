@@ -80,7 +80,8 @@ var rack_menu: RackMenu
 var places: Places                # Orte außerhalb des Geländes: Supermarkt, je Spieler ein Zuhause
 var travel_menu: TravelMenu       # Hoftor und Ausgangstüren: wohin gehen
 var shop_menu: ShopMenu           # Kasse im Supermarkt
-var autosave := true              # nach dem Schlafen speichern; Tests schalten es ab, sonst überschreiben sie Slot 0
+var autosave := true              # nach dem Schlafen und alle paar Minuten speichern; Tests schalten es ab, sonst überschreiben sie Slot 0
+var _autosave_t := 0.0            # Spielzeit seit dem letzten automatischen Speichern
 const SITE_ENTRY := Vector3(Site.GATE_X, 0.05, Site.YARD_Z1 - 1.5)   # wer zurückkommt, steht innen am Hoftor
 var build_menu: BuildMenu
 var layout := Layout.new()        # Stellplan: Maschinen, Bereiche, Werkbänke
@@ -231,6 +232,9 @@ func _ready() -> void:
 	player.pallet_drop = put_pallet
 	player.jack_lift = jack_lift
 	player.jack_drop = jack_park
+	player.bucket_scoop = bucket_scoop
+	player.bucket_drop = bucket_drop
+	player.crate_drop = crate_set_down
 	player.jack_abandon = jack_abandon
 	whiteboard.shop = self
 	whiteboard.overlay.day_app.shop = self
@@ -252,6 +256,8 @@ func _ready() -> void:
 ## Drehmaschine oder Rundschleifmaschine an HUD und Aufträge anschließen.
 func _wire_lathe(m: Lathe) -> void:
 	m.message.connect(hud.show_message)
+	if m.kss_station != null:
+		m.kss_station.world = self      # Konzentrat-Kosten und Meldungen des KSS-Tanks
 	m.operating_changed.connect(func(on: bool):
 		hud.use_lathe(m)
 		_refresh_hud()
@@ -400,6 +406,7 @@ func _apply_quality() -> void:
 
 func _process(delta: float) -> void:
 	play_time += delta
+	_tick_autosave(delta)
 	_advance_day(delta * time_scale)
 	_update_reflections(delta)
 	_fill_ambient()
@@ -1718,7 +1725,7 @@ func pick_delivery(i: int) -> String:
 ## Hinweis beim Anvisieren eines Fachs.
 func rack_prompt(slot: int) -> String:
 	var where := Site.slot_name(slot)
-	if player.carrying_bin() or player.carrying_semi() or player.carrying_part() or player.carrying_drawing():
+	if player.carrying_bucket() or player.carrying_crate() or player.carrying_semi() or player.carrying_part() or player.carrying_drawing():
 		return "%s    |    Hände voll" % where
 	var here := Storage.on_board(stock, slot)
 	if not player.carry.is_empty():
@@ -1741,7 +1748,7 @@ func rack_click(slot: int) -> void:
 func store_at(slot: int) -> String:
 	if player.carry.is_empty():
 		return "Keine Hand voll Material."
-	if player.carrying_bin() or player.carrying_semi() or player.carrying_part() or player.carrying_drawing():
+	if player.carrying_bucket() or player.carrying_crate() or player.carrying_semi() or player.carrying_part() or player.carrying_drawing():
 		return "Das gehört nicht ins Regal."
 	if not Storage.fits_with(Storage.on_board(stock, slot), player.carry):
 		var full := "%s: Das passt hier nicht. Stangen und Fertigschnitte liegen getrennt, nach Maßen ist irgendwann Schluss." % Site.slot_name(slot)
@@ -1766,7 +1773,7 @@ func _put_in_slot(slot: int) -> void:
 func store_carried(rack := -1) -> String:
 	if player.carry.is_empty():
 		return "Keine Hand voll Material."
-	if player.carrying_bin() or player.carrying_semi() or player.carrying_part() or player.carrying_drawing():
+	if player.carrying_bucket() or player.carrying_crate() or player.carrying_semi() or player.carrying_part() or player.carrying_drawing():
 		return "Das gehört nicht ins Regal."
 	var slot := -1
 	if rack >= 0:
@@ -1846,7 +1853,9 @@ func clamp_carried(machine: Node) -> String:
 
 ## Klick auf eine Maschine mit Teil in der Hand oder im Futter. flip: andersherum spannen.
 func ask_clamp(machine: Node, flip: bool) -> void:
-	if player.carrying_bin() or machine is BandSaw:
+	if player.carrying_bucket():
+		return          # der Eimer wird nicht eingespannt, Linksklick schöpft Späne (bucket_scoop)
+	if machine is BandSaw:
 		if not flip:
 			clamp_carried(machine)
 		return
@@ -1965,16 +1974,17 @@ func saw_suggestion(item: Dictionary) -> float:
 func crate_prompt(i: int) -> String:
 	var c: Dictionary = layout.crates[i]
 	var what := "%s (%d von %d Teilen)" % [Crate.SIZES[c["size"]]["title"], c["items"].size(), int(Crate.SIZES[c["size"]]["max"])]
-	if player.carrying_bin() or player.carrying_semi() or player.carrying_drawing():
+	if player.carrying_bucket() or player.carrying_semi() or player.carrying_drawing():
 		return "%s    |    Hände voll" % what
 	if not player.carry.is_empty():
 		return "[Linksklick] In die Kiste legen    |    %s" % what
 	if not player.held.is_empty():
 		return "%s    |    Hände voll" % what
+	var lift := "    [%s] Kiste aufnehmen" % Settings.binding_text("interact") if Crate.CARRY.has(str(c["size"])) else ""
 	if c["items"].is_empty():
-		return "%s    |    leer" % what
+		return "%s    |    leer%s" % [what, lift]
 	var top: Dictionary = c["items"][-1]
-	return "[Linksklick] %s nehmen    |    %s" % [_item_text(top), what]
+	return "[Linksklick] %s nehmen%s    |    %s" % [_item_text(top), lift, what]
 
 
 func crate_click(i: int) -> void:
@@ -1986,12 +1996,78 @@ func crate_click(i: int) -> void:
 		crate_take(i)
 
 
+## E auf eine Kiste: Die kleine Kiste samt Inhalt in die Hände nehmen. Fehlertext, leer = aufgenommen.
+func crate_lift(i: int) -> String:
+	var c: Dictionary = layout.crates[i]
+	var err := ""
+	if not Crate.CARRY.has(str(c["size"])):
+		err = "Diese Kiste ist zu groß und zu schwer zum Tragen. Nur die kleine Kiste lässt sich aufnehmen."
+	elif not player.hands_free():
+		err = "Erst die Hände frei machen."
+	if err != "":
+		hud.show_message(err, Color(1, 0.75, 0.2))
+		return err
+	layout.crates.remove_at(i)
+	player.set_carry({"kind": "crate", "size": str(c["size"]), "items": c["items"], "title": str(Crate.SIZES[c["size"]]["title"])})
+	_rebuild_stands()
+	return ""
+
+
+## Getragene Kiste abstellen, wohin der Blick zeigt (at, Weltpunkt): Auf einer Werkbank sucht sie sich
+## die nächste freie Stelle auf der Platte, sonst steht sie am Boden neben einer Werkbank wie beim Aufstellen.
+## Fehlertext, leer = abgestellt.
+func crate_set_down(at: Vector3) -> String:
+	if not player.carrying_crate():
+		return ""
+	var size_id := str(player.carry["size"])
+	var spot := Vector2(at.x, at.z)
+	var best := {}
+	# Werkbank, auf deren Platte (oder knapp daneben) der Blick zeigt
+	for id in layout.benches:
+		if not layout.bench_area(id).grow(0.15).has_point(spot):
+			continue
+		var rot := int(layout.benches[id]["rot"])
+		var area := layout.bench_area(id)
+		var best_d := INF
+		var x := area.position.x
+		while x <= area.end.x:
+			var z := area.position.y
+			while z <= area.end.y:
+				var p := Vector2(x, z)
+				for r in [rot, posmod(rot + 1, 4)]:
+					if layout.crate_on_top(size_id, p, r, id) and layout.check_crate(size_id, p, r) == "" and p.distance_to(spot) < best_d:
+						best_d = p.distance_to(spot)
+						best = {"pos": p, "rot": r}
+				z += 0.05
+			x += 0.05
+		if not best.is_empty():
+			break
+	var err := ""
+	if best.is_empty():
+		var r := posmod(int(round(player.yaw / (PI / 2.0))), 4)
+		err = layout.check_crate(size_id, spot, r)
+		if err == "":
+			best = {"pos": spot, "rot": r}
+		elif at.y > ToolBench.TOP_Y - 0.1:
+			err = "Auf dieser Werkbank ist kein Platz mehr für die Kiste."
+	if best.is_empty():
+		hud.show_message(err, Color(1, 0.75, 0.2))
+		return err
+	layout.crates.append({"size": size_id, "pos": best["pos"], "rot": best["rot"],
+		"bench": layout.crate_bench_at(size_id, best["pos"], best["rot"]), "items": player.carry["items"]})
+	player.clear_carry()
+	_rebuild_stands()
+	return ""
+
+
 ## Material aus den Händen in die Kiste. Fehlertext, leer = hineingelegt.
 func crate_put(i: int) -> String:
 	if player.carry.is_empty():
 		return "Keine Hand voll Material."
-	if player.carrying_bin():
-		return "Der Spänebehälter passt nicht in die Kiste."
+	if player.carrying_bucket():
+		return "Der Eimer passt nicht in die Kiste."
+	if player.carrying_crate():
+		return "Erst die Kiste aus den Händen abstellen."
 	if player.carrying_drawing():
 		return "Die Zeichnung lieber anpinnen."
 	var c: Dictionary = layout.crates[i]
@@ -2299,6 +2375,8 @@ func place_shelf(moving: int, size_id: String, pos: Vector2, rot: int) -> String
 			return "Dieses Regal wurde nicht gekauft."
 		inventory[size_id] = int(inventory[size_id]) - 1
 		layout.shelves.append({"size": size_id, "pos": pos, "rot": rot})
+		if size_id == "bucket":
+			layout.shelves.back()["chips"] = ChipTray.new(Bucket.CAPACITY)
 	_rebuild_stands()
 	return ""
 
@@ -2393,6 +2471,7 @@ func _rebuild_stands() -> void:
 		sn.size_id = s["size"]
 		sn.stack = int(s.get("stack", 1))
 		sn.cargo = int(s.get("load", 0))
+		sn.chips = s.get("chips") as ChipTray
 		sn.cargo_cross = bool(s.get("cross", false))
 		sn.world = self
 		sn.position = Vector3(s["pos"].x, 0, s["pos"].y)
@@ -2432,6 +2511,10 @@ func _rebuild_stands() -> void:
 
 func bin_prompt(i: int) -> String:
 	var b: Dictionary = layout.bins[i]
+	if player.carrying_bucket():
+		var verb := "Späne in den Eimer nehmen" if _bucket_takes_from(b["chips"]) else "Eimer leeren"
+		return "[Linksklick] %s (Eimer %s)    |    %s: %s" % [verb, Bucket.describe(player.bucket_chips()),
+				ChipBin.SIZES[b["size"]]["title"], Bucket.describe(b["chips"])]
 	var title := str(ChipBin.SIZES[b["size"]]["title"])
 	var what := "%s: %d von %d kg" % [title, int(b["chips"].kg), int(b["chips"].capacity)]
 	if not b["chips"].is_empty():
@@ -2441,9 +2524,107 @@ func bin_prompt(i: int) -> String:
 	return "%s    |    Zu groß und zu schwer zum Tragen" % what
 
 
-## Linksklick auf einen Spänebehälter: Er ist zu groß und zu schwer zum Aufheben.
-func bin_click(_i: int) -> void:
-	pass
+## Linksklick auf einen Spänebehälter: mit dem Eimer hineinkippen, mit dem leeren Eimer bis zu 10 kg herausnehmen.
+## Der Behälter selbst ist zu schwer zum Aufheben.
+func bin_click(i: int) -> void:
+	if not player.carrying_bucket():
+		return
+	var bin_chips: ChipTray = layout.bins[i]["chips"]
+	var done := false
+	if _bucket_takes_from(bin_chips):
+		var chips := player.bucket_chips()
+		var moved := chips.take_from(bin_chips)
+		done = moved > 0.0
+		if done:
+			player.refresh_bucket()
+			player._focus = null
+			hud.show_message("%.1f kg Späne aus dem Behälter in den Eimer, jetzt %s." % [moved, Bucket.describe(chips)], Color(0.7, 0.95, 1.0))
+	else:
+		done = _pour_bucket(bin_chips, "Der Behälter")
+	if done and i < bin_nodes.size():
+		bin_nodes[i].show_state(bin_chips.fraction(), false)
+
+
+## Leerer Eimer an einem Behälter mit Spänen: herausnehmen statt auskippen.
+func _bucket_takes_from(bin_chips: ChipTray) -> bool:
+	return player.carrying_bucket() and player.bucket_chips().is_empty() and not bin_chips.is_empty()
+
+
+## Eimerinhalt in einen Behälter oder Container kippen, so viel hineinpasst. Meldet das Ergebnis.
+func _pour_bucket(into: ChipTray, what: String) -> bool:
+	var chips := player.bucket_chips()
+	var moved := into.take_from(chips)
+	if moved <= 0.0:
+		var why := "Der Eimer ist leer."
+		if not chips.is_empty() and into.is_full():
+			why = "%s ist voll." % what
+		elif not chips.is_empty():
+			why = "Das sind %sspäne, sie gehören nicht zu den %sspänen darin." % [ChipTray.SORT_TITLES[chips.sort()], ChipTray.SORT_TITLES.get(into.sort(), "")]
+		hud.show_message(why, Color(1, 0.75, 0.2))
+		return false
+	player.refresh_bucket()
+	player._focus = null
+	hud.show_message("%.1f kg Späne ausgekippt, im Eimer sind noch %.1f kg." % [moved, chips.kg], Color(0.7, 0.95, 1.0))
+	return true
+
+
+# ------------------------------------------------------------ Eimer
+
+## Hinweis auf einem abgestellten Eimer.
+func bucket_prompt(i: int) -> String:
+	var chips: ChipTray = layout.shelves[i]["chips"]
+	if not player.hands_free():
+		return "Eimer (%s)    |    Hände voll" % Bucket.describe(chips)
+	return "[%s] Eimer aufnehmen    |    Eimer: %s    |    im Baumenü umstellen" % [Settings.binding_text("interact"), Bucket.describe(chips)]
+
+
+## E auf einen abgestellten Eimer: in die Hand nehmen, samt Inhalt.
+func bucket_click(i: int) -> void:
+	if not player.hands_free():
+		return
+	var s: Dictionary = layout.shelves[i]
+	if str(s["size"]) != "bucket":
+		return
+	var chips: ChipTray = s["chips"]
+	layout.shelves.remove_at(i)
+	player.set_carry({"kind": "bucket", "title": "Eimer", "chips": chips})
+	_rebuild_stands()
+
+
+## Q mit dem Eimer: aufrecht am Boden abstellen, dorthin, wohin die Kamera zielt. Fehlertext, leer = abgestellt.
+func bucket_drop(at: Vector2) -> String:
+	if not player.carrying_bucket():
+		return ""
+	var err := layout.check_shelf("bucket", at, 0)
+	if err != "":
+		hud.show_message(err, Color(1, 0.75, 0.2))
+		return err
+	layout.shelves.append({"size": "bucket", "pos": at, "rot": 0, "chips": player.bucket_chips()})
+	player.clear_carry()
+	_rebuild_stands()
+	return ""
+
+
+## Linksklick mit dem Eimer auf eine Maschine: bis zu 10 kg Späne aus der Spänewanne in den Eimer.
+func bucket_scoop(machine: Node) -> void:
+	var tray = machine.get("tray")
+	if not tray is ChipTray:
+		hud.show_message("Hier fallen keine Späne an.", Color(1, 0.75, 0.2))
+		return
+	var chips := player.bucket_chips()
+	var moved := chips.take_from(tray)
+	if moved <= 0.0:
+		var why := "Die Spänewanne ist leer."
+		if chips.is_full():
+			why = "Der Eimer ist voll."
+		elif not tray.is_empty():
+			why = "Im Eimer sind %sspäne, in der Wanne %sspäne: Sorten nicht mischen." % [ChipTray.SORT_TITLES.get(chips.sort(), ""), ChipTray.SORT_TITLES[tray.sort()]]
+		hud.show_message(why, Color(1, 0.75, 0.2))
+		return
+	if machine.has_method("refresh_tray"):
+		machine.refresh_tray()
+	player.refresh_bucket()
+	hud.show_message("%.1f kg Späne in den Eimer, jetzt %s." % [moved, Bucket.describe(chips)], Color(0.7, 0.95, 1.0))
 
 
 ## Die Spänekiste unter dem Späneförderer (E50) ist ein normaler Spänebehälter der Werkstatt. Jede
@@ -2482,30 +2663,29 @@ func _sync_machine_bins() -> void:
 func container_prompt(i: int) -> String:
 	var c: ChipTray = containers[i]
 	var what := "Container %s: %d von %d kg" % [ChipTray.SORT_TITLES[c.only], int(c.kg), int(c.capacity)]
-	if player.carrying_bin():
-		return "[Linksklick] Behälter hineinleeren    |    %s" % what
+	if player.carrying_bucket():
+		return "[Linksklick] Eimer leeren (Eimer %s)    |    %s" % [Bucket.describe(player.bucket_chips()), what]
 	return what + ("    |    Voll: am PC abholen lassen" if c.is_full() else "")
 
 
 func container_click(i: int) -> void:
-	if not player.carrying_bin():
+	if not player.carrying_bucket():
 		return
 	var c: ChipTray = containers[i]
-	var n := int(player.carry["bin"])
-	var chips: ChipTray = layout.bins[n]["chips"]
+	var chips := player.bucket_chips()
 	var moved := c.take_from(chips)
 	if moved <= 0.0:
-		var why := "Der Behälter ist leer."
+		var why := "Der Eimer ist leer."
 		if c.is_full():
 			why = "Der Container ist voll: am PC im Programm Entsorgung abholen lassen."
 		elif not chips.is_empty():
 			why = "Das sind %sspäne, sie gehören nicht in diesen Container." % ChipTray.SORT_TITLES[chips.sort()]
 		hud.show_message(why, Color(1, 0.75, 0.2))
 		return
-	bin_nodes[n].show_state(chips.fraction(), true)
+	player.refresh_bucket()
 	site.show_containers(containers)
 	player._focus = null
-	hud.show_message("%d kg in den Container gekippt, jetzt %d von %d kg." % [int(round(moved)), int(c.kg), int(c.capacity)], Color(0.7, 0.95, 1.0))
+	hud.show_message("%.1f kg in den Container gekippt, jetzt %d von %d kg." % [moved, int(c.kg), int(c.capacity)], Color(0.7, 0.95, 1.0))
 	office_pc.overlay.waste_tab.refresh()
 
 
@@ -2925,6 +3105,8 @@ func _apply_layout(d: Dictionary) -> void:
 				layout.shelves.append({"size": str(s["size"]), "pos": Vector2(s["pos"][0], s["pos"][1]), "rot": int(s["rot"]),
 						"stack": clampi(int(s.get("stack", 1)), 1, Shelf.MAX_STACK),
 						"load": clampi(int(s.get("load", 0)), 0, Shelf.MAX_STACK), "cross": bool(s.get("cross", false))})
+				if str(s["size"]) == "bucket":
+					layout.shelves.back()["chips"] = Bucket.chips_of(s.get("chips", {}))
 				if s.has("angle"):
 					layout.shelves.back()["angle"] = float(s["angle"])
 		for c in saved.get("crates", []):
@@ -2946,6 +3128,16 @@ func _apply_layout(d: Dictionary) -> void:
 				layout.shelves.append({"size": str(st[0]), "pos": pos, "rot": int(st[3])})
 			else:
 				inventory[str(st[0])] = int(inventory.get(str(st[0]), 0)) + 1
+	# Ein Eimer steht von Anfang an im Lager, auch in älteren Spielständen
+	if not (saved is Dictionary and bool(saved.get("starter_bucket", false))):
+		var placed := false
+		for at in Shelf.STARTER_BUCKET:
+			if layout.check_shelf("bucket", at, 0) == "":
+				layout.shelves.append({"size": "bucket", "pos": at, "rot": 0, "chips": ChipTray.new(Bucket.CAPACITY)})
+				placed = true
+				break
+		if not placed:
+			inventory["bucket"] = int(inventory.get("bucket", 0)) + 1
 	_sync_machine_bins()
 	_rebuild_stands()
 	site.show_areas(layout)
@@ -3158,6 +3350,8 @@ func _apply_pending(d: Dictionary) -> void:
 				var it: Dictionary = s["item"]
 				if str(it.get("kind", "")) == "tool" and _machine_node(str(it.get("machine", ""))) == null:
 					continue
+				if str(it.get("kind", "")) == "chip_bin":
+					continue          # Spänebehälter lassen sich nicht mehr tragen, alte liegende fallen weg
 				DroppedItem.restore(self, player, s)
 	var saved_pins = d.get("pins", [])
 	if saved_pins is Array:
@@ -3171,7 +3365,24 @@ func _apply_pending(d: Dictionary) -> void:
 	_refresh_hud()
 
 
+## Alle Settings.autosave_seconds() Spielzeit automatisch speichern (Einstellungen > Spiel, 2 bis 10 min).
+## Nicht in Test-Skripten (eigene SceneTree), damit sie nie den echten Spielstand überschreiben. Läuft gerade eine
+## Bedienung (Maschine, KSS-Panel, Menü), wird gewartet, bis der Spieler wieder frei herumläuft.
+func _tick_autosave(delta: float) -> void:
+	if not autosave or get_tree().get_script() != null:
+		return
+	_autosave_t += delta
+	if _autosave_t < Settings.autosave_seconds():
+		return
+	if get_tree().paused or player == null or player.operating or player.build_mode:
+		return
+	_autosave_t = 0.0
+	if save_game():
+		hud.show_message("Automatisch gespeichert.", Color(0.75, 0.85, 0.95))
+
+
 func save_game() -> bool:
+	_autosave_t = 0.0
 	var data := {
 		"name": save_name, "money": money, "machines": company.machines, "job": job_index, "parts": parts, "play_time": play_time,
 		"player": player.get_state(), "lathe": lathe.get_state(),

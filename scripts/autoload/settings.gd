@@ -1,5 +1,5 @@
 extends Node
-## Globale Einstellungen: Grafik, Audio, Maus, Tastenbelegung.
+## Globale Einstellungen: Grafik, Audio, Maus, Spiel, Tastenbelegung.
 ## Wird in user://settings.cfg gespeichert.
 
 signal changed
@@ -16,6 +16,9 @@ const FPS_LIMITS := [0, 30, 60, 120, 144, 240]
 const MSAA_NAMES := ["Aus", "2x MSAA", "4x MSAA", "8x MSAA"]
 const HANDWHEEL_STEPS := [0.001, 0.01, 0.1]
 const HANDWHEEL_NAMES := ["0,001 mm", "0,01 mm", "0,1 mm"]
+## Automatisch speichern alle so viele Minuten (Spielzeit ohne Pause)
+const AUTOSAVE_MIN := 2
+const AUTOSAVE_MAX := 10
 ## Bei Änderung der Standardbelegung erhöhen -> alte gespeicherte Belegung wird verworfen.
 const CONTROLS_VERSION := 3
 
@@ -67,6 +70,7 @@ const BINDINGS := [
 var graphics: Dictionary = {}
 var audio: Dictionary = {}
 var mouse: Dictionary = {}
+var game: Dictionary = {}
 var controls: Dictionary = {}
 
 
@@ -88,6 +92,7 @@ func _set_defaults() -> void:
 	}
 	audio = {"master": 0.8, "sfx": 0.8, "ambient": 0.5, "mute": false}
 	mouse = {"sensitivity": 0.25, "invert_y": false, "handwheel_step": 1, "handwheel_invert": false}
+	game = {"autosave_minutes": 5}
 	controls = {}
 	for b in BINDINGS:
 		controls[b[0]] = "%s:%d" % [b[3], b[4]]
@@ -112,6 +117,9 @@ func load_settings() -> void:
 		audio[k] = cfg.get_value("audio", k, audio[k])
 	for k in mouse.keys():
 		mouse[k] = cfg.get_value("mouse", k, mouse[k])
+	for k in game.keys():
+		game[k] = cfg.get_value("game", k, game[k])
+	game["autosave_minutes"] = clampi(int(game["autosave_minutes"]), AUTOSAVE_MIN, AUTOSAVE_MAX)
 	var cv := int(cfg.get_value("meta", "controls_version", 1))
 	if cv < 2:
 		# Steuerung wurde vereinfacht: alte Belegung und alte Handrad-Stufen nicht übernehmen
@@ -131,6 +139,8 @@ func save_settings() -> void:
 		cfg.set_value("audio", k, audio[k])
 	for k in mouse.keys():
 		cfg.set_value("mouse", k, mouse[k])
+	for k in game.keys():
+		cfg.set_value("game", k, game[k])
 	for k in controls.keys():
 		cfg.set_value("controls", k, controls[k])
 	cfg.set_value("meta", "controls_version", CONTROLS_VERSION)
@@ -147,7 +157,14 @@ func set_value(section: String, key: String, value) -> void:
 			apply_audio()
 		"mouse":
 			mouse[key] = value
+		"game":
+			game[key] = value
 	changed.emit()
+
+
+## Abstand zwischen zwei automatischen Speicherungen in Sekunden.
+func autosave_seconds() -> float:
+	return clampi(int(game.get("autosave_minutes", 5)), AUTOSAVE_MIN, AUTOSAVE_MAX) * 60.0
 
 
 # ---------------------------------------------------------------- Grafik

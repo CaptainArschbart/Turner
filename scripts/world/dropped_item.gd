@@ -124,10 +124,6 @@ func _ready() -> void:
 			angular_damp = 6.0
 			pm.friction = 1.0
 			pm.bounce = 0.0
-		"chip_bin":
-			mass = 4.0
-			pm.friction = 0.8
-			pm.bounce = 0.05
 		_:
 			mass = clampf(volume * DENSITY, 0.1, 8.0)
 			pm.friction = 0.7
@@ -175,7 +171,7 @@ func title() -> String:
 			return str(item.get("name", "Werkzeug"))
 		"drawing":
 			return "Zeichnung %s" % str(item["job"].get("title", ""))
-		"part", "semi", "chip_bin":
+		"part", "semi":
 			return str(item.get("title", "Teil"))
 	return "%s  %s" % [Materials.label(str(item.get("material", ""))), RawMaterialTab.describe(item)]
 

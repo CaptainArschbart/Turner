@@ -86,7 +86,16 @@ var auto_feed_x := false      # Planvorschub
 var auto_sign_z := -1         # Richtung Längsvorschub: -1 = zum Futter (Z-), +1 = Z+
 var auto_sign_x := -1         # Richtung Planvorschub: -1 = zur Mitte (X-), +1 = X+
 var hw_axis := 0              # Handrad-Achse: 0 = X (Plan), 1 = Z (Längs)
-var coolant := false
+var coolant := false:
+	set(v):
+		# Leerer KSS-Tank: Kühlmittel lässt sich nicht einschalten
+		if v and kss != null and kss.is_empty():
+			v = false
+			_warn("KSS-Tank leer: am Tank neben der Maschine auffüllen.")
+		coolant = v
+var kss: KssTank = null                   # Kühlschmierstoff-Tank, nur bei CNC-Maschinen
+var kss_station: KssStation = null        # sichtbarer Tank mit Hähnen (E50)
+var _foam_on := false
 var tray := ChipTray.new()         # Spänewanne, muss von Hand geleert werden
 var _chip_heap: MeshInstance3D
 ## E50: Der Späneförderer trägt die Späne aus der Wanne in den normalen Spänebehälter unter dem Abwurf.
@@ -563,6 +572,8 @@ func _build() -> void:
 			Build.box(jp, Vector3(0.02, 0.012, 0.03), Vector3(-0.04, 0.0, 0), dark).reparent(j, false)
 			jaws.append(jp)
 	e50 = model != null and model.mach.has("door")
+	if not conventional and grinder_type == "" and kss == null:
+		kss = KssTank.new()
 	if not e50 and _guard:
 		_guard.free()
 		_guard = null
@@ -571,6 +582,7 @@ func _build() -> void:
 		periphery = null
 	if e50:
 		_apply_e50_layout()
+		_build_kss_station()
 
 	# Späne in der Wanne, der Haufen wächst mit dem Füllstand
 	_chip_heap = Build.sphere(self, 0.5, Vector3(0.75, 0.23, 0.06), Build.mat(Color(0.8, 0.82, 0.85), 0.6))
@@ -1806,12 +1818,81 @@ func _lose_tool() -> void:
 	_apply_holder()
 
 
+## KSS-Verschleißfaktor, nur solange Kühlmittel wirklich fließt (ZU DÜNN: 2-fach).
+func kss_wear() -> float:
+	return kss.wear_factor() if kss != null and coolant else 1.0
+
+
+## KSS-Tempofaktor für die NC-Bearbeitung, nur bei laufendem Kühlmittel (OPTIMAL: 1,1-fach).
+func kss_speed() -> float:
+	return kss.speed_factor() if kss != null and coolant else 1.0
+
+
+## Kurzstatus des Tanks für HUD und Pult, leer ohne Tank.
+func kss_suffix() -> String:
+	return "  (%s)" % kss.status_text() if kss != null else ""
+
+
+## Verbrauch bei laufendem Kühlmittel und drehender Spindel; Schaum bei zu dickem Gemisch.
+func _step_kss(delta: float) -> void:
+	if kss == null:
+		return
+	var running := coolant and spindle_speed > 10.0
+	if running:
+		kss.consume(KssTank.CONSUME_PER_MIN / 60.0 * delta)
+		if kss.is_empty():
+			coolant = false
+			if nc.busy():
+				nc._fail("KSS-Tank leer – nachfüllen")      # NC-Alarm mit Programmstopp
+			else:
+				_warn("KSS-Tank leer: Kühlung aus.")
+	var foam := running and kss.foaming()
+	if _foam_on != foam:
+		_foam_on = foam
+		_apply_foam_look()
+
+
+## Tropfen oder weißer Schaum im Kühlmittelstrahl.
+func _apply_foam_look() -> void:
+	var m := coolant_fx.mesh as SphereMesh
+	if m == null:
+		return
+	var cm := m.material as StandardMaterial3D
+	if _foam_on:
+		m.radius = 0.006
+		m.height = 0.012
+		coolant_fx.amount = 140
+		coolant_fx.lifetime = 0.6
+		coolant_fx.initial_velocity_max = 0.45
+		coolant_fx.scale_amount_max = 1.8
+		if cm:
+			cm.albedo_color = Color(1, 1, 1, 0.9)
+	else:
+		m.radius = 0.0025
+		m.height = 0.005
+		coolant_fx.amount = 80
+		coolant_fx.lifetime = 0.35
+		coolant_fx.initial_velocity_max = 0.7
+		coolant_fx.scale_amount_max = 1.0
+		if cm:
+			cm.albedo_color = Color(0.92, 0.95, 1.0, 0.55)
+
+
+## Sichtbarer KSS-Tank seitlich an der E50 (Station mit Klickfläche).
+func _build_kss_station() -> void:
+	if kss == null or kss_station != null:
+		return
+	kss_station = KssStation.new()
+	kss_station.setup(self, model.mach["body"])
+	add_child(kss_station)
+
+
 ## Schneiden nutzt das Werkzeug ab, je schlechter die Werte, desto schneller.
 func _add_wear(delta: float) -> void:
 	if tool_stock == null or not has_cutter():
 		return
 	var id := str(holder[active_slot])
-	var w := tool_stock.add_wear(id, _wear_rate * float(tool_mods["wear"]) * delta)
+	var w := tool_stock.add_wear(id, _wear_rate * float(tool_mods["wear"]) * kss_wear() * delta)
 	if w >= 1.0:
 		var title := tool_name(id)
 		_crash("WERKZEUG VERSCHLISSEN! %s ist stumpf und muss neu gekauft werden." % title)
@@ -3218,6 +3299,7 @@ func _physics_process(delta: float) -> void:
 		refresh_tray()
 	_check_tray()
 	coolant_fx.emitting = coolant and spindle_speed > 10.0
+	_step_kss(delta)
 	spindle_led.material_override = _led_on if spindle_speed > 5.0 else _led_off
 
 	_rebuild_t -= delta
@@ -3815,7 +3897,7 @@ func get_state() -> Dictionary:
 		"machined": mach, "rz": Array(rz), "tool_z": tool_z, "tool_x": tool_x, "tool": tool_idx,
 		"holder": holder.duplicate(), "active_slot": active_slot,
 		"rpm": rpm_set, "feed": feed_set, "css": css, "vc": vc_set, "rpm_limit": rpm_limit,
-		"material": material, "has_part": has_part, "semi_key": semi_key, "ceramic": ceramic_part, "tray": tray.to_state(), "conveyor": conveyor_on, "coolant": coolant, "door": door_latched, "guard_open": guard_open, "programs": programs.duplicate(true), "prog_sel": prog_sel, "clamp_depth": clamp_depth, "flipped": flipped,
+		"material": material, "has_part": has_part, "semi_key": semi_key, "ceramic": ceramic_part, "tray": tray.to_state(), "conveyor": conveyor_on, "coolant": coolant, "kss": kss.to_state() if kss != null else {}, "door": door_latched, "guard_open": guard_open, "programs": programs.duplicate(true), "prog_sel": prog_sel, "clamp_depth": clamp_depth, "flipped": flipped,
 		"wcs_z": wcs_z}
 
 
@@ -3852,6 +3934,11 @@ func set_state(d: Dictionary) -> void:
 	css = bool(d.get("css", false))
 	set_vc(float(d.get("vc", vc_set)))
 	set_rpm_limit(float(d.get("rpm_limit", rpm_limit)))
+	if kss != null:
+		if d.get("kss") is Dictionary and not (d["kss"] as Dictionary).is_empty():
+			kss.load_state(d["kss"])
+		else:
+			kss.reset_default()      # alter Spielstand: Startwert
 	coolant = bool(d.get("coolant", false))
 	semi_key = str(d.get("semi_key", ""))
 	ceramic_part = bool(d.get("ceramic", false))

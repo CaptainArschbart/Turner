@@ -52,6 +52,11 @@ var drawing_texture: Callable     # Spielwelt: Bild der Zeichnung zu einem Auftr
 var cigarette: Cigarette          # Zigarette im Mundwinkel, die Hände bleiben frei
 var machine_lookup: Callable      # Spielwelt: Maschinen-id -> Maschine
 var pallet_drop: Callable         # Spielwelt: getragene Palette bei (x, z) abstellen -> Fehlertext
+var bucket_scoop: Callable        # Spielwelt: Linksklick mit dem Eimer auf eine Maschine (Späne aus der Wanne)
+var bucket_drop: Callable         # Spielwelt: Eimer bei (x, z) aufrecht abstellen -> Fehlertext
+var crate_drop: Callable          # Spielwelt: getragene Kiste beim Blickpunkt (Welt) abstellen -> Fehlertext
+var _bucket_ego: Node3D           # Eimer in der Ego-Ansicht (hängt an der Faust)
+var _bucket_body: Node3D          # Eimer an der Figur
 var jack_lift: Callable           # Spielwelt: Leertaste mit Hubwagen (Palette anheben oder absenken)
 var jack_drop: Callable           # Spielwelt: Hubwagen loslassen und abstellen (E oder Q)
 var jack_abandon: Callable        # Spielwelt: Hubwagen sofort an seiner Stelle abstellen (Figur zu weit weg)
@@ -169,6 +174,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		if jack_lift.is_valid():
 			jack_lift.call()
+	elif event.is_action_pressed("interact") and carrying_crate() and not build_mode:
+		get_viewport().set_input_as_handled()
+		_crate_put_down()
 	elif event.is_action_pressed("interact") and _focus:
 		get_viewport().set_input_as_handled()
 		if not _blocked(_focus, false):
@@ -191,7 +199,7 @@ func right_click_focus() -> bool:
 	if not _focus or not _focus.has_method("get_machine") or _blocked(_focus, false):
 		return false
 	var machine: Node = _focus.get_machine()
-	if carrying_bin() or not held.is_empty() or (carry.is_empty() and machine.get("has_part") != true):
+	if carrying_bucket() or carrying_crate() or not held.is_empty() or (carry.is_empty() and machine.get("has_part") != true):
 		return false
 	material_to_machine.emit(machine, true)
 	return true
@@ -201,8 +209,22 @@ func click_focus() -> bool:
 	# Hubwagen: Linksklick tut nichts, E nimmt Paletten auf und setzt sie ab, Q stellt den Hubwagen ab
 	if driving_jack():
 		return true
+	# Kiste in den Händen: Linksklick stellt sie ab, auf die Werkbank oder daneben
+	if carrying_crate():
+		_crate_put_down()
+		return true
 	# Palette in den Händen: Linksklick tut nichts, abgestellt wird mit Q, aufgelegt mit E
 	if carrying_pallet():
+		return true
+	# Eimer: auf Maschinen Späne schöpfen, auf Behälter und Container ausleeren
+	if carrying_bucket():
+		if _focus and _blocked(_focus, false):
+			return true
+		if _focus and _focus.has_method("get_machine"):
+			if bucket_scoop.is_valid():
+				bucket_scoop.call(_focus.get_machine())
+		elif _focus and _focus.has_method("click"):
+			_focus.click(self)
 		return true
 	# Zeichnung in der Hand: an die anvisierte Fläche pinnen, egal was es ist
 	if carrying_drawing():
@@ -364,6 +386,24 @@ func _update_focus() -> void:
 		var act := "Palette absenken" if jack_load() > 0 else "Palette anheben (Zinken darunter)"
 		_set_prompt("[%s] %s    [%s] Hubwagen loslassen" % [Settings.binding_text("jump"), act, Settings.binding_text("interact")])
 		return
+	# Mit dem Eimer: Linksklick schöpft Späne aus der Wanne oder kippt aus, Q stellt ab
+	if carrying_bucket():
+		_focus = target
+		var tip := "[%s] Eimer abstellen" % Settings.binding_text("drop")
+		var text := ""
+		if target and target.has_method("get_machine"):
+			var tr = target.get_machine().get("tray")
+			text = "[Linksklick] Späne in den Eimer (%d kg in der Wanne)" % int(tr.kg) if tr is ChipTray else target.get_prompt()
+		elif target:
+			text = target.get_prompt()
+		_set_prompt("%s    |    %s" % [text, tip] if text != "" else tip)
+		return
+	# Mit der Kiste: Linksklick oder E stellt sie auf die anvisierte Werkbank, Q dorthin, wohin der Blick zeigt
+	if carrying_crate():
+		_focus = target
+		var put := "[Linksklick] Kiste auf die Werkbank stellen" if _aims_at_bench(target) else "[%s] Kiste abstellen (auf oder neben eine Werkbank)" % Settings.binding_text("drop")
+		_set_prompt(put)
+		return
 	# Mit einer Palette in den Händen zählen nur Palettenstapel und der Boden
 	if carrying_pallet():
 		if not (target is Shelf and (target as Shelf).is_pallet()):
@@ -386,7 +426,7 @@ func _update_focus() -> void:
 	if target and carrying_part() and target.has_method("get_machine") and not target.has_method("carry_prompt"):
 		text = "[Linksklick] Teil wieder einspannen    [Rechtsklick] Andersherum    |    %s" % text
 	elif target and not carry.is_empty() and target.has_method("get_machine"):
-		if target.has_method("carry_prompt") and not carrying_bin():
+		if target.has_method("carry_prompt"):
 			text = target.carry_prompt(carry)
 		elif carrying_semi():
 			text = "[Linksklick] Zum Schleifen einspannen    |    %s" % text
@@ -472,8 +512,85 @@ func _mount_tool(holder: Node3D, model: Node3D, upright: bool) -> float:
 
 
 ## Trägt die Spielfigur gerade einen Spänebehälter?
-func carrying_bin() -> bool:
-	return str(carry.get("kind", "")) == "chip_bin"
+func carrying_bucket() -> bool:
+	return str(carry.get("kind", "")) == "bucket"
+
+
+## Späne im Eimer in der Hand (nur wenn er getragen wird).
+func bucket_chips() -> ChipTray:
+	return carry.get("chips") as ChipTray if carrying_bucket() else null
+
+
+## Eimer in die Hand nehmen. item: {"kind": "bucket", "title", "chips": ChipTray oder Spielstand-Dictionary}.
+## Ego: am Henkel in der Faust, Eimer hängt nach unten; Figur: am rechten Arm.
+func _set_carry_bucket(item: Dictionary) -> void:
+	clear_held()
+	carry = item
+	carry["chips"] = Bucket.chips_of(carry.get("chips"))
+	var f: float = (carry["chips"] as ChipTray).fraction()
+	# Die Haltung der Hand neigt den Halter ein wenig: Der Eimer bekommt die Gegendrehung und hängt senkrecht
+	arms.set_mode("tool", {"r": 0.012})
+	_bucket_ego = Node3D.new()
+	_bucket_ego.basis = Basis.from_euler(arms._item_rot).inverse()
+	_bucket_ego.add_child(Bucket.make(f, true, 0.8))
+	_hand.add_child(_bucket_ego)
+	_bucket_body = Bucket.make(f, true)
+	body.set_bucket(_bucket_body)
+	held_changed.emit("In der Hand: Eimer (%s)" % Bucket.describe(carry["chips"]))
+
+
+## Füllstand des Eimers in der Hand neu anzeigen (nach Schöpfen oder Ausleeren).
+func refresh_bucket() -> void:
+	if not carrying_bucket():
+		return
+	var chips := bucket_chips()
+	if _bucket_ego and _bucket_ego.get_child_count() > 0:
+		Bucket.set_fill(_bucket_ego.get_child(0) as Node3D, chips.fraction())
+	if _bucket_body:
+		Bucket.set_fill(_bucket_body, chips.fraction())
+	held_changed.emit("In der Hand: Eimer (%s)" % Bucket.describe(chips))
+
+
+## Trägt die Spielfigur eine kleine Kiste samt Inhalt? {"kind": "crate", "size", "items", "title"}
+func carrying_crate() -> bool:
+	return str(carry.get("kind", "")) == "crate"
+
+
+## Kiste mit Inhalt vor dem Körper, mit beiden Händen an den Seiten.
+func _set_carry_crate(item: Dictionary) -> void:
+	clear_held()
+	carry = item
+	var holders := _carry_holders()
+	var s: Dictionary = Crate.SIZES[str(item["size"])]
+	var h := float(s["h"]) * 0.001 + 0.06
+	for k in holders.size():
+		var sc := 0.55 if k == 0 else 1.0
+		var c := Crate.make_model(str(item["size"]), item["items"])
+		c.scale = Vector3.ONE * sc
+		c.position = Vector3(0, -h * 0.5 * sc, 0)
+		holders[k].add_child(c)
+	var half := Crate.outer(str(item["size"])).x * 0.5
+	arms.set_mode("box", {"half": half * 0.55, "top": h * 0.55})
+	body.set_holding("carry", half)
+	held_changed.emit("In den Händen: %s (%d Teile)" % [str(item.get("title", "Kiste")), (item["items"] as Array).size()])
+
+
+## Zielt der Blick auf eine Werkbank (Platte, Halterung oder darauf stehende Kiste)?
+func _aims_at_bench(target: Object) -> bool:
+	if target is ToolBench.BenchBody or target is ToolBench.HolderSlot:
+		return true
+	return ray.is_colliding() and ray.get_collision_point().y > ToolBench.TOP_Y - 0.05 and target is Crate
+
+
+## Getragene Kiste dort abstellen, wohin der Blick zeigt (auf die Werkbank oder daneben auf den Boden).
+func _crate_put_down() -> void:
+	if not crate_drop.is_valid():
+		return
+	if ray.is_colliding():
+		crate_drop.call(ray.get_collision_point())
+	else:
+		var p := pallet_spot()
+		crate_drop.call(Vector3(p.x, 0.0, p.y))
 
 
 ## Trägt die Spielfigur eine leere Europalette?
@@ -656,17 +773,6 @@ func _pallet_model(holder: Node3D, scale := 1.0) -> void:
 	holder.add_child(p)
 
 
-## Spänebehälter in die Hände nehmen. item: {"kind": "chip_bin", "bin": Nummer, "title": Name}
-func _set_carry_bin(item: Dictionary) -> void:
-	clear_held()
-	carry = item
-	for holder in _carry_holders():
-		_bin_model(holder)
-	arms.set_mode("box", {"half": 0.17, "top": 0.11})
-	body.set_holding("carry", 0.17)
-	held_changed.emit("In den Händen: %s" % str(item.get("title", "Spänebehälter")))
-
-
 ## Trägt die Spielfigur ein vorbearbeitetes Teil zur Schleifmaschine?
 func carrying_semi() -> bool:
 	return str(carry.get("kind", "")) == "semi"
@@ -684,8 +790,11 @@ func carrying_drawing() -> bool:
 
 ## Rohmaterial in die Hände nehmen.
 func set_carry(item: Dictionary) -> void:
-	if str(item.get("kind", "")) == "chip_bin":
-		_set_carry_bin(item)
+	if str(item.get("kind", "")) == "bucket":
+		_set_carry_bucket(item)
+		return
+	if str(item.get("kind", "")) == "crate":
+		_set_carry_crate(item)
 		return
 	if str(item.get("kind", "")) == "pallet":
 		_set_carry_pallet(item)
@@ -727,8 +836,6 @@ func set_carry(item: Dictionary) -> void:
 ## (liegt am Boden), sonst gekürzt, damit es vor der Kamera nicht das Bild füllt.
 func item_model(holder: Node3D, item: Dictionary, full := false) -> void:
 	match str(item.get("kind", "")):
-		"chip_bin":
-			_bin_model(holder, item)
 		"pallet":
 			_pallet_model(holder)
 		"drawing":
@@ -769,10 +876,19 @@ func item_model(holder: Node3D, item: Dictionary, full := false) -> void:
 func drop() -> DroppedItem:
 	if operating or hands_free():
 		return null
+	# Der Eimer steht danach aufrecht am Boden, wohin die Kamera zielt
+	if carrying_bucket():
+		if bucket_drop.is_valid():
+			bucket_drop.call(pallet_spot())
+		return null
 	# Der Hubwagen wird mit samt Last abgestellt
 	if driving_jack():
 		if jack_drop.is_valid():
 			jack_drop.call()
+		return null
+	# Die Kiste wird abgestellt, nicht fallen gelassen
+	if carrying_crate():
+		_crate_put_down()
 		return null
 	# Paletten fallen nicht, sie werden vor der Figur abgestellt
 	if carrying_pallet():
@@ -821,6 +937,11 @@ func hands_free() -> bool:
 func clear_held() -> void:
 	held = {}
 	_remove_jack()
+	if _bucket_ego:
+		_bucket_ego = null
+	_bucket_body = null
+	if body:
+		body.set_bucket(null)
 	for holder in [_hand, body.tool_grip, body.carry_hold]:
 		for c in holder.get_children():
 			holder.remove_child(c)
@@ -855,14 +976,6 @@ func _carry_holders() -> Array[Node3D]:
 	return out
 
 
-## Spänekiste aus dem Modell, verkleinert, mit ein paar Spänen.
-func _bin_model(holder: Node3D, _item := {}) -> void:
-	var box := Props.make("chip_box", Vector3(0.36, 0.22, 0.26))
-	box.position.y = -0.11
-	holder.add_child(box)
-	Build.box(holder, Vector3(0.2, 0.05, 0.2), Vector3(-0.04, -0.03, 0), Build.mat(Color(0.62, 0.6, 0.56), 0.35, 0.8))
-
-
 # ------------------------------------------------------------ Speichern
 
 func get_state() -> Dictionary:
@@ -875,6 +988,8 @@ func get_state() -> Dictionary:
 ## carry für den Spielstand: Beim Hubwagen gehört seine Lage dazu.
 func _carry_state() -> Dictionary:
 	var c := carry.duplicate(true)
+	if carrying_bucket():
+		c["chips"] = bucket_chips().to_state()
 	if driving_jack() and jack_cart:
 		c["pos"] = [jack_cart.global_position.x, jack_cart.global_position.z]
 		c["rot"] = jack_cart.phi

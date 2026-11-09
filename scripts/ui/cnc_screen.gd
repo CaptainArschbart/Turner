@@ -603,7 +603,7 @@ func _update_jog() -> void:
 		"F   %.2f mm/U      Ist %.0f mm/min" % [lathe.feed(), lathe.feed() * lathe.spindle_speed],
 		"S   Soll %d /min   Ist %d /min   (%s)" % [int(round(lathe.rpm())), int(round(lathe.spindle_speed)), sp],
 		"G96 %s   vc %d m/min   S max %d /min" % ["EIN" if lathe.css else "aus", int(lathe.vc_set), int(lathe.rpm_limit)],
-		"KSS %s      Not-Halt %s" % ["EIN" if lathe.coolant else "aus", "AKTIV" if lathe.estop else "-"],
+		"KSS %s      Not-Halt %s" % [("EIN" if lathe.coolant else "aus") + lathe.kss_suffix(), "AKTIV" if lathe.estop else "-"],
 		"Rz letzter Schnitt %.1f µm" % lathe.last_rz,
 	])
 
@@ -676,7 +676,7 @@ func _update_auto() -> void:
 		"S  %d /min" % int(round(lathe.spindle_speed)),
 		"vc %d m/min" % int(lathe.cutting_speed()),
 		"Override %d %%" % int(round(nc.override * 100.0)),
-		"KSS %s" % ("EIN" if lathe.coolant else "aus"),
+		"KSS %s" % (("EIN" if lathe.coolant else "aus") + lathe.kss_suffix()),
 		"Laufzeit %d:%02d" % [int(nc.run_time) / 60, int(nc.run_time) % 60],
 	]
 	if nc.alarm != "":

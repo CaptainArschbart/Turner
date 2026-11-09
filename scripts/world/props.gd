@@ -6,6 +6,7 @@ extends RefCounted
 
 const PATH := "res://models/non_machine_parts.glb"
 const TRANSPORT := "res://models/transport_items.glb"
+const BUCKET := "res://models/bucket.glb"
 ## Teil -> Objekt(e) im Modell. path: andere Modelldatei als PATH. scale: Faktor auf die Größe im Modell, yaw: Drehung um die Hochachse,
 ## anchor: nur dieses Objekt bestimmt die Mitte (sonst alle).
 const PARTS := {
@@ -19,6 +20,8 @@ const PARTS := {
 	"hand_truck": {"path": TRANSPORT, "node": "hand_truck", "scale": 1.0, "yaw": 0.0},
 	# Hubwagen: im Export die Gruppe "Empty" (Gabel, Deichsel, Räder)
 	"pallet_jack": {"path": TRANSPORT, "node": "Empty", "scale": 1.0, "yaw": 0.0},
+	# Eimer: im Export die Gruppe "Old iron bucket" (der lose Würfel daneben bleibt weg)
+	"bucket": {"path": BUCKET, "node": "Old iron bucket", "scale": 1.0, "yaw": 0.0},
 	"shelf_wide":{"nodes": ["Cube.003", "Cube.004"], "scale": 0.75, "yaw": 0.0},
 	"shelf_narrow": {"nodes": ["Cube.005", "Cube.006"], "scale": 0.75, "yaw": 0.0},
 }

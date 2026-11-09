@@ -162,7 +162,7 @@ func _initialize() -> void:
 			ok(w.bin_nodes[bi].position.distance_to(Vector3(spot.x, 0, spot.z)) < 0.01, "Behälter steht unter dem Abwurf")
 			ok(w.bin_prompt(bi).contains("zu schwer") and w.bin_prompt(bi).contains("Späneförderer"), "Hinweis am Behälter")
 			w.bin_click(bi)
-			ok(p.carry.is_empty() or not p.carrying_bin(), "Lässt sich nicht aufheben")
+			ok(p.carry.is_empty(), "Lässt sich nicht aufheben")
 			ok(w.place_bin(bi, "", Vector2(6.0, 6.0), 0) == w.MACHINE_BIN_FIXED, "Steht fest unter dem Förderer")
 			c.tray.clear()
 			c.tray.add("baustahl", 3.0)

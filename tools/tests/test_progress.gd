@@ -422,7 +422,7 @@ func _initialize() -> void:
 	var bin: Dictionary = w.layout.bins[0]
 	ok(w.bin_prompt(0).contains("zu schwer") and not w.bin_prompt(0).contains("Aufnehmen"), "Hinweis am Behälter: zu schwer")
 	w.bin_click(0)
-	ok(p.carry.is_empty() and not p.carrying_bin() and not bin["out"], "Behälter lässt sich nicht aufheben")
+	ok(p.carry.is_empty() and not bin["out"], "Behälter lässt sich nicht aufheben")
 	ok(not l.has_chip_bin_spot and l.find_child("Spaenekiste", true, false) == null, "Konventionelle Drehmaschine hat keine eigene Spänekiste")
 	# Container
 	ok(w.containers.size() == 3, "Container für Stahl, Aluminium und Messing")

@@ -45,6 +45,7 @@ func _build() -> void:
 	_build_audio()
 	_build_keys()
 	_build_mouse()
+	_build_game()
 	_tabs.current_tab = clampi(tab_idx, 0, _tabs.get_tab_count() - 1)
 
 	var bottom := HBoxContainer.new()
@@ -208,6 +209,13 @@ func _build_keys() -> void:
 		btn.custom_minimum_size = Vector2(220, 38)
 		btn.pressed.connect(_start_wait.bind(action, btn))
 		_row(p, b[1], btn)
+
+
+func _build_game() -> void:
+	var p := _page("Spiel")
+	_row(p, "Automatisch speichern alle", _slider(Settings.AUTOSAVE_MIN, Settings.AUTOSAVE_MAX, 1,
+		float(Settings.game["autosave_minutes"]),
+		func(v: float): Settings.set_value("game", "autosave_minutes", int(v)), "%d min", 1.0))
 
 
 func _build_mouse() -> void:

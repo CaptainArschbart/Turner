@@ -13,6 +13,8 @@ const SIZES := {
 	"gas_bottle": {"title": "Gasflasche", "price": 90, "foot": Vector2(0.27, 0.27), "height": 1.39, "lager": true,
 		"text": "Druckgasflasche für später. Steht in Lager oder Werkstatt, noch ohne Funktion."},
 	"hand_truck": {"title": "Sackkarre", "price": 0, "foot": Vector2(0.7, 0.6), "height": 1.4, "lager": true, "shop": false},
+	"bucket": {"title": "Eimer", "price": 15, "foot": Vector2(0.34, 0.32), "height": 0.53, "lager": true,
+		"text": "Eimer für Späne (10 kg). Mit E aufnehmen, Linksklick auf die Maschine füllt ihn, Linksklick auf einen Spänebehälter kippt ihn aus."},
 	"pallet_jack": {"title": "Hubwagen", "price": 0, "foot": Vector2(2.47, 0.73), "height": 1.39, "lager": true, "shop": false},
 }
 ## Startausstattung im Lager: [Teil, x, z, Drehung in 90°-Schritten]
@@ -20,6 +22,9 @@ const STARTER := [
 	["pallet", 15.0, -22.3, 0], ["pallet", 16.8, -22.3, 0], ["pallet", 18.6, -22.3, 0],
 	["pallet_jack", 16.5, -20.5, 0], ["hand_truck", 20.5, -22.4, 0],
 ]
+
+## Möglicher Platz für den Starter-Eimer im Lager (der erste freie)
+const STARTER_BUCKET := [Vector2(22.0, -21.0), Vector2(21.8, -19.6), Vector2(13.6, -21.0), Vector2(13.6, -19.6)]
 
 ## Höchstens so viele leere Paletten auf einem Stapel (rund 2,2 m)
 const MAX_STACK := 10
@@ -34,6 +39,7 @@ const PALLET_BLOCKS_Z := [[-0.51, -0.38], [-0.095, 0.095], [0.38, 0.51]]      # 
 var index := 0
 var size_id := "shelf_wide"
 var stack := 1                    # Paletten: so viele liegen hier übereinander
+var chips: ChipTray               # Eimer: Späne darin (gehört dem Eintrag in layout.shelves)
 var cargo := 0                    # Hubwagen: so viele Paletten liegen auf der Gabel
 var cargo_cross := false          # Hubwagen: Last liegt quer (lange Seite quer zur Gabel)
 var world: Node                   # Spielwelt: pallet_prompt(i), pallet_click(i) per E
@@ -80,7 +86,10 @@ func _ready() -> void:
 		add_pallets(self, n)
 		_pallet_colliders(n)
 		return
-	add_child(Props.make(size_id))
+	if size_id == "bucket":
+		add_child(Bucket.make(chips.fraction() if chips else 0.0))
+	else:
+		add_child(Props.make(size_id))
 	var hit := Build.collider(self, Vector3(f.x, h, f.y), Vector3(0, h * 0.5, 0))
 	hit.set_meta("interact", self)
 
@@ -134,6 +143,8 @@ func get_prompt() -> String:
 		return world.pallet_prompt(index)
 	if size_id == "pallet_jack" and world:
 		return world.jack_prompt(index)
+	if size_id == "bucket" and world:
+		return world.bucket_prompt(index)
 	return "%s   |   im Baumenü umstellen" % SIZES[size_id]["title"]
 
 
@@ -147,6 +158,8 @@ func interact(_p: Node) -> void:
 		world.pallet_click(index)
 	elif size_id == "pallet_jack" and world:
 		world.jack_click(index)
+	elif size_id == "bucket" and world:
+		world.bucket_click(index)
 
 
 func click(_p: Node) -> void:

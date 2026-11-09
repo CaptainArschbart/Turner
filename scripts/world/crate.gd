@@ -10,8 +10,13 @@ const SIZES := {
 	"crate_l": {"title": "Große Kiste", "price": 180, "l": 1000.0, "w": 600.0, "h": 400.0, "max": 24},
 }
 
-## Spielwelt: crate_prompt(index), crate_click(index)
+## Nur so schwer ist eine Kiste samt Inhalt noch zu tragen (E nimmt sie auf).
+const CARRY := ["crate_s"]
+
+## Spielwelt: crate_prompt(index), crate_click(index), crate_lift(index)
 var world: Node
+## Nur zum Anzeigen (in den Händen): ohne Kollision und ohne Ziel
+var display := false
 var index := 0
 var size_id := "crate_s"
 var items: Array = []
@@ -119,8 +124,9 @@ func _ready() -> void:
 		Build.box(self, Vector3(l + WALL * 2.0, h, WALL), Vector3(0, 0.06 + h * 0.5, sz * (w * 0.5 + WALL * 0.5)), wood)
 	for sx in [-1.0, 1.0]:
 		Build.box(self, Vector3(WALL, h, w), Vector3(sx * (l * 0.5 + WALL * 0.5), 0.06 + h * 0.5, 0), wood)
-	var hit := Build.collider(self, Vector3(l + WALL * 2.0, h + 0.06, w + WALL * 2.0), Vector3(0, (h + 0.06) * 0.5, 0))
-	hit.set_meta("interact", self)
+	if not display:
+		var hit := Build.collider(self, Vector3(l + WALL * 2.0, h + 0.06, w + WALL * 2.0), Vector3(0, (h + 0.06) * 0.5, 0))
+		hit.set_meta("interact", self)
 	_content = Node3D.new()
 	add_child(_content)
 	refresh()
@@ -161,8 +167,17 @@ func get_prompt() -> String:
 
 
 func interact(_p: Node) -> void:
-	pass
+	world.crate_lift(index)
 
 
 func click(_p: Node) -> void:
 	world.crate_click(index)
+
+
+## Kiste mit Inhalt als Modell (in den Händen), Mitte der Unterseite im Ursprung.
+static func make_model(id: String, list: Array) -> Crate:
+	var c := Crate.new()
+	c.display = true
+	c.size_id = id
+	c.items = list
+	return c

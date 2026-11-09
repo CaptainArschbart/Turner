@@ -193,6 +193,9 @@ func step(delta: float) -> void:
 				_ops.pop_front()
 			"kss":
 				lathe.coolant = bool(op["on"])
+				if bool(op["on"]) and not lathe.coolant and lathe.kss != null:
+					_fail("KSS-Tank leer – nachfüllen")
+					return
 				_ops.pop_front()
 			"plan":
 				_ops.pop_front()
@@ -244,6 +247,7 @@ func _wp_moves() -> Array:
 func _do_move(op: Dictionary, t_left: float) -> float:
 	var rapid := bool(op["r"])
 	var spd := 0.0
+	var spd_cmd := 0.0
 	if rapid:
 		spd = NcCam.RAPID * minf(override, 1.0)
 	else:
@@ -252,6 +256,8 @@ func _do_move(op: Dictionary, t_left: float) -> float:
 		if lathe.spindle_speed < lathe.rpm() * 0.9:
 			return 0.0
 		spd = _feed * lathe.spindle_speed / 60.0 * override
+		spd_cmd = spd
+		spd *= lathe.kss_speed()      # KSS OPTIMAL: Satz läuft schneller durch, Vorschub je Umdrehung bleibt
 	if spd <= 0.0:
 		return 0.0
 	var pos := Vector2(lathe.tool_z, lathe.tool_x)
@@ -264,7 +270,7 @@ func _do_move(op: Dictionary, t_left: float) -> float:
 	var travel := minf(dist, spd * t_left)
 	var dv := d / dist * travel
 	lathe.nc_finish = bool(op.get("fin", false))
-	lathe.move_tool(dv.x, dv.y, rapid, spd if not rapid else -1.0)
+	lathe.move_tool(dv.x, dv.y, rapid, spd_cmd if not rapid else -1.0)
 	lathe.nc_finish = false
 	if lathe.estop:
 		_fail("Kollision - Programm abgebrochen.")

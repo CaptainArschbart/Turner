@@ -226,6 +226,23 @@ func set_holding(kind: String, half_width := 0.2) -> void:
 
 var _target_carry := 0.0
 var _target_tool := 0.0
+var _bucket_hold: Node3D               # Eimer am Henkel in der rechten Faust (hängt am Arm, schwingt beim Gehen mit)
+
+
+## Eimer (oder anderes Hängendes) in die rechte Hand geben, null = loslassen. Der Knoten hängt nach unten.
+func set_bucket(model: Node3D) -> void:
+	if _bucket_hold:
+		_bucket_hold.get_parent().remove_child(_bucket_hold)
+		_bucket_hold.queue_free()
+		_bucket_hold = null
+	if model == null:
+		return
+	_bucket_hold = Node3D.new()
+	_bucket_hold.position = Vector3(0, -0.28, 0.02)       # Faust am Ende des Unterarms
+	_elbow[1].add_child(_bucket_hold)
+	_bucket_hold.add_child(model)
+	_hands[1].grip(0.012)
+	set_shadow_only(_shadow_only)
 var grab: Array[Vector3] = []          # Weltpunkte, die beide Hände greifen (Griffbügel der Deichsel)
 var _grab_w := 0.0
 
