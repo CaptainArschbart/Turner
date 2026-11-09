@@ -90,10 +90,14 @@ var coolant := false
 var tray := ChipTray.new()         # Spänewanne, muss von Hand geleert werden
 var _chip_heap: MeshInstance3D
 ## E50: Der Späneförderer trägt die Späne aus der Wanne in den großen Spänebehälter unter dem Abwurf.
-## Gewechselt wird er bei ausgeschaltetem Förderer gegen einen leeren großen Behälter aus der Werkstatt.
+## Der Behälter ist ein ganz normaler Spänebehälter der Werkstatt (layout.bins): Die Spielwelt stellt ihn an
+## chip_bin_spot auf und setzt hier seinen Inhalt (chip_bin) und seinen Knoten (chip_bin_node) ein.
 var chip_bin := ChipTray.new(float(ChipBin.SIZES["bin_l"]["kg"]))
+var chip_bin_node: ChipBin
+## E50: Stellplatz der Spänekiste unter dem Abwurf in Maschinenkoordinaten, has_chip_bin_spot = es gibt ihn.
+var chip_bin_spot := Transform3D()
+var has_chip_bin_spot := false
 var conveyor_on := true
-var _bin_fill: MeshInstance3D
 var _conv_led: MeshInstance3D
 var _conv_led_on: Material
 var _conv_led_off: Material
@@ -206,7 +210,6 @@ var GUARD_TRAVEL := 0.0                    # m Weg nach links
 var GUARD_BOX := AABB()                    # Klickfläche (zu), Maschinenkoordinaten
 var e50 := false                           # Maschine aus dem E50-Modell (Verkleidung, Schlitten, Türen)
 const BIN_UNDER_CHUTE := 0.3                           # so weit ragt der E50-Abwurf über die große Spänekiste (m)
-const CHIP_BOX_H := 0.74                                # Höhe der Spänekiste unter dem Späneförderer
 var periphery: Node3D                                     # Späneförderer und Spänewagen (stehen neben der Maschine)
 var _telescope: Array = []                                # Teleskopabdeckung links/rechts vom Bettschlitten
 var _chain: Array[MeshInstance3D] = []                    # Glieder der Energiekette
@@ -1184,8 +1187,6 @@ func _build_details() -> void:
 
 	if e50 and model.mach.has("conveyor"):
 		_build_conveyor_bin(model.mach["conveyor"], dark)
-	else:
-		_build_deco_bin()
 
 	# Holzrost vor der Maschine
 	var grate_m := Build.mat(Color(0.17, 0.15, 0.13), 0.9)
@@ -1226,24 +1227,14 @@ func _build_details() -> void:
 			Build.box(paper, Vector3(0.002, 0.006, 0.15 - (i % 3) * 0.03), Vector3(-0.0005, 0.11 - i * 0.025, -0.01), Build.mat(Color(0.35, 0.35, 0.38), 0.9))
 
 
-## E50: großer Spänebehälter (wie in der Werkstatt) unter dem Abwurf des Späneförderers, Füllstand aus
-## chip_bin. Die schräge Kippseite zeigt nach vorn zum Bediener. Dazu der Schaltkasten des Förderers.
+## E50: Stellplatz des großen Spänebehälters unter dem Abwurf des Späneförderers. Die Kiste selbst ist ein
+## normaler Spänebehälter der Werkstatt, den die Spielwelt dort aufstellt; die schräge Kippseite (+X im
+## Modell) zeigt nach vorn zum Bediener. Dazu der Schaltkasten des Förderers.
 func _build_conveyor_bin(cb: AABB, dark: Material) -> void:
 	var s := ChipBin.size_of("bin_l")
-	var bin := Node3D.new()
-	bin.name = "Spaenekiste"
 	# Kiste ist so hoch wie der Abwurf: hinter das Förderer-Ende, nur der Abwurf ragt über die Öffnung
-	bin.position = Vector3(cb.end.x - BIN_UNDER_CHUTE + s.z * 0.5, 0, cb.get_center().z)
-	bin.rotation.y = -PI / 2.0                                     # Kippseite (+X im Modell) nach vorn
-	periphery.add_child(bin)
-	var body := Props.make("chip_box", s)
-	bin.add_child(body)
-	_bin_fill = Build.box(bin, Vector3(s.x * 0.62, 1.0, s.z - 0.08), Vector3.ZERO, Build.mat(Color(0.8, 0.82, 0.85), 0.6))
-	_bin_fill.visible = false
-	var bt := ChipBoxTarget.new()
-	bt.lathe = self
-	add_child(bt)
-	Build.collider(bin, s, Vector3(0, s.y * 0.5, 0)).set_meta("interact", bt)
+	chip_bin_spot = Transform3D(Basis(Vector3.UP, -PI / 2.0), Vector3(cb.end.x - BIN_UNDER_CHUTE + s.z * 0.5, 0, cb.get_center().z))
+	has_chip_bin_spot = true
 	# Schaltkasten vorn am Förderer: [E] schaltet ihn ein/aus, grüne Leuchte = läuft
 	var box_pos := Vector3(cb.position.x + 0.45, 1.0, cb.end.z + 0.04)
 	Build.box(periphery, Vector3(0.16, 0.2, 0.08), box_pos, Build.mat(Color(0.86, 0.87, 0.85), 0.5))
@@ -1263,56 +1254,12 @@ func _build_conveyor_bin(cb: AABB, dark: Material) -> void:
 func set_conveyor(on: bool) -> void:
 	conveyor_on = on
 	_apply_conveyor()
-	_info("Späneförderer %s." % ("eingeschaltet" if on else "ausgeschaltet - die Spänekiste kann gewechselt werden"))
+	_info("Späneförderer %s." % ("eingeschaltet" if on else "ausgeschaltet"))
 
 
 func _apply_conveyor() -> void:
 	if _conv_led:
 		_conv_led.material_override = _conv_led_on if conveyor_on and powered else _conv_led_off
-
-
-## E50: Spänekiste unter dem Förderer gegen other (leerer großer Behälter) tauschen. Gibt die bisherige
-## Kiste zurück. Nur bei ausgeschaltetem Förderer (prüft die Spielwelt).
-func swap_chip_bin(other: ChipTray) -> ChipTray:
-	var old := chip_bin
-	chip_bin = other
-	refresh_tray()
-	return old
-
-
-## Konventionelle Maschine: Spänekiste unter dem Abwurf als Kulisse, voll mit Wirrspänen.
-func _build_deco_bin() -> void:
-	# Spänekiste aus models/non_machine_parts.glb unter dem Abwurf, voll mit Wirrspänen. Gleiche Proportionen wie
-	# das Modell, so hoch wie der Abwurf es zulässt; die schräge Kippseite zeigt nach vorn zum Bediener.
-	var bin := Node3D.new()
-	bin.position = Vector3(3.22, 0, 0.05)
-	periphery.add_child(bin)
-	var bs := ChipBin.MODEL * (CHIP_BOX_H / ChipBin.MODEL.y)
-	var box := Props.make("chip_box", bs)
-	box.rotation.y = -PI / 2.0
-	bin.add_child(box)
-	var chip_m := Build.mat(Color(0.56, 0.57, 0.6), 0.35, 1.0)
-	# Füllung knapp unter dem Rand über die ganze Öffnung (die Kippseite liegt nach dem Drehen vorn in +Z)
-	var fill_w := bs.z - 0.1
-	var fill_d := bs.x * 0.8
-	var fill_z := bs.x * 0.02
-	Build.box(bin, Vector3(fill_w, 0.02, fill_d), Vector3(0, bs.y * 0.8, fill_z), Build.mat(Color(0.38, 0.39, 0.41), 0.6, 0.6))
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 50
-	var curl := TorusMesh.new()
-	curl.inner_radius = 0.012
-	curl.outer_radius = 0.016
-	curl.rings = 10
-	curl.ring_segments = 4
-	for i in 70:
-		var c := MeshInstance3D.new()
-		c.mesh = curl
-		c.material_override = chip_m
-		c.position = Vector3(rng.randf_range(-fill_w, fill_w) * 0.45, bs.y * 0.8 + 0.01 + rng.randf() * 0.04, fill_z + rng.randf_range(-fill_d, fill_d) * 0.45)
-		c.rotation = Vector3(rng.randf() * TAU, rng.randf() * TAU, rng.randf() * TAU)
-		c.scale = Vector3(1.0, rng.randf_range(1.0, 3.0), 1.0)
-		bin.add_child(c)
-	Build.collider(bin, Vector3(bs.z, bs.y, bs.x), Vector3(0, bs.y * 0.5, 0))
 
 
 ## Gerader Stab von p0 nach p1.
@@ -2646,14 +2593,8 @@ func refresh_tray() -> void:
 	# E50: die Späne fallen auf den Förderer, kein Haufen im Innenraum
 	_chip_heap.visible = f > 0.001 and not e50
 	_chip_heap.scale = Vector3(1.2 * sqrt(f), 0.34 * f, 0.8 * sqrt(f))
-	if _bin_fill:
-		# wie ChipBin.show_state: Späne steigen von unten, zur Rückwand (weg von der Kippseite) versetzt
-		var s := ChipBin.size_of("bin_l")
-		var bf := chip_bin.fraction()
-		var h := s.y - 0.1
-		_bin_fill.visible = bf > 0.001
-		_bin_fill.scale.y = maxf(h * bf, 0.001)
-		_bin_fill.position = Vector3(-s.x * 0.12, 0.1 + h * bf * 0.5, 0)
+	if has_chip_bin_spot and is_instance_valid(chip_bin_node):
+		chip_bin_node.show_state(chip_bin.fraction(), false)
 
 
 ## Füllstand der Wanne melden. Die Spindel läuft weiter: Bei der E50 trägt der Späneförderer die Späne
@@ -2663,16 +2604,16 @@ func _check_tray() -> void:
 		return
 	if e50:
 		if chip_bin.is_full():
-			_warn("Spänekiste unter dem Förderer voll: Förderer ausschalten und gegen einen leeren großen Spänebehälter tauschen.")
+			_warn("Spänekiste unter dem Förderer voll: Die Späne stauen sich in der Maschine.")
 		elif not conveyor_on and tray.fraction() >= 0.5:
 			_warn("Späneförderer ist aus: Die Späne stauen sich in der Maschine. Förderer am Schaltkasten einschalten.")
 		elif chip_bin.fraction() >= 0.9:
-			_warn("Spänekiste fast voll: bald gegen einen leeren großen Spänebehälter tauschen.")
+			_warn("Spänekiste unter dem Förderer fast voll.")
 		return
 	if tray.is_full():
-		_warn("Spänewanne voll: Die Späne fallen daneben. Mit einem Spänebehälter leeren.")
+		_warn("Spänewanne voll: Die Späne fallen daneben.")
 	elif tray.fraction() >= 0.9:
-		_warn("Spänewanne fast voll: bald mit einem Spänebehälter leeren.")
+		_warn("Spänewanne fast voll.")
 
 
 ## Zu hohes vc (und Reiben in Edelstahl) heizt die Platte auf, außerhalb des Schnitts kühlt sie ab.
@@ -3400,7 +3341,7 @@ func _update_screen() -> void:
 
 func get_prompt() -> String:
 	var chips := "Spänewanne %d %%" % int(tray.fraction() * 100.0)
-	if e50 and _bin_fill:
+	if e50 and has_chip_bin_spot:
 		chips = "Spänekiste %d von %d kg" % [int(chip_bin.kg), int(chip_bin.capacity)]
 	if not is_ready():
 		return "%s    |    %s" % [power_hint(), chips]
@@ -3531,29 +3472,10 @@ class ConveyorTarget extends Node:
 		var kiste := "Spänekiste %d von %d kg" % [int(lathe.chip_bin.kg), int(lathe.chip_bin.capacity)]
 		if lathe.conveyor_on:
 			return "[%s] Späneförderer ausschalten    |    %s" % [e, kiste]
-		return "[%s] Späneförderer einschalten    |    %s    |    Mit leerem großem Spänebehälter auf die Maschine klicken: Kiste wechseln" % [e, kiste]
+		return "[%s] Späneförderer einschalten    |    %s" % [e, kiste]
 
 	func interact(_p: Node) -> void:
 		lathe.set_conveyor(not lathe.conveyor_on)
-
-
-## Spänekiste unter dem Förderer: mit einem leeren großen Spänebehälter in den Händen anklicken = wechseln
-## (läuft über die Spielwelt wie das Leeren der Wanne, daher get_machine).
-class ChipBoxTarget extends Node:
-	var lathe: Lathe
-
-	func get_machine() -> Node:
-		return lathe
-
-	func get_prompt() -> String:
-		var c := lathe.chip_bin
-		var t := "Spänekiste: %d von %d kg" % [int(c.kg), int(c.capacity)]
-		if not c.is_empty():
-			t += " %sspäne" % ChipTray.SORT_TITLES[c.sort()]
-		return t + ("    |    Zum Wechseln Förderer ausschalten und mit leerem großem Spänebehälter anklicken" if lathe.conveyor_on else "    |    Mit leerem großem Spänebehälter anklicken: wechseln")
-
-	func interact(_p: Node) -> void:
-		pass
 
 
 class PowerTarget extends Node:
@@ -3891,7 +3813,7 @@ func get_state() -> Dictionary:
 		"machined": mach, "rz": Array(rz), "tool_z": tool_z, "tool_x": tool_x, "tool": tool_idx,
 		"holder": holder.duplicate(), "active_slot": active_slot,
 		"rpm": rpm_set, "feed": feed_set, "css": css, "vc": vc_set, "rpm_limit": rpm_limit,
-		"material": material, "has_part": has_part, "semi_key": semi_key, "ceramic": ceramic_part, "tray": tray.to_state(), "chip_bin": chip_bin.to_state(), "conveyor": conveyor_on, "coolant": coolant, "door": door_latched, "guard_open": guard_open, "programs": programs.duplicate(true), "prog_sel": prog_sel, "clamp_depth": clamp_depth, "flipped": flipped,
+		"material": material, "has_part": has_part, "semi_key": semi_key, "ceramic": ceramic_part, "tray": tray.to_state(), "conveyor": conveyor_on, "coolant": coolant, "door": door_latched, "guard_open": guard_open, "programs": programs.duplicate(true), "prog_sel": prog_sel, "clamp_depth": clamp_depth, "flipped": flipped,
 		"wcs_z": wcs_z}
 
 
@@ -3938,7 +3860,9 @@ func set_state(d: Dictionary) -> void:
 	if _dial_panel:
 		_dial_panel.sync()
 	tray.load_state(d.get("tray", {}))
-	chip_bin.load_state(d.get("chip_bin", {}))
+	# Alte Spielstände: Der Inhalt der Spänekiste stand bei der Maschine, jetzt gehört er zum Spänebehälter
+	if d.has("chip_bin"):
+		chip_bin.load_state(d["chip_bin"])
 	conveyor_on = bool(d.get("conveyor", true))
 	_apply_conveyor()
 	refresh_tray()

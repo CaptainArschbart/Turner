@@ -20,8 +20,11 @@ const HOLD := GRIP_REACH + HAND_AHEAD    # Abstand Figur - Lenkrad (Deichsel mit
 const GRIP_MODEL := Vector3(-1.13, 1.30, 0.0)       # Mitte des Griffbügels im Modell
 const JOINT_MODEL := Vector3(-0.946, 0.45, 0.0)     # Gelenk unten an der Deichsel
 const TILT := 0.97                       # Neigung der Deichsel nach hinten (rad), zusätzlich zur Neigung im Modell
-const TINE_Z := 0.265                    # Zinken: Mitte, Breite, Höhe (passen in die Palettenöffnungen)
-const TINE_W := 0.18
+## Zinken-Kollision: Mitte, Breite, Höhe. Das Modell hat die Zinken bei z 0,205 bis 0,36, die Öffnung der
+## kurzen Palettenseite reicht von 0,095 bis 0,38. Die Box ist bewusst schmaler als die Optik (0,205 bis 0,325),
+## damit die Zinken seitlich gut 5 cm Spiel haben und man die Öffnungen leichter trifft.
+const TINE_Z := 0.265
+const TINE_W := 0.12
 const TINE_TOP := 0.06
 const MAX_STEP := 0.2                    # größte Bewegung des Lenkrads je Bild
 const LIFT_TIME := 0.4
@@ -53,7 +56,7 @@ func _ready() -> void:
 	model = Props.make("pallet_jack")
 	add_child(model)
 	_split_model()
-	# Gehäuse hinten, die beiden Zinken vorn (Mitte TINE_Z, so breit wie die Palettenöffnungen erlauben)
+	# Gehäuse hinten, die beiden Zinken vorn (Mitte TINE_Z, schmaler als im Modell)
 	_shape(Vector3(0.73, 0.58, 0.6), Vector3(-0.865, 0.33, 0.0))
 	for sgn in [1.0, -1.0]:
 		_shape(Vector3(1.73, TINE_TOP - 0.01, TINE_W), Vector3(0.365, 0.01 + (TINE_TOP - 0.01) * 0.5, sgn * TINE_Z))

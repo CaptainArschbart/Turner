@@ -123,9 +123,7 @@ func _initialize() -> void:
 	var kind_titles := []
 	for i in raw.kinds.get_tab_count():
 		kind_titles.append(raw.kinds.get_tab_title(i))
-	ok(kind_titles.has("Stangenmaterial") and kind_titles.has("Fertigschnitt Material"), "Stangen und Fertigschnitt")
-	var bars: TabContainer = raw.kinds.get_tab_control(0)
-	ok(bars.get_tab_title(0) == "Rundmaterial" and bars.get_tab_title(1) == "Vierkantmaterial", "Stangen: Rund und Vierkant")
+	ok(kind_titles == ["Rundmaterial", "Vierkantmaterial", "Fertigschnitt"], "Rund, Vierkant und Fertigschnitt auf einer Ebene")
 	var pr = raw.pages[Materials.KIND_ROUND]
 	var pq = raw.pages[Materials.KIND_SQUARE]
 	var pc = raw.pages[Materials.KIND_CUT]
@@ -213,10 +211,10 @@ func _initialize() -> void:
 	# Bestellvorschlag zum Auftrag
 	raw.pick_for_job("lathe")
 	ok(pr.material_id() == "S235" and pr.fields["d"].value == 60.0, "Vorschlag für den Drehauftrag")
-	ok(raw.kinds.current_tab == 0, "Vorschlag öffnet das Stangenmaterial")
+	ok(raw.kinds.current_tab == 0, "Vorschlag öffnet das Rundmaterial")
 	raw.pick_for_job("mill")
 	ok(pc.material_id() == "S235" and pc.fields["l"].value == 100.0 and pc.fields["w"].value == 60.0 and pc.fields["h"].value == 40.0, "Vorschlag für den Fräsauftrag")
-	ok(raw.kinds.current_tab == 1, "Vorschlag öffnet den Fertigschnitt")
+	ok(raw.kinds.current_tab == 2, "Vorschlag öffnet den Fertigschnitt")
 	ok(raw._needs.text == "" or raw._needs.text.contains("Ø60"), "Anzeige zeigt den Bedarf")
 	raw.refresh()
 	ok(raw._needs.text.contains("Ø60") and raw._needs.text.contains("100 x 60 x 40"), "Bedarf steht am PC")

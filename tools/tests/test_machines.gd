@@ -148,6 +148,42 @@ func _initialize() -> void:
 	p.set_held(c, "T1")
 	c.hand_click(p)
 	ok(c.has_tool("T1") and co.tools["cnc_lathe"].has("T1"), "Jede Maschine hat ihre eigenen Werkzeuge")
+	# E50: Die Spänekiste unter dem Förderer ist ein normaler großer Spänebehälter der Werkstatt
+	if c.e50:
+		var bi := -1
+		for i in w.layout.bins.size():
+			if str(w.layout.bins[i].get("machine", "")) == "cnc_lathe":
+				bi = i
+		ok(bi >= 0 and str(w.layout.bins[bi]["size"]) == "bin_l", "E50 bekommt einen großen Spänebehälter")
+		if bi >= 0:
+			var eb: Dictionary = w.layout.bins[bi]
+			ok(c.chip_bin == eb["chips"] and c.chip_bin_node == w.bin_nodes[bi], "Förderer füllt genau diesen Behälter")
+			var spot: Vector3 = (c.transform * c.chip_bin_spot).origin
+			ok(w.bin_nodes[bi].position.distance_to(Vector3(spot.x, 0, spot.z)) < 0.01, "Behälter steht unter dem Abwurf")
+			ok(w.bin_prompt(bi).contains("zu schwer") and w.bin_prompt(bi).contains("Späneförderer"), "Hinweis am Behälter")
+			w.bin_click(bi)
+			ok(p.carry.is_empty() or not p.carrying_bin(), "Lässt sich nicht aufheben")
+			ok(w.place_bin(bi, "", Vector2(6.0, 6.0), 0) == w.MACHINE_BIN_FIXED, "Steht fest unter dem Förderer")
+			c.tray.clear()
+			c.tray.add("baustahl", 3.0)
+			c.conveyor_on = true
+			var was_on: bool = c.powered
+			c.powered = true
+			c._physics_process(0.016)
+			ok(is_equal_approx(eb["chips"].kg, 3.0), "Förderer trägt in den Behälter ab")
+			var saved: Dictionary = JSON.parse_string(JSON.stringify(w.layout.to_state()))
+			var found := false
+			for b in saved["bins"]:
+				if str(b.get("machine", "")) == "cnc_lathe" and is_equal_approx(float(b["chips"]["kg"]), 3.0):
+					found = true
+			ok(found, "Behälter mit Inhalt und Maschine gespeichert")
+			ok(w.layout.check_machine("cnc_lathe", Vector2(-1.0, 4.0), 0) == "", "Eigene Kiste blockiert die Maschine nicht")
+			w._sync_machine_bins()
+			ok(w.layout.bins.filter(func(b): return str(b.get("machine", "")) == "cnc_lathe").size() == 1, "Kiste nicht doppelt")
+			c.powered = was_on
+			c.conveyor_on = true
+			eb["chips"].clear()
+			c.refresh_tray()
 	# Auftrag auf der CNC-Maschine abgeben
 	w.accepted = ["lathe:0"]
 	w.job_index = 0

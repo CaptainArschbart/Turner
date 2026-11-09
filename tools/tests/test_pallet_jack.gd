@@ -168,6 +168,9 @@ func _initialize() -> void:
 	ok(not hits(cart), "Zinken längs in den Öffnungen der kurzen Seite")
 	await put(cart, ppos - Vector2(Shelf.JACK_LOAD_X, 0.3), 0.0)
 	ok(hits(cart), "Seitlich versetzt stoßen die Zinken an die Klötze")
+	for side in [0.05, -0.05]:
+		await put(cart, ppos - Vector2(Shelf.JACK_LOAD_X, side), 0.0)
+		ok(not hits(cart), "Zinken mit %.2f m Versatz passen noch in die Öffnungen" % side)
 	await put(cart, ppos + Vector2(Shelf.JACK_LOAD_X, 0), PI)                   # längs, von der anderen Seite
 	ok(not hits(cart), "Zinken längs von der Gegenseite")
 	await put(cart, ppos + Vector2(0, Shelf.JACK_LOAD_X), PI / 2.0)             # quer, von der langen Seite
@@ -188,6 +191,13 @@ func _initialize() -> void:
 	await put(cart, ppos - Vector2(Shelf.JACK_LOAD_X, 0.1), 0.0)
 	w.jack_lift()
 	ok(cart.load_n == 0, "Seitlicher Versatz 0,1 m: nicht angehoben")
+	await put(cart, ppos - Vector2(Shelf.JACK_LOAD_X, 0.05), 0.0)
+	w.jack_lift()
+	ok(cart.load_n == 1, "Seitlicher Versatz 0,05 m: trotzdem angehoben")
+	w.jack_lift()
+	await physics_frame
+	await physics_frame
+	ok(cart.load_n == 0, "Wieder abgesenkt")
 	await put(cart, ppos - Vector2(Shelf.JACK_LOAD_X, 0), 0.0)
 	w.jack_lift()
 	ok(cart.load_n == 1 and not cart.cross and total(w) == tot - 1, "Palette längs angehoben")

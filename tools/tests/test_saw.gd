@@ -138,7 +138,7 @@ func _initialize() -> void:
 	var titles := []
 	for i in o.raw.kinds.get_tab_count():
 		titles.append(o.raw.kinds.get_tab_title(i))
-	ok(titles == ["Stangenmaterial", "Fertigschnitt Material"], "Rohmaterial ohne Lager: %s" % str(titles))
+	ok(titles == ["Rundmaterial", "Vierkantmaterial", "Fertigschnitt"], "Rohmaterial ohne Lager: %s" % str(titles))
 	for i in o.tabs.get_tab_count():
 		ok(o.tabs.get_tab_title(i) != "Entsorgung", "Kein Tab Entsorgung im Shop")
 	o.close()

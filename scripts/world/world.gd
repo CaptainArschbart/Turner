@@ -66,6 +66,8 @@ const NIGHT_SECONDS := 720.0      # die Nacht nach Feierabend (18 bis 6 Uhr) dau
 const REP_DONE := 2.0             # Ansehen für einen erfolgreichen Auftrag
 const REP_LATE := -8.0            # Ansehen für eine verpasste Frist
 const REP_SCRAP := -3.0           # Ansehen für Ausschuss beim Schleifen
+## Die Spänekiste unter dem Späneförderer steht fest, sie wird später mit dem Kran gewechselt.
+const MACHINE_BIN_FIXED := "Die Spänekiste steht fest unter dem Späneförderer."
 var play_time := 0.0
 var stock: Array = []             # bestelltes Rohmaterial im Lager
 var free_mode := false            # Testmodus: alles gratis, wird nicht gespeichert
@@ -1799,8 +1801,6 @@ func take_from_stock(i: int) -> String:
 func clamp_carried(machine: Node) -> String:
 	if player.carry.is_empty():
 		return ""
-	if player.carrying_bin():
-		return pour_tray(machine)
 	if machine is BandSaw:
 		return saw_load(machine)
 	if player.carrying_semi():
@@ -2040,6 +2040,8 @@ func place_crate(moving: int, size_id: String, pos: Vector2, rot: int) -> String
 ## Spänebehälter aufstellen oder umstellen.
 func place_bin(moving: int, size_id: String, pos: Vector2, rot: int) -> String:
 	if moving >= 0:
+		if layout.bins[moving].has("machine"):
+			return MACHINE_BIN_FIXED
 		size_id = str(layout.bins[moving]["size"])
 	var err := layout.check_bin(pos, rot, moving, size_id)
 	if err != "":
@@ -2102,9 +2104,9 @@ func pallet_click(i: int) -> void:
 ## (Paletten brauchen es genauer, sonst klemmen die Zinken in den Klötzen).
 const JACK_SNAP_DEG := 15.0
 const PALLET_SNAP_DEG := 6.0
-## Seitlicher Versatz der Palettenmitte zur Zinkenmitte: Die Zinken (z 0,175 bis 0,355) haben in der
-## Öffnung (0,095 bis 0,38) nur rund 0,025 m Luft.
-const LIFT_SIDE_TOL := 0.03
+## Seitlicher Versatz der Palettenmitte zur Zinkenmitte: Die Zinken-Kollision (z 0,205 bis 0,325) hat in der
+## Öffnung (0,095 bis 0,38) außen 0,055 m Luft. Etwas mehr erlaubt, damit jede Lage, in die man hineinfährt, auch hebt.
+const LIFT_SIDE_TOL := 0.07
 
 
 ## Hinweis auf dem abgestellten Hubwagen.
@@ -2425,6 +2427,10 @@ func _rebuild_stands() -> void:
 		add_child(node)
 		node.show_state(b["chips"].fraction(), b["out"])
 		bin_nodes.append(node)
+		# Spänekiste unter dem Förderer: Die Maschine zeigt ihren Füllstand an diesem Behälter
+		var owner_m: Node3D = _machine_node(str(b.get("machine", ""))) if b.has("machine") else null
+		if owner_m is Lathe:
+			owner_m.chip_bin_node = node
 
 
 # ------------------------------------------------------------ Späne
@@ -2432,73 +2438,47 @@ func _rebuild_stands() -> void:
 func bin_prompt(i: int) -> String:
 	var b: Dictionary = layout.bins[i]
 	var title := str(ChipBin.SIZES[b["size"]]["title"])
-	if b["out"]:
-		return "[Linksklick] %s abstellen" % title if player.carrying_bin() and int(player.carry["bin"]) == i else "Stellplatz: %s" % title
 	var what := "%s: %d von %d kg" % [title, int(b["chips"].kg), int(b["chips"].capacity)]
 	if not b["chips"].is_empty():
 		what += " %sspäne" % ChipTray.SORT_TITLES[b["chips"].sort()]
-	if not player.hands_free():
-		return "%s    |    Hände voll" % what
-	return "[Linksklick] Aufnehmen    |    %s" % what
+	if str(b.get("machine", "")) != "":
+		what += "    |    Unter dem Späneförderer der %s" % Layout.SPECS[str(b["machine"])]["title"]
+	return "%s    |    Zu groß und zu schwer zum Tragen" % what
 
 
-## Linksklick auf einen Spänebehälter oder seinen Stellplatz.
-func bin_click(i: int) -> void:
-	var b: Dictionary = layout.bins[i]
-	if b["out"]:
-		if player.carrying_bin() and int(player.carry["bin"]) == i:
-			b["out"] = false
-			player.clear_carry()
-			bin_nodes[i].show_state(b["chips"].fraction(), false)
-		return
-	if player.hands_free():
-		b["out"] = true
-		player.set_carry({"kind": "chip_bin", "bin": i, "title": ChipBin.SIZES[b["size"]]["title"]})
-		bin_nodes[i].show_state(b["chips"].fraction(), true)
+## Linksklick auf einen Spänebehälter: Er ist zu groß und zu schwer zum Aufheben.
+func bin_click(_i: int) -> void:
+	pass
 
 
-## Spänewanne der Maschine in den Behälter in den Händen leeren.
-func pour_tray(machine: Node) -> String:
-	if machine is Lathe and machine.e50 and machine._bin_fill != null:
-		return _swap_conveyor_bin(machine)
-	if machine.spindle_speed > 5.0:
-		var busy := "Erst die Spindel stoppen."
-		hud.show_message(busy, Color(1, 0.75, 0.2))
-		return busy
-	var chips: ChipTray = layout.bins[int(player.carry["bin"])]["chips"]
-	var moved := chips.take_from(machine.tray)
-	machine.refresh_tray()
-	if moved <= 0.0:
-		var why := "Die Spänewanne ist leer."
-		if chips.is_full():
-			why = "Der Behälter ist voll: im Hof in den Container leeren."
-		elif not machine.tray.is_empty():
-			why = "Im Behälter liegen %sspäne: erst in den Container leeren, nicht mischen." % ChipTray.SORT_TITLES[chips.sort()]
-		hud.show_message(why, Color(1, 0.75, 0.2))
-		return why
-	hud.show_message("%d kg Späne im Behälter, jetzt %d von %d kg." % [int(round(moved)), int(chips.kg), int(chips.capacity)], Color(0.7, 0.95, 1.0))
-	return ""
-
-
-## E50: Spänekiste unter dem Späneförderer gegen den leeren großen Behälter in den Händen tauschen.
-## Danach trägt man die volle Kiste; die leere steht unter dem Förderer.
-func _swap_conveyor_bin(machine: Lathe) -> String:
-	var n := int(player.carry["bin"])
-	var b: Dictionary = layout.bins[n]
-	var why := ""
-	if str(b["size"]) != "bin_l":
-		why = "Unter den Späneförderer passt nur der große Spänebehälter."
-	elif machine.conveyor_on:
-		why = "Erst den Späneförderer ausschalten (Schaltkasten vorn am Förderer)."
-	elif not (b["chips"] as ChipTray).is_empty():
-		why = "Der Behälter ist nicht leer: erst im Hof in den Container leeren."
-	if why != "":
-		hud.show_message(why, Color(1, 0.75, 0.2))
-		return why
-	b["chips"] = machine.swap_chip_bin(b["chips"])
-	bin_nodes[n].show_state((b["chips"] as ChipTray).fraction(), true)
-	hud.show_message("Spänekiste gewechselt: %d kg Späne in den Händen. Jetzt den Förderer wieder einschalten." % int(round((b["chips"] as ChipTray).kg)), Color(0.7, 0.95, 1.0))
-	return ""
+## Die Spänekiste unter dem Späneförderer (E50) ist ein normaler großer Spänebehälter der Werkstatt. Jede
+## Maschine mit Stellplatz bekommt ihre Kiste genau dorthin, Kisten von nicht aufgestellten Maschinen
+## verschwinden.
+func _sync_machine_bins() -> void:
+	for i in range(layout.bins.size() - 1, -1, -1):
+		var id := str(layout.bins[i].get("machine", ""))
+		if id == "":
+			continue
+		var owner_m: Node3D = _machine_node(id) if layout.machines.has(id) else null
+		if not (owner_m is Lathe and owner_m.has_chip_bin_spot):
+			layout.bins.remove_at(i)
+	for id in layout.machines:
+		var m: Node3D = _machine_node(id)
+		if not (m is Lathe and m.has_chip_bin_spot):
+			continue
+		var b := {}
+		for e in layout.bins:
+			if str(e.get("machine", "")) == id:
+				b = e
+		if b.is_empty():
+			# Neu unter dem Förderer: übernimmt, was schon in der Kiste der Maschine liegt (alte Spielstände)
+			b = {"size": "bin_l", "chips": m.chip_bin, "out": false, "machine": id}
+			layout.bins.append(b)
+		var t: Transform3D = m.transform * m.chip_bin_spot
+		b["pos"] = Vector2(t.origin.x, t.origin.z)
+		b["rot"] = posmod(roundi(t.basis.get_euler().y / (PI / 2.0)), 4)
+		b["out"] = false
+		m.chip_bin = b["chips"]
 
 
 func container_prompt(i: int) -> String:
@@ -2710,6 +2690,7 @@ func place_machine(id: String, pos: Vector2, rot: int) -> String:
 			var local := Layout._turn(c["pos"] - old_pos, -old_rot)
 			c["pos"] = Layout._turn(local, rot) + pos
 			c["rot"] = posmod(int(c["rot"]) + rot - old_rot, 4)
+	_sync_machine_bins()
 	_rebuild_stands()
 	site.show_areas(layout)
 	_jobs_changed()
@@ -2954,7 +2935,9 @@ func _apply_layout(d: Dictionary) -> void:
 			var chips := ChipTray.new(float(ChipBin.SIZES[str(b["size"])]["kg"]))
 			chips.load_state(b.get("chips", {}))
 			layout.bins.append({"size": str(b["size"]), "pos": Vector2(b["pos"][0], b["pos"][1]), "rot": int(b["rot"]),
-				"chips": chips, "out": bool(b.get("out", false))})
+				"chips": chips, "out": false})
+			if str(b.get("machine", "")) != "":
+				layout.bins[-1]["machine"] = str(b["machine"])
 	# Paletten, Hubwagen und Sackkarre stehen von Anfang an im Lager, auch in älteren Spielständen
 	if not (saved is Dictionary and bool(saved.get("starter_transport", false))):
 		for st in Shelf.STARTER:
@@ -2963,6 +2946,7 @@ func _apply_layout(d: Dictionary) -> void:
 				layout.shelves.append({"size": str(st[0]), "pos": pos, "rot": int(st[3])})
 			else:
 				inventory[str(st[0])] = int(inventory.get(str(st[0]), 0)) + 1
+	_sync_machine_bins()
 	_rebuild_stands()
 	site.show_areas(layout)
 

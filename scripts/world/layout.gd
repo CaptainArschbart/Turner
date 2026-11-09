@@ -37,7 +37,7 @@ const OBSTACLES := [
 var machines: Dictionary = {}     # id -> {"pos": Vector2, "rot": int}
 var benches: Dictionary = {}      # Maschinen-id -> {"pos": Vector2, "rot": int, "big": bool}
 var crates: Array = []            # je {"size", "pos": Vector2, "rot", "bench": Maschinen-id, "items": []}
-var bins: Array = []              # je {"size", "pos": Vector2, "rot", "chips": ChipTray, "out": bool}
+var bins: Array = []              # je {"size", "pos": Vector2, "rot", "chips": ChipTray, "out": bool, "machine": Spänekiste unter dem Förderer dieser Maschine (fehlt sonst)}
 var shelves: Array = []           # je {"size", "pos": Vector2, "rot", "stack", "load"}, Holzregale und Ausstattung; stack: Paletten übereinander, load: Paletten auf der Gabel eines abgestellten Hubwagens
 var site: Node = null             # Gelände: in_workshop(rect)
 
@@ -111,6 +111,9 @@ func check_machine(id: String, pos: Vector2, rot: int) -> String:
 			return "Dort steht schon etwas."
 	var foot := rect_at(SPECS[id]["foot"], pos, rot).grow(-0.001)
 	for b in bins:
+		# Die eigene Spänekiste unter dem Förderer wandert mit der Maschine
+		if str(b.get("machine", "")) == id:
+			continue
 		if foot.intersects(bin_rect(b["pos"], b["rot"], b["size"])):
 			return "Dort steht ein Spänebehälter."
 	for s in shelves:
@@ -275,7 +278,10 @@ func to_state() -> Dictionary:
 		cs.append({"size": c["size"], "pos": [c["pos"].x, c["pos"].y], "rot": c["rot"], "bench": c["bench"], "items": c["items"]})
 	var ch := []
 	for b in bins:
-		ch.append({"size": b["size"], "pos": [b["pos"].x, b["pos"].y], "rot": b["rot"], "chips": b["chips"].to_state(), "out": b["out"]})
+		var e := {"size": b["size"], "pos": [b["pos"].x, b["pos"].y], "rot": b["rot"], "chips": b["chips"].to_state(), "out": b["out"]}
+		if b.has("machine"):
+			e["machine"] = b["machine"]
+		ch.append(e)
 	var sh := []
 	for s in shelves:
 		sh.append({"size": s["size"], "pos": [s["pos"].x, s["pos"].y], "rot": s["rot"], "stack": int(s.get("stack", 1)), "load": int(s.get("load", 0)), "cross": bool(s.get("cross", false))})

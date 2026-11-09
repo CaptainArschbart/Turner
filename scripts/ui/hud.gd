@@ -534,7 +534,7 @@ func _refresh_pages() -> void:
 			[b.call("crouch"), "Ducken"],
 			[b.call("jump"), "Springen"],
 			[b.call("interact"), "Interagieren"],
-			["Linksklick", "Werkzeug, Material oder Spänebehälter aufnehmen, ablegen, einsetzen; Lagerregal ansehen"],
+			["Linksklick", "Werkzeug oder Material aufnehmen, ablegen, einsetzen; Lagerregal ansehen"],
 			[b.call("drop"), "Getragenes fallen lassen (mit Linksklick wieder aufheben)"],
 			[b.call("toggle_view"), "Kamera 1. / 3. Person"],
 			[b.call("job_menu"), "Angenommene Aufträge, einen oben rechts anzeigen"],

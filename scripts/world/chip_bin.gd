@@ -1,7 +1,7 @@
 class_name ChipBin
 extends Node3D
-## Spänebehälter: Mit Linksklick nimmt man ihn auf, ein Klick auf die Maschine schaufelt die Spänewanne
-## hinein, ein Klick auf einen Container im Hof leert ihn. Abgestellt wird er auf seinem Stellplatz.
+## Spänebehälter: zu groß und zu schwer zum Tragen, er steht fest auf seinem Stellplatz (im Baumodus umstellbar).
+## Die Spänekiste unter dem Späneförderer der E50 ist auch so ein Behälter, sie steht fest unter dem Abwurf.
 
 ## Maße der Spänekiste in models/non_machine_parts.glb (Breite mit Kippseite, Höhe, Tiefe).
 const MODEL := Vector3(2.66, 1.68, 1.31)

@@ -158,6 +158,9 @@ func start(what: String, id: String, moving := -1, big_bench := false) -> void:
 	if what == "bench" and id != "" and world.layout.crates_of(id) > 0:
 		world.hud.show_message("Erst die Kisten neben dieser Werkbank umstellen.", Color(1, 0.75, 0.2))
 		return
+	if what == "bin" and moving >= 0 and world.layout.bins[moving].has("machine"):
+		world.hud.show_message(world.MACHINE_BIN_FIXED, Color(1, 0.75, 0.2))
+		return
 	if what == "bin" and moving >= 0 and world.layout.bins[moving]["out"]:
 		world.hud.show_message("Erst den Behälter abstellen.", Color(1, 0.75, 0.2))
 		return

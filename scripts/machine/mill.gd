@@ -974,9 +974,9 @@ func _check_tray() -> void:
 	if _cut_t <= 0.0:
 		return
 	if tray.is_full():
-		_warn("Spänewanne voll: Die Späne fallen daneben. Mit einem Spänebehälter leeren.")
+		_warn("Spänewanne voll: Die Späne fallen daneben.")
 	elif tray.fraction() >= 0.9:
-		_warn("Spänewanne fast voll: bald mit einem Spänebehälter leeren.")
+		_warn("Spänewanne fast voll.")
 
 
 func toggle_spindle() -> void:

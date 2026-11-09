@@ -1,11 +1,19 @@
 class_name RawMaterialTab
 extends VBoxContainer
-## Rohmaterial am Büro-PC: Stangenmaterial (Rund, Vierkant) und Fertigschnitt, darin je ein Tab pro
+## Rohmaterial am Büro-PC: Rundmaterial, Vierkantmaterial und Fertigschnitt, darin je ein Tab pro
 ## Materialgruppe mit den Werkstoffen. Dazu das Lager, aus dem Material an die Maschinen geht.
 ## Stangen sind immer 3 m lang, einstellbar ist nur der Querschnitt. Fertigschnitt hat freie Maße.
 
 const CUT_MIN := StockView.CUT_MIN
 const FIELD_MAX := 2000.0
+## Reiter: Materialart und Titel
+const KINDS := [
+	[Materials.KIND_ROUND, "Rundmaterial"],
+	[Materials.KIND_SQUARE, "Vierkantmaterial"],
+	[Materials.KIND_CUT, "Fertigschnitt"],
+]
+const ORDER_W := 460.0   # feste Breite der Bestellkarte
+const PHOTO_H := 90.0
 
 ## Spielwelt: money, stock, order_material(spec), load_stock(index, length)
 var shop: Node = null
@@ -37,6 +45,7 @@ class OrderPage extends HBoxContainer:
 		add_theme_constant_override("separation", 12)
 		groups = TabContainer.new()
 		groups.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		groups.clip_tabs = true   # Reiterleiste bestimmt nicht die Breite
 		groups.add_theme_font_size_override("font_size", 14)
 		groups.tab_changed.connect(_on_group_changed)
 		add_child(groups)
@@ -73,10 +82,9 @@ class OrderPage extends HBoxContainer:
 
 	func _order_panel() -> Control:
 		var v := VBoxContainer.new()
-		v.custom_minimum_size.x = 400
-		v.add_theme_constant_override("separation", 6)
+		v.add_theme_constant_override("separation", 4)
 		_photo = TextureRect.new()
-		_photo.custom_minimum_size = Vector2(400, 140)
+		_photo.custom_minimum_size = Vector2(0, PHOTO_H)
 		_photo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		_photo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		v.add_child(_photo)
@@ -106,6 +114,9 @@ class OrderPage extends HBoxContainer:
 		qty = _spin(1.0, 99.0, 1.0)
 		form.add_child(_form_label("Stückzahl"))
 		form.add_child(qty)
+		var push := Control.new()      # Preis und Knopf stehen auf jeder Seite unten
+		push.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		v.add_child(push)
 		_price = Label.new()
 		_price.add_theme_font_override("font", UITheme.font(500, 1))
 		_price.add_theme_font_size_override("font_size", 16)
@@ -115,7 +126,10 @@ class OrderPage extends HBoxContainer:
 		v.add_child(order_button)
 		_result = UITheme.note("", 14, UITheme.TEXT)
 		v.add_child(_result)
-		return UITheme.card(v)
+		_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		var card := UITheme.card(v, ORDER_W)
+		card.size_flags_horizontal = Control.SIZE_SHRINK_END
+		return card
 
 	func _form_label(t: String) -> Label:
 		var l := Label.new()
@@ -251,15 +265,10 @@ func _ready() -> void:
 	kinds.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_child(kinds)
 
-	var bars := TabContainer.new()
-	bars.add_child(_page(Materials.KIND_ROUND))
-	bars.set_tab_title(0, "Rundmaterial")
-	bars.add_child(_page(Materials.KIND_SQUARE))
-	bars.set_tab_title(1, "Vierkantmaterial")
-	kinds.add_child(bars)
-	kinds.set_tab_title(0, "Stangenmaterial")
-	kinds.add_child(_page(Materials.KIND_CUT))
-	kinds.set_tab_title(1, "Fertigschnitt Material")
+	# Alle Materialarten auf einer Ebene, damit jede Seite gleich aufgebaut ist
+	for k in KINDS:
+		kinds.add_child(_page(k[0]))
+		kinds.set_tab_title(kinds.get_tab_count() - 1, k[1])
 	refresh()
 
 
@@ -271,12 +280,10 @@ func pick_for_job(machine: String) -> void:
 	if not shop.company.skills.has(Skills.material_node(str(sp["material"]))):
 		return
 	var page: OrderPage = pages[sp["kind"]]
+	kinds.current_tab = page.get_index()
 	if sp["kind"] == Materials.KIND_ROUND:
-		kinds.current_tab = 0
-		(kinds.get_tab_control(0) as TabContainer).current_tab = 0
 		page.fields["d"].value = sp["d"]
 	else:
-		kinds.current_tab = 1
 		page.fields["l"].value = sp["l"]
 		page.fields["w"].value = sp["w"]
 		page.fields["h"].value = sp["h"]

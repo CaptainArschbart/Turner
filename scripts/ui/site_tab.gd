@@ -17,7 +17,7 @@ var _result: Label
 class SiteMap extends Control:
 	const X_MIN := -38.0
 	const Z_MIN := -40.0
-	const SCALE := 10.0
+	const SCALE := 9.6  # Karte passt so in die Fensterhöhe des Shops
 	const ORANGE := Color(0.93, 0.6, 0.15)
 	const CYAN := Color(0.2, 0.75, 0.9)
 	const GREY := Color(0.35, 0.37, 0.4)

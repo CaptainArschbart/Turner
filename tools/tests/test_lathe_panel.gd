@@ -405,33 +405,36 @@ func _initialize() -> void:
 	ok(not l2._panel_view, "Pultansicht verlassen")
 	l2.operating = false
 
-	# --- E50: Späneförderer trägt die Wanne in die große Spänekiste, Kiste tauschen
+	# --- E50: Späneförderer trägt die Wanne in die große Spänekiste (ein normaler Spänebehälter)
 	if l2.e50:
 		l2.power_on(true)
-		ok(l2._bin_fill != null and is_equal_approx(l2.chip_bin.capacity, float(ChipBin.SIZES["bin_l"]["kg"])), "E50 hat den großen Spänebehälter unter dem Förderer")
+		ok(l2.has_chip_bin_spot and is_equal_approx(l2.chip_bin.capacity, float(ChipBin.SIZES["bin_l"]["kg"])), "E50 hat einen Stellplatz für den großen Spänebehälter")
+		ok(l2.find_child("Spaenekiste", true, false) == null, "Keine eingebaute Kiste mehr an der Maschine")
+		var bn := ChipBin.new()
+		bn.size_id = "bin_l"
+		root.add_child(bn)
+		l2.chip_bin_node = bn
 		l2.tray.clear()
 		l2.chip_bin.clear()
 		l2.conveyor_on = true
 		l2.tray.add("baustahl", 4.0)
 		l2._physics_process(0.016)
 		ok(l2.tray.is_empty() and is_equal_approx(l2.chip_bin.kg, 4.0), "Laufender Förderer leert die Wanne in die Kiste")
-		ok(l2._bin_fill.visible, "Späne in der Kiste sichtbar")
+		ok(bn._fill.visible, "Späne im Behälter sichtbar")
 		l2.set_conveyor(false)
 		l2.tray.add("baustahl", 2.0)
 		l2._physics_process(0.016)
 		ok(is_equal_approx(l2.tray.kg, 2.0) and is_equal_approx(l2.chip_bin.kg, 4.0), "Förderer aus: Späne bleiben in der Wanne")
-		var empty := ChipTray.new(l2.chip_bin.capacity)
-		var full: ChipTray = l2.swap_chip_bin(empty)
-		ok(is_equal_approx(full.kg, 4.0) and l2.chip_bin == empty and not l2._bin_fill.visible, "Kiste gewechselt: volle raus, leere drunter")
-		l2.set_conveyor(true)
-		l2._physics_process(0.016)
-		ok(is_equal_approx(l2.chip_bin.kg, 2.0) and l2.tray.is_empty(), "Förderer wieder an: Rest landet in der neuen Kiste")
 		var cst: Dictionary = l2.get_state()
-		l2.chip_bin.clear()
+		ok(not cst.has("chip_bin"), "Inhalt der Kiste gehört zum Spänebehälter, nicht zur Maschine")
 		l2.conveyor_on = true
 		cst["conveyor"] = false
 		l2.set_state(cst)
-		ok(is_equal_approx(l2.chip_bin.kg, 2.0) and not l2.conveyor_on, "Kiste und Förderer werden gespeichert")
+		ok(is_equal_approx(l2.chip_bin.kg, 4.0) and not l2.conveyor_on, "Förderer wird gespeichert, Kiste bleibt")
+		cst["chip_bin"] = {"kg": 1.0, "by": {"baustahl": 1.0}}
+		l2.set_state(cst)
+		ok(is_equal_approx(l2.chip_bin.kg, 1.0), "Alter Spielstand: Inhalt der Kiste wird übernommen")
+		bn.queue_free()
 
 	print("CHECKS %d FAILS %d" % [checks, fails])
 	quit()

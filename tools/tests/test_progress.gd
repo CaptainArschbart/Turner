@@ -415,28 +415,15 @@ func _initialize() -> void:
 	ok(l.spindle_on, "Volle Wanne stoppt die Spindel nicht")
 	l.spindle_on = false
 	l.spindle_speed = 0.0
-	# Behälter kaufen, aufstellen, tragen
+	# Behälter kaufen und aufstellen: Er ist zu groß und zu schwer zum Tragen
 	ok(w.buy_equipment("bin_s") == "", "Spänebehälter gekauft")
 	ok(w.place_bin(-1, "bin_s", Vector2(0, -2), 0) != "", "Nicht auf der Drehmaschine")
 	ok(w.place_bin(-1, "bin_s", Vector2(4.0, 5.0), 0) == "", "Aufgestellt: " + w.layout.check_bin(Vector2(4.0, 5.0), 0))
 	var bin: Dictionary = w.layout.bins[0]
-	ok(w.bin_prompt(0).contains("Aufnehmen"), "Hinweis am Behälter")
+	ok(w.bin_prompt(0).contains("zu schwer") and not w.bin_prompt(0).contains("Aufnehmen"), "Hinweis am Behälter: zu schwer")
 	w.bin_click(0)
-	ok(p.carrying_bin() and bin["out"], "Behälter in den Händen")
-	ok(w.store_carried(0) != "", "Behälter geht nicht ins Regal")
-	ok(w.crate_put(0) != "" or w.layout.crates.is_empty(), "Und nicht in die Kiste")
-	ok(not p.carry.is_empty(), "Bleibt in den Händen")
-	ok(w.clamp_carried(l) == "", "Wanne in den Behälter")
-	ok(is_equal_approx(l.tray.kg, 0.0) and is_equal_approx(bin["chips"].kg, 15.0), "15 kg umgefüllt")
-	ok(not l._chip_heap.visible, "Wanne sieht leer aus")
-	ok(w.clamp_carried(l) != "", "Leere Wanne meldet das")
-	# Mehr als in den Behälter passt, bleibt in der Wanne
-	l.tray.add(g, 15.0)
-	w.clamp_carried(l)
-	ok(bin["chips"].is_full() and is_equal_approx(l.tray.kg, 5.0), "Behälter voll, Rest bleibt in der Wanne")
-	l.spindle_speed = 100.0
-	ok(w.pour_tray(l) != "", "Nur bei stehender Spindel")
-	l.spindle_speed = 0.0
+	ok(p.carry.is_empty() and not p.carrying_bin() and not bin["out"], "Behälter lässt sich nicht aufheben")
+	ok(not l.has_chip_bin_spot and l.find_child("Spaenekiste", true, false) == null, "Konventionelle Drehmaschine hat keine eigene Spänekiste")
 	# Container
 	ok(w.containers.size() == 3, "Container für Stahl, Aluminium und Messing")
 	ok(w.containers[0].only == "stahl" and w.containers[1].only == "aluminium" and w.containers[2].only == "messing", "Je Sorte einer")
@@ -453,11 +440,8 @@ func _initialize() -> void:
 	ok(w.containers[1].take_from(bx) == 2.0 and bx.is_empty(), "Aluminiumcontainer nimmt Aluminium")
 	w.containers[1].clear()
 	# Wanne mit Stahlspänen: Aluminium darf nicht eingespannt werden
-	var steel_left: float = l.tray.kg
 	l.tray.clear()
 	l.tray.add("baustahl", 1.0)
-	var bin_carry: Dictionary = p.carry.duplicate()
-	p.clear_carry()
 	p.set_carry({"material": "AW-6082", "kind": "round", "d": 40.0, "w": 0.0, "h": 0.0, "l": 500.0})
 	var mix_err: String = w.clamp_carried(l)
 	ok(mix_err.contains("leeren") and not p.carry.is_empty(), "Erst die Wanne leeren: " + mix_err)
@@ -465,22 +449,14 @@ func _initialize() -> void:
 	ok(w.clamp_carried(l) == "", "Mit leerer Wanne geht es")
 	l.clear_workpiece()
 	p.clear_carry()
-	p.set_carry(bin_carry)
-	l.tray.clear()
-	l.tray.add("baustahl", steel_left)
 	l.refresh_tray()
 	ok(not w.containers[0].is_full(), "Container ist nicht voll")
 	ok(w.collect_container(0) == 0, "Halbvoll wird nichts abgeholt")
-	ok(w.container_prompt(0).contains("hineinleeren"), "Hinweis am Container")
-	w.container_click(0)
-	ok(is_equal_approx(w.containers[0].kg, 25.0) and bin["chips"].is_empty(), "Behälter in den Container geleert")
+	bin["chips"].add("baustahl", 25.0)
+	ok(is_equal_approx(w.containers[0].take_from(bin["chips"]), 25.0) and bin["chips"].is_empty(), "Behälter in den Container geleert")
 	var wt = o.waste_tab
 	wt.refresh()
 	ok(wt.buttons[0].disabled, "PC: Abholen erst, wenn voll")
-	# Abstellen auf dem Stellplatz
-	ok(w.bin_prompt(0).contains("abstellen"), "Hinweis am Stellplatz")
-	w.bin_click(0)
-	ok(p.carry.is_empty() and not bin["out"], "Behälter abgestellt")
 	# Bezahlt wird erst am PC
 	w.containers[0].add("baustahl", 95.0)
 	ok(w.containers[0].is_full(), "Container voll")

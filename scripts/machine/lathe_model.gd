@@ -676,10 +676,15 @@ func _on_post(h: Node3D) -> bool:
 func _mount_loose(h: Node3D, post_xf: Transform3D) -> void:
 	# Lage im Modell (bis unter die Modellwurzel)
 	var hxf := h.transform
-	var p := h
-	while p.get_parent() is Node3D and p.get_parent().get_parent() != null:
-		p = p.get_parent() as Node3D
-		hxf = p.transform * hxf
+	if _post.is_ancestor_of(h):
+		# Halter hängt (neues Modell) unter dem Kopf, der schon in die Maschine umgehängt ist:
+		# Lage relativ zum Kopf in Modellkoordinaten zurückrechnen, nicht über die Szenenkette
+		hxf = post_xf * _rel(h, _post)
+	else:
+		var p := h
+		while p.get_parent() is Node3D and p.get_parent().get_parent() != null:
+			p = p.get_parent() as Node3D
+			hxf = p.transform * hxf
 	# Kopffläche: am weitesten in +Z liegende Ecke außerhalb der Feder
 	var face := -INF
 	var pm := _post as MeshInstance3D

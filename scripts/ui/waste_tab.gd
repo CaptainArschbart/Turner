@@ -31,8 +31,8 @@ func _ready() -> void:
 	steps.add_theme_constant_override("h_separation", 12)
 	steps.add_theme_constant_override("v_separation", 4)
 	add_child(steps)
-	for s in [["1", "Spänebehälter aufnehmen und an der Maschine die Wanne hineinleeren."],
-			["2", "Im Hof in den passenden Container kippen. Sorten nicht mischen, nur Stahlarten untereinander."],
+	for s in [["1", "Spänebehälter in der Werkstatt aufstellen. Die E50 füllt ihre Spänekiste über den Späneförderer."],
+			["2", "Volle Behälter sind zu schwer zum Tragen, sie kommen in den passenden Container im Hof. Sorten nicht mischen, nur Stahlarten untereinander."],
 			["3", "Ein voller Container wird hier abgeholt und bezahlt."]]:
 		var n := UITheme.title(s[0], 15)
 		n.add_theme_color_override("font_color", UITheme.ACCENT)

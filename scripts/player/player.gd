@@ -390,10 +390,6 @@ func _update_focus() -> void:
 			text = target.carry_prompt(carry)
 		elif carrying_semi():
 			text = "[Linksklick] Zum Schleifen einspannen    |    %s" % text
-		elif carrying_bin() and target.get_machine().has_method("swap_chip_bin") and target.get_machine().get("_bin_fill") != null:
-			text = "[Linksklick] Spänekiste gegen diesen Behälter tauschen (Förderer aus, Behälter leer)    |    %s" % text
-		elif carrying_bin():
-			text = "[Linksklick] Spänewanne in den Behälter leeren (%d %% voll)    |    %s" % [int(target.get_machine().tray.fraction() * 100.0), text]
 		else:
 			text = "[Linksklick] Material einspannen    [Rechtsklick] Andersherum    |    %s" % text
 	elif _on_part:

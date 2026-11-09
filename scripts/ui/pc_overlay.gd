@@ -199,20 +199,15 @@ func _ready() -> void:
 	v.add_child(tabs)
 	machines_tab = ShopTab.new()
 	machines_tab.machines = true
-	machines_tab.name = "Maschinen"
-	tabs.add_child(machines_tab)
+	_shop_page("Maschinen", machines_tab)
 	tool_tab = ToolShopTab.new()
-	tool_tab.name = TOOLS_TAB
-	tabs.add_child(tool_tab)
+	_shop_page(TOOLS_TAB, tool_tab)
 	raw = RawMaterialTab.new()
-	raw.name = "Rohmaterial"
-	tabs.add_child(raw)
+	_shop_page("Rohmaterial", raw)
 	site_tab = SiteTab.new()
-	site_tab.name = "Gebäude"
-	tabs.add_child(site_tab)
+	_shop_page("Gebäude", site_tab)
 	shop_tab = ShopTab.new()
-	shop_tab.name = "Einkauf"
-	tabs.add_child(shop_tab)
+	_shop_page("Einkauf", shop_tab)
 
 	dev_app = DevApp.new()
 	dev_app.custom_minimum_size = SIZE
@@ -430,6 +425,18 @@ func _input(event: InputEvent) -> void:
 			show_desktop()
 		else:
 			close()
+
+
+## Shop-Reiter in einen Scrollbereich setzen: Inhalt, der höher ist als das Fenster,
+## scrollt, statt das Fenster beim Reiterwechsel wachsen zu lassen.
+func _shop_page(tab_name: String, content: Control) -> void:
+	var scroll := ScrollContainer.new()
+	scroll.name = tab_name
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	tabs.add_child(scroll)
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.add_child(content)
 
 
 func _add_tab(tab_name: String, cards: Array[Control]) -> void:
