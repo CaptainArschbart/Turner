@@ -210,8 +210,11 @@ func step(delta: float) -> void:
 				move_i = 0
 				var mv_ops: Array = []
 				var fin := bool(r.get("finish", false))
-				for m in moves:
-					mv_ops.append({"op": "mv", "z": m[0], "x": m[1], "r": m[2], "p": true, "fin": fin})
+				var fin_from := int(r.get("fin_from", -1))   # Komplett: ab hier Schlichtzüge
+				for k in moves.size():
+					var m: Array = moves[k]
+					mv_ops.append({"op": "mv", "z": m[0], "x": m[1], "r": m[2], "p": true,
+						"fin": fin or (fin_from >= 0 and k >= fin_from)})
 				_ops = mv_ops + _ops
 			"mv":
 				t_left = _do_move(op, t_left)

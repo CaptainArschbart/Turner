@@ -454,7 +454,7 @@ func _update_focus() -> void:
 		if ray.is_colliding() and crane_bench.is_valid() and str(crane_bench.call(ray.get_collider(), ray.get_collision_point(), ray.get_collision_normal())) != "":
 			_set_prompt("[%s] Fernbedienung auf die Werkbank legen    [Linksklick] Kranlast ein- / aushängen" % Settings.binding_text("interact"))
 		else:
-			_set_prompt("[Pfeiltasten] Kran fahren    [%s / %s] Haken    [Linksklick] Last ein- / aushängen" % [Settings.binding_text("crane_up"), Settings.binding_text("crane_down")])
+			_set_prompt("[Pfeiltasten] Kran fahren (hoch = Norden)    [%s / %s] Haken    [Linksklick] Last ein- / aushängen" % [Settings.binding_text("crane_up"), Settings.binding_text("crane_down")])
 		return
 	if carrying_drawing():
 		var where := "an diese Fläche" if ray.is_colliding() else "(auf eine Fläche zielen)"
@@ -890,8 +890,8 @@ func set_carry(item: Dictionary) -> void:
 		carry = item
 		for holder in _carry_holders():
 			item_model(holder, item)
-		arms.set_mode("box", {"half": 0.05, "top": 0.13})
-		body.set_holding("carry", 0.07)
+		arms.set_mode("box", {"half": 0.13, "top": 0.03})
+		body.set_holding("carry", 0.14)
 		held_changed.emit("In der Hand: Kran-Fernbedienung")
 		return
 	if str(item.get("kind", "")) == "jack":
@@ -934,7 +934,10 @@ func item_model(holder: Node3D, item: Dictionary, full := false) -> void:
 		"chip_bin":
 			_bin_model(holder, item)
 		"pendant":
-			HallCrane.remote_model(holder)
+			var r := HallCrane.remote_model(holder)
+			if not full:
+				r.position = Vector3(0, 0.07, 0.02)
+				r.rotation.x = 0.85          # vor dem Bauch, Sticks zum Betrachter gekippt
 		"pallet":
 			_pallet_model(holder)
 		"drawing":

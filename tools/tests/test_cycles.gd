@@ -51,6 +51,23 @@ func _initialize() -> void:
 			arc_ok = true
 	ok(arc_ok and pts[pts.size() - 1].is_equal_approx(Vector2(60, 30)), "Radius 3 in der Kehle eingerechnet")
 
+	# --- Zweite Kontur mitten am Teil: Material rechts davon bleibt stehen
+	var prof := PackedFloat32Array()
+	prof.resize(int(160.0 / NcCam.SEG))
+	prof.fill(30.0)
+	var k2 := {"type": "contour", "name": "K2", "x0": 33.0, "z0": -80.0, "els": [
+		{"x": 33.0, "z": -120.0, "tr": 0, "tv": 0.0},
+		{"x": 60.0, "z": -120.0, "tr": 0, "tv": 0.0}]}
+	var k2p := {"blocks": [k2]}
+	var sb := {"type": "stock", "contour": "K2", "mode": 1, "dir": 0}
+	var tgr: Dictionary = NcCam.target(sb, k2p, prof, 150.0)
+	var tg2: PackedFloat32Array = tgr["tg"]
+	ok(is_equal_approx(tg2[int(140.0 / NcCam.SEG)], 30.0), "Kontur bei Z-80: rechts davon bleibt Material (%.2f)" % tg2[int(140.0 / NcCam.SEG)])
+	ok(absf(tg2[int(50.0 / NcCam.SEG)] - 16.5) < 0.01, "Kontur bei Z-80: Ø33 im Konturbereich (%.2f)" % tg2[int(50.0 / NcCam.SEG)])
+	k2["x0"] = 0.0
+	tg2 = NcCam.target(sb, k2p, prof, 150.0)["tg"]
+	ok(tg2[int(140.0 / NcCam.SEG)] == 0.0, "Kontur ab Drehmitte: rechts davon wird abgespant")
+
 	# --- Prüfung der Satzwerte
 	var t1: Dictionary = LatheTools.get_tool(LatheTools.index_of("T1"))
 	var t2: Dictionary = LatheTools.get_tool(LatheTools.index_of("T2"))
