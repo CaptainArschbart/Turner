@@ -16,7 +16,11 @@ const SIZES := {
 	"bucket": {"title": "Eimer", "price": 15, "foot": Vector2(0.34, 0.32), "height": 0.53, "lager": true,
 		"text": "Eimer für Späne (10 kg). Mit E aufnehmen, Linksklick auf die Maschine füllt ihn, Linksklick auf einen Spänebehälter kippt ihn aus."},
 	"pallet_jack": {"title": "Hubwagen", "price": 0, "foot": Vector2(2.47, 0.73), "height": 1.39, "lager": true, "shop": false},
+	"forklift": {"title": "Gabelstapler", "price": 2500, "foot": Vector2(3.21, 1.15), "height": 2.16, "lager": true,
+		"text": "Gabelstapler mit 1,8 m Hubhöhe. Mit E einsteigen, mit WASD fahren, Pfeil hoch / runter hebt die Gabel, Pfeil links / rechts schiebt sie seitlich, Bild auf / ab neigt das Hubgerüst. Nimmt ganze Palettenstapel auf."},
 }
+## Test: Ein Gabelstapler steht einmalig in der Lagerhalle (der erste freie dieser Plätze, Drehung in 90°-Schritten)
+const STARTER_FORKLIFT := [[Vector2(16.0, -15.5), 0], [Vector2(19.0, -15.5), 0], [Vector2(16.0, -12.5), 0], [Vector2(15.0, -18.0), 0]]
 ## Startausstattung im Lager: [Teil, x, z, Drehung in 90°-Schritten]
 const STARTER := [
 	["pallet", 15.0, -22.3, 0], ["pallet", 16.8, -22.3, 0], ["pallet", 18.6, -22.3, 0],
@@ -42,6 +46,10 @@ var stack := 1                    # Paletten: so viele liegen hier übereinander
 var chips: ChipTray               # Eimer: Späne darin (gehört dem Eintrag in layout.shelves)
 var cargo := 0                    # Hubwagen: so viele Paletten liegen auf der Gabel
 var cargo_cross := false          # Hubwagen: Last liegt quer (lange Seite quer zur Gabel)
+var lift := 0.0                   # Gabelstapler: Gabelhöhe
+var load_rot := 0                 # Gabelstapler: Drehung der Last zur Gabel in 90°-Schritten
+var fork_shift := 0.0             # Gabelstapler: Seitenschieber
+var fork_tilt := 0.0              # Gabelstapler: Neigung des Hubgerüsts
 var world: Node                   # Spielwelt: pallet_prompt(i), pallet_click(i) per E
 
 
@@ -85,6 +93,11 @@ func _ready() -> void:
 	if size_id == "pallet":
 		add_pallets(self, n)
 		_pallet_colliders(n)
+		return
+	if size_id == "forklift":
+		Forklift.pose(Forklift.build_model(self), lift, cargo, load_rot, 0.0, fork_shift, fork_tilt)
+		var fk_hit := Build.collider(self, Vector3(Forklift.BODY_X.y - Forklift.BODY_X.x, h, f.y), Vector3((Forklift.BODY_X.x + Forklift.BODY_X.y) * 0.5, h * 0.5, 0))
+		fk_hit.set_meta("interact", self)
 		return
 	if size_id == "bucket":
 		add_child(Bucket.make(chips.fraction() if chips else 0.0))
@@ -145,6 +158,8 @@ func get_prompt() -> String:
 		return world.jack_prompt(index)
 	if size_id == "bucket" and world:
 		return world.bucket_prompt(index)
+	if size_id == "forklift" and world:
+		return world.forklift_prompt(index)
 	return "%s   |   im Baumenü umstellen" % SIZES[size_id]["title"]
 
 
@@ -160,6 +175,8 @@ func interact(_p: Node) -> void:
 		world.jack_click(index)
 	elif size_id == "bucket" and world:
 		world.bucket_click(index)
+	elif size_id == "forklift" and world:
+		world.forklift_click(index)
 
 
 func click(_p: Node) -> void:

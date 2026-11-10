@@ -71,6 +71,12 @@ const BINDINGS := [
 	["crane_right", "Kran nach Osten fahren", "Hallenkran", "k", KEY_RIGHT],
 	["crane_up", "Haken heben", "Hallenkran", "k", KEY_PAGEUP],
 	["crane_down", "Haken senken", "Hallenkran", "k", KEY_PAGEDOWN],
+	["fork_up", "Gabel heben", "Gabelstapler", "k", KEY_UP],
+	["fork_down", "Gabel senken", "Gabelstapler", "k", KEY_DOWN],
+	["fork_left", "Gabel nach links schieben", "Gabelstapler", "k", KEY_LEFT],
+	["fork_right", "Gabel nach rechts schieben", "Gabelstapler", "k", KEY_RIGHT],
+	["fork_tilt_fwd", "Hubgerüst nach vorn neigen", "Gabelstapler", "k", KEY_PAGEUP],
+	["fork_tilt_back", "Hubgerüst nach hinten neigen", "Gabelstapler", "k", KEY_PAGEDOWN],
 ]
 
 var graphics: Dictionary = {}
@@ -78,6 +84,7 @@ var audio: Dictionary = {}
 var mouse: Dictionary = {}
 var game: Dictionary = {}
 var controls: Dictionary = {}
+var _dialect: Dialect
 
 
 func _ready() -> void:
@@ -88,6 +95,7 @@ func _ready() -> void:
 	apply_controls()
 	apply_audio()
 	apply_graphics()
+	apply_language()
 
 
 func _set_defaults() -> void:
@@ -98,17 +106,20 @@ func _set_defaults() -> void:
 	}
 	audio = {"master": 0.8, "sfx": 0.8, "ambient": 0.5, "mute": false}
 	mouse = {"sensitivity": 0.25, "invert_y": false, "handwheel_step": 1, "handwheel_invert": false}
-	game = {"autosave_minutes": 5}
+	game = {"autosave_minutes": 5, "language": "de"}
 	controls = {}
 	for b in BINDINGS:
 		controls[b[0]] = "%s:%d" % [b[3], b[4]]
 
 
 func reset_defaults() -> void:
+	var lang := language()                 # Die Sprache bleibt beim Zurücksetzen erhalten
 	_set_defaults()
+	game["language"] = lang
 	apply_controls()
 	apply_audio()
 	apply_graphics()
+	apply_language()
 	save_settings()
 	changed.emit()
 
@@ -126,6 +137,8 @@ func load_settings() -> void:
 	for k in game.keys():
 		game[k] = cfg.get_value("game", k, game[k])
 	game["autosave_minutes"] = clampi(int(game["autosave_minutes"]), AUTOSAVE_MIN, AUTOSAVE_MAX)
+	if not Dialects.codes().has(str(game["language"])):
+		game["language"] = "de"
 	var cv := int(cfg.get_value("meta", "controls_version", 1))
 	if cv < 2:
 		# Steuerung wurde vereinfacht: alte Belegung und alte Handrad-Stufen nicht übernehmen
@@ -339,3 +352,31 @@ func set_handwheel_step(i: int) -> void:
 	mouse["handwheel_step"] = i
 	save_settings()
 	changed.emit()
+
+
+# --------------------------------------------------------------------------- Sprache
+
+func language() -> String:
+	return str(game.get("language", "de"))
+
+
+## Sprache wechseln, speichern und sofort auf alle Texte anwenden.
+func set_language(code: String) -> void:
+	if not Dialects.codes().has(code):
+		return
+	game["language"] = code
+	apply_language()
+	save_settings()
+	changed.emit()
+
+
+## Hochdeutsch ist der Ausgangstext; eine Mundart wird als Übersetzung eingehängt.
+func apply_language() -> void:
+	if _dialect:
+		TranslationServer.remove_translation(_dialect)
+		_dialect = null
+	var code := language()
+	_dialect = Dialects.make(code)
+	if _dialect:
+		TranslationServer.add_translation(_dialect)
+	TranslationServer.set_locale(code)

@@ -68,6 +68,9 @@ var crane_put: Callable           # Spielwelt: (Collider, Punkt, Normale) -> Fer
 var jack_lift: Callable           # Spielwelt: Leertaste mit Hubwagen (Palette anheben oder absenken)
 var jack_drop: Callable           # Spielwelt: Hubwagen loslassen und abstellen (E oder Q)
 var jack_abandon: Callable        # Spielwelt: Hubwagen sofort an seiner Stelle abstellen (Figur zu weit weg)
+var forklift_leave: Callable      # Spielwelt: vom Gabelstapler absteigen -> Fehlertext
+var forklift: Node3D = null       # Gabelstapler, auf dem die Figur sitzt
+var _fork_phi := 0.0              # letzte Drehung des Staplers: Der Blick dreht mit
 var jack_cart: JackCart           # der Hubwagen selbst: eigener Körper in der Welt
 var noclip := false               # Debug: fliegen und durch Wände gehen
 var player_id := "local"          # wem Zuhause und Sachen gehören; im Multiplayer je Spieler eindeutig
@@ -142,6 +145,9 @@ func _update_camera() -> void:
 # ------------------------------------------------------------ Eingabe
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Ziel inzwischen gelöscht (Umbau, aufgehobene Palette): nicht mehr ansprechen
+	if _focus != null and not _alive(_focus):
+		_focus = null
 	# Rauchen geht überall, auch beim Bedienen einer Maschine
 	if event.is_action_pressed("smoke") and not event.is_echo():
 		get_viewport().set_input_as_handled()
@@ -174,6 +180,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("toggle_view"):
 		third_person = not third_person
 		_update_camera()
+	elif event.is_action_pressed("interact") and driving_forklift() and not build_mode:
+		get_viewport().set_input_as_handled()
+		if forklift_leave.is_valid():
+			forklift_leave.call()
 	elif event.is_action_pressed("interact") and carrying_pendant() and not build_mode:
 		# Fernbedienung: E legt sie nur an der Halterung ab, sonst bleibt sie in der Hand
 		get_viewport().set_input_as_handled()
@@ -293,6 +303,9 @@ func _physics_process(delta: float) -> void:
 		# Stationen (z. B. Reitstock) zeigen ihre Tasten in der Hinweiszeile
 		_set_prompt(str(operating.station_prompt()) if operating.has_method("station_prompt") else "")
 		return
+	if driving_forklift():
+		_ride_forklift()
+		return
 
 	rotation.y = yaw
 	head.rotation.x = pitch
@@ -392,15 +405,19 @@ func set_build_mode(on: bool) -> void:
 
 
 func _update_focus() -> void:
+	if _focus != null and not _alive(_focus):
+		_focus = null
 	if build_mode:
 		_focus = null
 		_set_prompt("")
 		return
 	var target: Node = null
 	_on_part = false
-	if ray.is_colliding():
+	# Der Strahl rechnet erst nach der Figur neu: Direkt nach einem Umbau (Palette aufgehoben, Stapel neu
+	# aufgestellt) meldet er noch den alten, schon gelöschten Körper. Solche Treffer zählen nicht.
+	if ray.is_colliding() and _alive(ray.get_collider()):
 		var c := ray.get_collider()
-		if c and c.has_meta("interact"):
+		if c.has_meta("interact") and _alive(c.get_meta("interact")):
 			target = c.get_meta("interact")
 			# Blick aufs eingespannte Teil: Das Teil geht vor der Werkzeugaufnahme
 			if hands_free() and target.has_method("get_machine") and _aims_at_part(target.get_machine()):
@@ -639,6 +656,50 @@ func _crate_put_down() -> void:
 		crate_drop.call(crate_aim())
 
 
+## Sitzt die Spielfigur auf dem Gabelstapler?
+func driving_forklift() -> bool:
+	return forklift != null and is_instance_valid(forklift)
+
+
+## Auf den Gabelstapler setzen: Er fährt, die Figur sitzt und schaut frei herum.
+func board_forklift(f: Node3D) -> void:
+	clear_held()
+	carry = {"kind": "forklift", "title": "Gabelstapler"}
+	forklift = f
+	_fork_phi = float(f.get("phi"))
+	velocity = Vector3.ZERO
+	arms.set_mode("none")
+	body.set_holding("", 0.0)
+	held_changed.emit("Auf dem Gabelstapler")
+	_ride_forklift()
+
+
+func leave_forklift(at: Vector3) -> void:
+	forklift = null
+	carry = {}
+	global_position = at
+	velocity = Vector3.ZERO
+	held_changed.emit("")
+
+
+## Sitzen: Die Figur folgt dem Sitz, der Blick dreht mit dem Stapler, Maus schaut frei umher.
+func _ride_forklift() -> void:
+	var fp := float(forklift.get("phi"))
+	yaw += fp - _fork_phi
+	_fork_phi = fp
+	rotation.y = yaw
+	head.rotation.x = pitch
+	head.rotation.z = 0.0
+	global_position = forklift.call("seat_point")
+	velocity = Vector3.ZERO
+	_focus = null
+	_set_prompt("[WASD] Fahren    [%s / %s] Gabel %s   [%s / %s] Seitenschieber    [%s / %s] Neigen    [%s] Aussteigen" % [
+		Settings.binding_text("fork_up"), Settings.binding_text("fork_down"),
+		"(Last %d)" % int(forklift.get("load_n")) if int(forklift.get("load_n")) > 0 else "",
+		Settings.binding_text("fork_left"), Settings.binding_text("fork_right"),
+		Settings.binding_text("fork_tilt_fwd"), Settings.binding_text("fork_tilt_back"), Settings.binding_text("interact")])
+
+
 ## Hält die Spielfigur den Hängetaster des Hallenkrans?
 func carrying_pendant() -> bool:
 	return str(carry.get("kind", "")) == "pendant"
@@ -782,9 +843,18 @@ func pallet_spot() -> Vector2:
 	return me + off.normalized() * clampf(off.length(), PALLET_NEAR, PALLET_FAR)
 
 
+## Gibt es das Objekt noch (nicht gelöscht, nicht zum Löschen vorgemerkt, noch in der Szene)?
+static func _alive(o: Object) -> bool:
+	if o == null or not is_instance_valid(o):
+		return false
+	if o is Node:
+		return not (o as Node).is_queued_for_deletion() and (o as Node).is_inside_tree()
+	return true
+
+
 ## Palettenstapel, auf den die getragene Palette gerade zielt (null = Boden).
 func pallet_target() -> Shelf:
-	if carrying_pallet() and _focus is Shelf and (_focus as Shelf).is_pallet():
+	if carrying_pallet() and _alive(_focus) and _focus is Shelf and (_focus as Shelf).is_pallet():
 		return _focus as Shelf
 	return null
 
@@ -984,6 +1054,9 @@ func drop() -> DroppedItem:
 	if carrying_crate():
 		_crate_put_down()
 		return null
+	# Vom Gabelstapler fällt nichts herunter
+	if driving_forklift():
+		return null
 	# Die Kran-Fernbedienung fällt nicht, sie gehört in ihre Halterung
 	if carrying_pendant():
 		if crane_drop_hint.is_valid():
@@ -1113,7 +1186,7 @@ func set_state(d: Dictionary) -> void:
 	location = str(d.get("location", "site"))
 	var c = d.get("carry", {})
 	# Kran-Hängetaster und Spänebehälter bleiben beim Laden an ihrem Platz
-	if c is Dictionary and not c.is_empty() and not str(c.get("kind", "")) in ["pendant", "chip_bin"]:
+	if c is Dictionary and not c.is_empty() and not str(c.get("kind", "")) in ["pendant", "chip_bin", "forklift"]:
 		set_carry(c)
 	var cig = d.get("cigarette", {})
 	if cig is Dictionary:

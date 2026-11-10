@@ -497,7 +497,7 @@ func _initialize() -> void:
 
 	# ---- Holzregal kaufen, aufstellen, umstellen. Paletten, Hubwagen und Sackkarre stehen schon im Lager.
 	var pre: int = lay.shelves.size()
-	ok(pre == 6 and lay.shelves.all(func(s): return s["pos"].x > 12.0), "Startausstattung steht im Lager (3 Paletten, Hubwagen, Sackkarre, Eimer)")
+	ok(pre == 7 and lay.shelves.all(func(s): return s["pos"].x > 12.0), "Startausstattung steht im Lager (3 Paletten, Hubwagen, Sackkarre, Eimer, Test-Gabelstapler)")
 	ok(w.buy_equipment("shelf_wide") == "", "Holzregal gekauft")
 	ok(int(w.inventory.get("shelf_wide", 0)) == 1, "Wartet aufs Aufstellen")
 	var spot := Vector2.INF

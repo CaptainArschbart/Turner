@@ -17,6 +17,9 @@ var index := 0
 var size_id := "bin_s"
 var _body: Node3D
 var _fill: MeshInstance3D
+var _hit: StaticBody3D
+## Ebene, die nur der Blickstrahl trifft (wie DroppedItem.LAYER; hier als Zahl, damit ChipBin ohne Autoloads kompiliert)
+const RAY_ONLY_LAYER := 1 << 4
 
 
 static func size_of(id: String) -> Vector3:
@@ -35,16 +38,21 @@ static func height(id: String) -> float:
 
 func _ready() -> void:
 	var s := size_of(size_id)
-	var yellow := Build.mat(Color(0.95, 0.72, 0.08), 0.6)
-	Build.box(self, Vector3(s.x + 0.1, 0.005, s.z + 0.1), Vector3(0, 0.003, 0), yellow)
 	# Spänekiste aus dem Modell in Originalproportionen. Die schräge Kippseite zeigt nach +X.
 	_body = Props.make("chip_box", s)
 	add_child(_body)
 	var chips := Build.mat(Color(0.8, 0.82, 0.85), 0.6)
 	_fill = Build.box(_body, Vector3(s.x * 0.62, 1.0, s.z - 0.08), Vector3.ZERO, chips)
 	_fill.visible = false
-	var hit := Build.collider(self, s, Vector3(0, s.y * 0.5, 0))
-	hit.set_meta("interact", self)
+	_hit = Build.collider(self, s, Vector3(0, s.y * 0.5, 0))
+	_hit.set_meta("interact", self)
+
+
+## Auf der Gabel des Staplers: kein fester Körper mehr (er steckte sonst tief gehalten im Fahrgestell und
+## schob den Stapler weg), nur noch für den Blickstrahl. Abgesetzt wieder fest.
+func set_carried(on: bool) -> void:
+	if _hit:
+		_hit.collision_layer = RAY_ONLY_LAYER if on else 1
 
 
 ## Füllstand 0..1 anzeigen. out = gerade in den Händen, dann bleibt nur die Markierung.

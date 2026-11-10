@@ -13,6 +13,9 @@ var _settings: SettingsMenu
 var _backdrop: MenuBackdrop
 var _buttons: Array[Button] = []
 var _fade: ColorRect
+var _lang_panel: PanelContainer
+var _lang_list: VBoxContainer
+var _lang_button: Button
 
 
 func _ready() -> void:
@@ -110,10 +113,17 @@ func _build_ui() -> void:
 		var slot := SaveManager.latest_slot()
 		var d := SaveManager.read_slot(slot)
 		var sub := "%s  ·  Spielzeit %s" % [str(d.get("name", "Werkstatt")), SaveManager.format_time(float(d.get("play_time", 0)))]
-		_buttons.append(UITheme.menu_button("Fortsetzen", func(): GameState.load_game(slot), sub))
+		var cont := UITheme.menu_button("Fortsetzen", func(): GameState.load_game(slot), sub)
+		for l in cont.find_children("*", "Label", true, false):
+			if l.text == sub:
+				l.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED   # Name des Spielstands
+		_buttons.append(cont)
 	_buttons.append(UITheme.menu_button("Neues Spiel", func(): _show_slots("new")))
 	_buttons.append(UITheme.menu_button("Spiel laden", func(): _show_slots("load")))
 	_buttons.append(UITheme.menu_button("Einstellungen", _show_settings))
+	_lang_button = UITheme.menu_button("Sprache", _show_languages, Dialects.display_name(Settings.language()))
+	_lang_sub().auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	_buttons.append(_lang_button)
 	_buttons.append(UITheme.menu_button("Beenden", func(): get_tree().quit()))
 	for b in _buttons:
 		items.add_child(b)
@@ -123,6 +133,7 @@ func _build_ui() -> void:
 	_main_box.add_child(spacer2)
 	var ver := Label.new()
 	ver.text = "v0.1   ·   Godot %s" % Engine.get_version_info()["string"]
+	ver.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	ver.add_theme_font_override("font", UITheme.font(400, 1))
 	ver.add_theme_color_override("font_color", Color(1, 1, 1, 0.32))
 	ver.add_theme_font_size_override("font_size", 13)
@@ -164,6 +175,20 @@ func _build_ui() -> void:
 	_settings.closed.connect(_close_panels)
 	_right.add_child(_settings)
 
+	_lang_panel = PanelContainer.new()
+	_lang_panel.visible = false
+	_right.add_child(_lang_panel)
+	var lv := VBoxContainer.new()
+	lv.add_theme_constant_override("separation", 16)
+	_lang_panel.add_child(lv)
+	lv.add_child(UITheme.heading("Sprache"))
+	_lang_list = VBoxContainer.new()
+	_lang_list.add_theme_constant_override("separation", 2)
+	lv.add_child(_lang_list)
+	var lback := UITheme.button("Zurück", _close_panels, 180)
+	lback.size_flags_horizontal = Control.SIZE_SHRINK_END
+	lv.add_child(lback)
+
 	_fade = ColorRect.new()
 	_fade.color = Color(0.01, 0.012, 0.018)
 	_fade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -193,6 +218,7 @@ func _open_panel(p: Control) -> void:
 
 func _show_slots(mode: String) -> void:
 	_settings.visible = false
+	_lang_panel.visible = false
 	_slot_list.mode = mode
 	_slot_list.refresh()
 	_slot_title.text = "Neues Spiel" if mode == "new" else "Spiel laden"
@@ -202,6 +228,7 @@ func _show_slots(mode: String) -> void:
 
 func _show_settings() -> void:
 	_slots_panel.visible = false
+	_lang_panel.visible = false
 	_settings.open()
 	_open_panel(_settings)
 
@@ -209,8 +236,52 @@ func _show_settings() -> void:
 func _close_panels() -> void:
 	_slots_panel.visible = false
 	_settings.visible = false
+	_lang_panel.visible = false
 	var tw := create_tween()
 	tw.tween_property(_menu_col, "modulate", Color.WHITE, 0.25)
+
+
+## Sprachauswahl: Namen und Untertitel stehen schon in der jeweiligen Sprache, sie werden nicht übersetzt.
+func _show_languages() -> void:
+	_slots_panel.visible = false
+	_settings.visible = false
+	_fill_languages()
+	_open_panel(_lang_panel)
+	_focus_language.call_deferred()
+
+
+func _fill_languages() -> void:
+	for ch in _lang_list.get_children():
+		_lang_list.remove_child(ch)
+		ch.queue_free()
+	for l in Dialects.LANGS:
+		var code: String = l[0]
+		var mark := "   ✓" if code == Settings.language() else ""
+		var b := UITheme.menu_button(str(l[1]) + mark, func(): _choose_language(code), str(l[2]), 420.0)
+		b.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		b.name = "lang_" + code
+		_lang_list.add_child(b)
+
+
+func _choose_language(code: String) -> void:
+	Settings.set_language(code)
+	_lang_sub().text = Dialects.display_name(code)
+	_fill_languages()
+	_focus_language.call_deferred()
+
+
+func _focus_language() -> void:
+	var b := _lang_list.get_node_or_null("lang_" + Settings.language()) as Control
+	if b and b.is_inside_tree() and _lang_panel.visible:
+		b.grab_focus()
+
+
+## Untertitel des Menüeintrags "Sprache" (zeigt die aktuelle Sprache).
+func _lang_sub() -> Label:
+	for ch in _lang_button.get_children():
+		if ch is VBoxContainer and ch.get_child_count() > 1:
+			return ch.get_child(1)
+	return null
 
 
 func _on_slot_chosen(slot: int) -> void:
@@ -222,6 +293,6 @@ func _on_slot_chosen(slot: int) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("pause") and _slots_panel.visible:
+	if event.is_action_pressed("pause") and (_slots_panel.visible or _lang_panel.visible):
 		_close_panels()
 		get_viewport().set_input_as_handled()
