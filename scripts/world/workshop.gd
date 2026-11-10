@@ -17,6 +17,7 @@ const WHITEBOARD_YAW := -PI / 2.0                    # beschriebene Seite zeigt 
 const CLOCK_POS := Vector3(5.44, 2.45, 10.65)        # Wanduhr über dem Aktenschrank
 const CLOCK_YAW := PI / 2.0
 const QM_X := Vector2(-0.8, 5.2)     # Raum fürs Qualitätsmanagement westlich vom Büro, von x bis x
+const TIMO_SIGN := "Timo kann keinen Freistisch drehen"
 const QM_DOOR_X := 1.0               # Scharnier der QM-Tür in der Südwand (zwischen Stütze und Druckluftabgang)
 
 
@@ -730,6 +731,17 @@ static func _wall_details(root: Node3D) -> void:
 		Build.cyl(root, 0.27, 0.04, Vector3(vx, 4.7, north + 1.35), dark, Build.AXIS_X, false, 20)
 		Build.box(root, Vector3(0.5, 0.03, 0.3), Vector3(vx + 1.5, 4.43, north + 1.35), grey)
 		vx += 4.5
+	# Schild an der Nordwand zwischen Schaltschrank und Steckdosen
+	var plate := Node3D.new()
+	plate.name = "TimoSchild"
+	plate.position = Vector3(-2.2, 2.35, north + 0.02)
+	root.add_child(plate)
+	Build.box(plate, Vector3(2.7, 0.42, 0.02), Vector3.ZERO, Build.mat(Color(0.75, 0.08, 0.06), 0.5))
+	Build.box(plate, Vector3(2.6, 0.32, 0.01), Vector3(0, 0, 0.012), Build.mat(Color(0.97, 0.97, 0.95), 0.6))
+	for sx in [-1.25, 1.25]:
+		Build.cyl(plate, 0.012, 0.01, Vector3(sx, 0, 0.018), steel, Build.AXIS_Z, false, 10)
+	var timo := Build.label(plate, TIMO_SIGN, Vector3(0, 0, 0.0185), 0.0024, Color(0.08, 0.08, 0.1), 48)
+	timo.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED   # steht so an der Wand, in jeder Sprache
 	# Anfahrschutz an den Stützen
 	for x in range(-12, 13, 6):
 		for z in [north + 0.2, south - 0.2]:

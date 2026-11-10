@@ -115,6 +115,8 @@ var containers: Array = []        # ChipTray je Spänecontainer im Hof
 
 const CONTAINER_KG := 120.0
 const CONTAINER_SORTS := ["stahl", "aluminium", "messing"]
+## Teil, das nach der Rückfrage beim nächsten Klick auf einen Container entsorgt wird
+var _dispose_armed := ""
 
 
 func _ready() -> void:
@@ -3125,6 +3127,14 @@ func container_prompt(i: int) -> String:
 		return "[Linksklick] Eimer leeren (Eimer %s)    |    %s" % [Bucket.describe(player.bucket_chips()), what]
 	if player.carrying_bin():
 		return "[Linksklick] Behälter hineinleeren    |    %s" % what
+	if _carrying_scrap():
+		var it: Dictionary = player.carry
+		var sort := _scrap_sort(it)
+		if sort != c.only:
+			return "%s gehört in den Container %s    |    %s" % [str(it.get("title", "Teil")), ChipTray.SORT_TITLES[sort], what]
+		if _dispose_armed == _scrap_id(it):
+			return "[Linksklick] Wirklich entsorgen? Der Auftrag bleibt offen    |    %s" % what
+		return "[Linksklick] %s entsorgen (%.1f kg)    |    %s" % [str(it.get("title", "Teil")), _scrap_kg(it), what]
 	return what + ("    |    Voll: am PC abholen lassen" if c.is_full() else "")
 
 
@@ -3132,6 +3142,9 @@ func container_prompt(i: int) -> String:
 func container_click(i: int) -> void:
 	if player.carrying_bin():
 		_container_from_bin(i)
+		return
+	if _carrying_scrap():
+		_container_from_part(i)
 		return
 	if not player.carrying_bucket():
 		return
@@ -3150,6 +3163,78 @@ func container_click(i: int) -> void:
 	site.show_containers(containers)
 	player._focus = null
 	hud.show_message("%.1f kg in den Container gekippt, jetzt %d von %d kg." % [moved, int(c.kg), int(c.capacity)], Color(0.7, 0.95, 1.0))
+	office_pc.overlay.waste_tab.refresh()
+
+
+## Trägt die Figur ein bearbeitetes Teil (ausgespannt oder vorbearbeitet), das in den Container darf?
+func _carrying_scrap() -> bool:
+	return player.carrying_part() or player.carrying_semi()
+
+
+## Werkstoffgruppe des Teils, wie bei den Spänen.
+func _scrap_group(it: Dictionary) -> String:
+	var mat := str(it.get("material", it.get("part", {}).get("material", "")))
+	return str(Materials.group_of(mat)["id"])
+
+
+func _scrap_sort(it: Dictionary) -> String:
+	return str(ChipTray.SORTS.get(_scrap_group(it), "stahl"))
+
+
+## Gewicht des Teils aus den Rohteilmaßen (nach oben abgeschätzt, die Späne fehlen schon).
+func _scrap_kg(it: Dictionary) -> float:
+	var mat := str(it.get("material", ""))
+	var l := float(it.get("l", 0.0))
+	var round_part := str(it.get("shape", "")) == "round" or str(it.get("type", "")) == "round"
+	var kg := 0.0
+	if round_part:
+		var d := float(it.get("d", 0.0))
+		if d <= 0.0:
+			d = float(it.get("w", 0.0))
+		kg = Materials.weight_kg(mat, Materials.KIND_ROUND, d, 0.0, 0.0, l)
+	else:
+		kg = Materials.weight_kg(mat, Materials.KIND_SQUARE, 0.0, float(it.get("w", 0.0)), float(it.get("h", 0.0)), l)
+	return maxf(kg, 0.05)
+
+
+## Kennung des getragenen Teils für die Rückfrage vor dem Entsorgen.
+func _scrap_id(it: Dictionary) -> String:
+	return "%s|%s|%s" % [str(it.get("kind", "")), str(it.get("key", "")), str(it.get("title", ""))]
+
+
+## Gehört das getragene Teil noch zu einem offenen Auftrag? Dann erst nach einer Rückfrage wegwerfen.
+func _scrap_has_job(it: Dictionary) -> bool:
+	if player.carrying_semi():
+		return grind_jobs.has(str(it.get("key", ""))) or accepted.has(str(it.get("key", "")))
+	return _qm_open(it)
+
+
+## Bearbeitetes Teil in den passenden Recyclingcontainer werfen. Bei einem offenen Auftrag fragt der erste
+## Klick nach, der zweite wirft es weg.
+func _container_from_part(i: int) -> void:
+	var c: ChipTray = containers[i]
+	var it: Dictionary = player.carry
+	var sort := _scrap_sort(it)
+	if sort != c.only:
+		hud.show_message("Das Teil ist aus %s, es gehört in den Container %s." % [ChipTray.SORT_TITLES[sort], ChipTray.SORT_TITLES[sort]], Color(1, 0.75, 0.2))
+		return
+	var kg := _scrap_kg(it)
+	if c.capacity - c.kg < kg:
+		hud.show_message("Der Container ist zu voll für das Teil: am PC im Programm Entsorgung abholen lassen.", Color(1, 0.75, 0.2))
+		return
+	var id := _scrap_id(it)
+	if _scrap_has_job(it) and _dispose_armed != id:
+		_dispose_armed = id
+		player._focus = null
+		hud.show_message("%s gehört zu einem offenen Auftrag. Nochmal klicken, um es trotzdem zu entsorgen." % str(it.get("title", "Teil")), Color(1, 0.75, 0.2))
+		return
+	_dispose_armed = ""
+	c.add(_scrap_group(it), kg)
+	player.clear_carry()
+	site.show_containers(containers)
+	player._focus = null
+	hud.show_message("%s entsorgt: %.1f kg in den Container %s, jetzt %d von %d kg." % [str(it.get("title", "Teil")), kg,
+		ChipTray.SORT_TITLES[sort], int(c.kg), int(c.capacity)], Color(0.7, 0.95, 1.0))
 	office_pc.overlay.waste_tab.refresh()
 
 
