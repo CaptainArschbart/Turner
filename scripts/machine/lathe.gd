@@ -15,6 +15,7 @@ signal new_part_requested
 signal tool_lost(price: int, tool_name: String)
 signal tool_changed(index: int)
 signal levers_changed(on: bool)
+signal tailstock_changed(on: bool)
 
 const TOOL_UPRIGHT := false   # Werkzeugmodelle liegen schon waagerecht (Schaft in Z)
 const MOUNT_REACH := 0.13     # so nah muss der Blick am Halterkopf vorbeigehen (m)
@@ -221,6 +222,24 @@ var guard_t := 0.0                         # 0 = zu (eingerastet), 1 = ganz offe
 var guard_open := false                    # Ziel: offen
 var GUARD_TRAVEL := 0.0                    # m Weg nach links
 var GUARD_BOX := AABB()                    # Klickfläche (zu), Maschinenkoordinaten
+## Reitstock aus dem E50-Modell: [E] darauf = Station. A/D verschiebt ihn auf dem Bett, das Mausrad
+## fährt die Pinole über das große Handrad aus und ein, die Leertaste klemmt ihn (Hebel nach hinten).
+const TS_QUILL_TRAVEL := 0.12              # m Pinolenhub
+const TS_PITCH := 0.005                    # m Pinolenweg je Handradumdrehung
+const TS_QUILL_STEP := 0.002               # m je Mausrad-Raste
+const TS_QUILL_SPEED := 0.06               # m/s, so schnell folgt die Pinole dem Handrad
+const TS_SPEED := 0.25                     # m/s Verschieben von Hand
+const TS_BRAKE_ANGLE := -0.9               # rad: Klemmhebel angezogen (nach hinten)
+const TS_GAP := 0.005                      # m Abstand zu Bettschlitten und Werkstück
+var tailstock: Node3D                      # Reitstockschlitten, position.x = Versatz gegenüber dem Modell
+var _ts := {}                              # Teile aus LatheModel.mach["ts"] (leer: kein Modell-Reitstock)
+var ts_off := 0.0                          # m Versatz auf dem Bett (+ = zum Bettende)
+var ts_ext := 0.0                          # m Pinole ausgefahren (Sollwert)
+var _ts_ext_shown := 0.0                   # sichtbare Pinolenlage (folgt ts_ext)
+var ts_brake := false                      # Reitstock geklemmt
+var _ts_lever_a := 0.0
+var ts_mode := false                       # Station am Reitstock
+var _ts_stop_msg := 0.0
 var e50 := false                           # Maschine aus dem E50-Modell (Verkleidung, Schlitten, Türen)
 const BIN_UNDER_CHUTE := 0.3                           # so weit ragt der E50-Abwurf über die Spänekiste (m)
 var periphery: Node3D                                     # Späneförderer und Spänewagen (stehen neben der Maschine)
@@ -391,6 +410,390 @@ func close_levers() -> void:
 	levers_changed.emit(false)
 
 
+# ------------------------------------------------------------ Reitstock (E50-Modell)
+
+## Ziel für [E] auf dem Reitstock.
+class TailstockTarget extends Node:
+	var lathe: Lathe
+
+	func get_prompt() -> String:
+		return "[%s] Reitstock bedienen" % Settings.binding_text("interact")
+
+	func interact(p: Node) -> void:
+		lathe.open_tailstock(p)
+
+
+var _ts_target: TailstockTarget
+
+
+func has_tailstock() -> bool:
+	return not _ts.is_empty()
+
+
+## Reitstockkörper in Maschinenkoordinaten (mit Versatz).
+func tailstock_box() -> AABB:
+	var b: AABB = _ts.get("box", AABB())
+	b.position.x += ts_off
+	return b
+
+
+## Zeigt der Blickstrahl (global) auf den Reitstock? Durch die geschlossene Schutztür nicht.
+func _aims_at_tailstock(origin: Vector3, dir: Vector3) -> bool:
+	if _ts.is_empty() or door_latched or not is_inside_tree():
+		return false
+	var inv := global_transform.affine_inverse()
+	return tailstock_box().grow(0.01).intersects_ray(inv * origin, inv.basis * dir) != null
+
+
+## Spitze der mitlaufenden Spitze (Maschinen-x) bei Versatz off und Pinolenhub ext.
+func _ts_tip(off: float, ext: float) -> float:
+	return float(_ts.get("tip_x", 0.0)) + off - ext
+
+
+## Linkeste erlaubte Lage der Spitze: rechtes Werkstückende, sonst knapp vor den Backen.
+func _ts_tip_min() -> float:
+	var end := 0.02
+	if has_part:
+		end = maxf((part_length() - clamp_depth) * 0.001, end)
+	return end + TS_GAP
+
+
+## Anschlag am Bettschlitten: Reitstockkörper und Schlittenteile als Raster aus TS_CELL großen Zellen
+## (Höhe y × Tiefe z), je Zelle das linke Ende des Reitstocks bzw. das rechte Ende der Schlittenteile.
+## Die Dreiecke werden exakt auf die Zellen zugeschnitten: das überstehende Pinolengehäuse fährt über
+## den niedrigeren Bettschlitten, schräge Kanten zählen nur dort, wo sie wirklich sind. Die Pinole
+## selbst prüft nur gegen das Werkstück (Schläuche und andere biegsame Teile zählen nie).
+const TS_CELL := 0.01
+var _ts_grid := {}           # Vector2i(y, z) -> min x des Reitstocks (ohne Pinole) bei Versatz 0
+var _ts_grid_box := AABB()   # Hülle des Reitstocks (ohne Pinole), Versatz 0
+var _car_grid: Array = []    # je Schlittenteil {"g": Raster (max x), "cross": fährt mit dem Planschlitten, "mi"}
+var _car_ref := Vector2.ZERO # Lage von Bettschlitten (x) und Planschlitten (z) beim Aufnehmen
+var _car_exact := {}         # exakt gerasterte Schlittenteile (alle anderen: Hüllquader)
+
+
+## Polygon an der Ebene (Achse axis = v) abschneiden; above: Teil mit Werten >= v behalten.
+static func _clip_poly(poly: PackedVector3Array, axis: int, v: float, above: bool) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var n := poly.size()
+	var sg := 1.0 if above else -1.0
+	for i in n:
+		var a := poly[i]
+		var b := poly[(i + 1) % n]
+		var da := (a[axis] - v) * sg
+		var db := (b[axis] - v) * sg
+		if da >= 0.0:
+			out.append(a)
+		if (da >= 0.0) != (db >= 0.0):
+			out.append(a.lerp(b, da / (da - db)))
+	return out
+
+
+## Dreiecke von mi (Lage xf) in das Raster eintragen; use_max: rechtes statt linkes Ende.
+## clip: nur Zellen in diesem Bereich (y, z) - spart Arbeit an Teilen weit weg vom Reitstock.
+static func _add_cells(mi: MeshInstance3D, xf: Transform3D, into: Dictionary, use_max: bool, clip := AABB()) -> void:
+	var lim := clip.size != Vector3.ZERO
+	for s in mi.mesh.get_surface_count():
+		var arr := mi.mesh.surface_get_arrays(s)
+		var vs: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var idx := PackedInt32Array()
+		if arr[Mesh.ARRAY_INDEX] != null:
+			idx = arr[Mesh.ARRAY_INDEX]
+		else:
+			for i in vs.size():
+				idx.append(i)
+		var ns: PackedVector3Array = arr[Mesh.ARRAY_NORMAL] if arr[Mesh.ARRAY_NORMAL] != null else PackedVector3Array()
+		var nb := xf.basis.inverse().transposed()
+		var wv := PackedVector3Array()
+		wv.resize(vs.size())
+		for i in vs.size():
+			wv[i] = xf * vs[i]
+		for t in range(0, idx.size() - 2, 3):
+			# Nur Flächen, die zum Gegenüber zeigen: beim Reitstock nach links (-x), beim Schlitten
+			# nach rechts. Ihre Kanten decken auch die Ränder der Seitenflächen ab.
+			if not ns.is_empty():
+				var nx := (nb * (ns[idx[t]] + ns[idx[t + 1]] + ns[idx[t + 2]])).x
+				if (nx < 0.001) if use_max else (nx > -0.001):
+					continue
+			var tri := PackedVector3Array([wv[idx[t]], wv[idx[t + 1]], wv[idx[t + 2]]])
+			var b := AABB(tri[0], Vector3.ZERO).expand(tri[1]).expand(tri[2])
+			var y0 := b.position.y
+			var y1 := b.end.y
+			var z0 := b.position.z
+			var z1 := b.end.z
+			if lim:
+				if y1 < clip.position.y or y0 > clip.end.y or z1 < clip.position.z or z0 > clip.end.z:
+					continue
+				y0 = maxf(y0, clip.position.y)
+				y1 = minf(y1, clip.end.y)
+				z0 = maxf(z0, clip.position.z)
+				z1 = minf(z1, clip.end.z)
+			for ky in range(floori(y0 / TS_CELL), floori(y1 / TS_CELL) + 1):
+				var row := _clip_poly(_clip_poly(tri, 1, ky * TS_CELL, true), 1, (ky + 1) * TS_CELL, false)
+				if row.is_empty():
+					continue
+				var rz0 := INF
+				var rz1 := -INF
+				for p in row:
+					rz0 = minf(rz0, p.z)
+					rz1 = maxf(rz1, p.z)
+				var ka := maxi(floori(rz0 / TS_CELL), floori(z0 / TS_CELL))
+				var kb := mini(floori(rz1 / TS_CELL), floori(z1 / TS_CELL))
+				# Extremes x der (konvexen) Zeile an jeder Zellgrenze z = k · TS_CELL
+				var edge := {}
+				for k in range(ka, kb + 2):
+					var zc := k * TS_CELL
+					if zc < rz0 or zc > rz1:
+						continue
+					var ex := -INF if use_max else INF
+					for i in row.size():
+						var a := row[i]
+						var b2 := row[(i + 1) % row.size()]
+						if (a.z - zc) * (b2.z - zc) <= 0.0 and a.z != b2.z:
+							var xi := lerpf(a.x, b2.x, (zc - a.z) / (b2.z - a.z))
+							ex = maxf(ex, xi) if use_max else minf(ex, xi)
+					edge[k] = ex
+				for kz in range(ka, kb + 1):
+					var x := -INF if use_max else INF
+					for k in [kz, kz + 1]:
+						if edge.has(k):
+							x = maxf(x, float(edge[k])) if use_max else minf(x, float(edge[k]))
+					for p in row:
+						if p.z >= kz * TS_CELL and p.z <= (kz + 1) * TS_CELL:
+							x = maxf(x, p.x) if use_max else minf(x, p.x)
+					if is_inf(x):
+						continue
+					var key := Vector2i(ky, kz)
+					if into.has(key):
+						x = maxf(x, float(into[key])) if use_max else minf(x, float(into[key]))
+					into[key] = x
+
+
+static func _counts(mi: MeshInstance3D) -> bool:
+	return mi.mesh != null and not mi.has_meta("soft") and mi.is_visible_in_tree()
+
+
+func _build_ts_grids() -> void:
+	var inv := global_transform.affine_inverse()
+	var quill: Node3D = _ts["quill"]
+	var back := Transform3D(Basis.IDENTITY, Vector3(-ts_off, 0, 0))
+	var first := true
+	for n in tailstock.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi.mesh == null or quill.is_ancestor_of(mi):
+			continue
+		var xf := back * inv * mi.global_transform
+		_add_cells(mi, xf, _ts_grid, false)
+		var b := xf * mi.get_aabb()
+		_ts_grid_box = b if first else _ts_grid_box.merge(b)
+		first = false
+	_car_ref = Vector2(carriage.position.x, cross_slide.position.z)
+	var post: Node = model._post_root if model else null
+	var fixed := _ts_grid_box.grow(0.02)
+	fixed.position.x = -50.0          # in x zählt alles (der Reitstock fährt die ganze Bettlänge)
+	fixed.size.x = 100.0
+	# Der Planschlitten fährt in z (Weg X_MIN..X_MAX): seine Teile in diesem Bereich vorab rastern
+	var travel := (X_MAX - X_MIN) * 0.001 + 0.02
+	var moving := fixed.grow(0.0)
+	moving.position.z -= travel
+	moving.size.z += travel * 2.0
+	for n in carriage.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi.mesh == null or mi.has_meta("soft") or (post and post.is_ancestor_of(mi)):
+			continue
+		var area := moving if cross_slide.is_ancestor_of(mi) else fixed
+		if not ((inv * mi.global_transform) * mi.get_aabb()).intersects(area):
+			continue
+		# Große Schlittenteile aus dem Modell exakt, kleine Anbauteile (Werkzeuge, Halter, Handräder)
+		# mit ihrem Hüllquader - die sind fein unterteilt und würden das Rastern lange aufhalten
+		if not (str(mi.name) in LatheModel.CARRIAGE_PARTS + LatheModel.CROSS_PARTS + LatheModel.TOP_PARTS):
+			continue
+		var g := {}
+		_add_cells(mi, inv * mi.global_transform, g, true, area)
+		_car_exact[mi] = true
+		if not g.is_empty():
+			_car_grid.append({"g": g, "cross": cross_slide.is_ancestor_of(mi), "mi": mi})
+
+
+## Kleinster Versatz, bei dem der Reitstockkörper kein Teil am Bettschlitten (samt Plan-, Oberschlitten
+## und Werkzeugkopf) berührt. -INF = nichts im Weg.
+func _carriage_stop() -> float:
+	if _ts_grid.is_empty():
+		_build_ts_grids()
+	var stop := -INF
+	var dx := carriage.position.x - _car_ref.x
+	var dk := roundi((cross_slide.position.z - _car_ref.y) / TS_CELL)
+	for ob in _car_grid:
+		if not _counts(ob["mi"]):
+			continue
+		var sk := dk if ob["cross"] else 0
+		var g: Dictionary = ob["g"]
+		for key in g:
+			var k: Vector2i = key
+			var tk := Vector2i(k.x, k.y + sk)
+			if _ts_grid.has(tk):
+				stop = maxf(stop, float(g[key]) + dx - float(_ts_grid[tk]))
+	# Alle übrigen Teile (Werkzeuge, Halter, Handräder, Werkzeugkopf - wechseln und drehen beim
+	# Indexieren): Hüllquader in ihrer aktuellen Lage
+	var inv := global_transform.affine_inverse()
+	for n in carriage.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if _car_exact.has(mi) or not _counts(mi):
+			continue
+		var b: AABB = (inv * mi.global_transform) * mi.get_aabb()
+		if b.position.y > _ts_grid_box.end.y or b.end.y < _ts_grid_box.position.y \
+				or b.position.z > _ts_grid_box.end.z or b.end.z < _ts_grid_box.position.z:
+			continue
+		for ky in range(floori(b.position.y / TS_CELL), floori(b.end.y / TS_CELL) + 1):
+			for kz in range(floori(b.position.z / TS_CELL), floori(b.end.z / TS_CELL) + 1):
+				var key := Vector2i(ky, kz)
+				if _ts_grid.has(key):
+					stop = maxf(stop, b.end.x - float(_ts_grid[key]))
+	return stop
+
+
+## Kleinster Versatz: Körper nicht in den Bettschlitten, Spitze nicht ins Werkstück.
+func _ts_off_min(ext: float) -> float:
+	var lo := _ts_tip_min() - float(_ts.get("tip_x", 0.0)) + ext
+	var stop := _carriage_stop()
+	if stop > -INF:
+		lo = maxf(lo, stop + TS_GAP)
+	return lo
+
+
+## Größter Versatz: Reitstock bleibt auf den Bettbahnen.
+func _ts_off_max() -> float:
+	var b: AABB = _ts.get("box", AABB())
+	var rails: AABB = model.mach.get("rails", AABB()) if model else AABB()
+	if rails.size == Vector3.ZERO:
+		return 0.0
+	return maxf(rails.end.x - b.end.x, 0.0)
+
+
+## Station am Reitstock: eigene Ansicht, A/D, Mausrad und Leertaste bedienen ihn.
+func open_tailstock(p: Node) -> void:
+	if demo or operating or panel_open or _ts.is_empty():
+		return
+	player = p
+	ts_mode = true
+	var c := tailstock_box().get_center()
+	p.start_operating(self, to_global(Vector3(c.x, 0.0, 1.05)), global_rotation.y)
+	_yaw_t = 0.45
+	_pitch_t = -0.28
+	_dist_t = 0.95
+	cam_yaw = _yaw_t
+	cam_pitch = _pitch_t
+	cam_dist = _dist_t
+	cam_target = _ts_view_point()
+	op_cam.fov = float(Settings.graphics["fov"]) * 0.75
+	_update_camera(1.0)
+	op_cam.make_current()
+	tailstock_changed.emit(true)
+
+
+func close_tailstock() -> void:
+	if not ts_mode:
+		return
+	ts_mode = false
+	set_view("reset")
+	if player:
+		player.stop_operating()
+	tailstock_changed.emit(false)
+
+
+func _ts_view_point() -> Vector3:
+	var b := tailstock_box()
+	return Vector3(b.get_center().x - 0.1, AXIS_H, b.get_center().z)
+
+
+## Hinweiszeile, solange der Spieler an der Station steht (Player zeigt sie statt des Blickziels).
+func station_prompt() -> String:
+	if not ts_mode:
+		return ""
+	var st := "geklemmt" if ts_brake else "gelöst"
+	return "Reitstock (%s), Pinole %d mm    [A / D] Verschieben    [Mausrad] Pinole    [%s] Klemmen / Lösen    [%s] Zurück" % [
+		st, roundi(ts_ext * 1000.0), Settings.binding_text("jump"), Settings.binding_text("interact")]
+
+
+func set_tailstock_brake(on: bool) -> void:
+	ts_brake = on
+	_info("Reitstock geklemmt." if on else "Reitstock gelöst: mit A / D verschieben.")
+
+
+## Pinole um d Meter aus- (+) bzw. einfahren (-). Endlagen: Hub und Werkstückende.
+func move_quill(d: float) -> void:
+	var lim := minf(TS_QUILL_TRAVEL, float(_ts.get("tip_x", 0.0)) + ts_off - _ts_tip_min())
+	var nx := clampf(ts_ext + d, 0.0, maxf(lim, ts_ext))
+	if is_equal_approx(nx, ts_ext) and d != 0.0:
+		var why := "Pinole steht am Werkstück." if lim < TS_QUILL_TRAVEL else "Pinole ganz ausgefahren."
+		_warn("Pinole ganz eingefahren." if d < 0.0 else why)
+	ts_ext = nx
+
+
+## Reitstock auf dem Bett verschieben (nur gelöst).
+func move_tailstock(d: float) -> void:
+	if d == 0.0:
+		return
+	if ts_brake:
+		if _ts_stop_msg <= 0.0:
+			_warn("Reitstock ist geklemmt: [%s] löst den Hebel." % Settings.binding_text("jump"))
+			_ts_stop_msg = 1.5
+		return
+	var lo := _ts_off_min(ts_ext)
+	var hi := _ts_off_max()
+	var n := clampf(ts_off + d, minf(lo, ts_off), hi)
+	if is_equal_approx(n, ts_off) and _ts_stop_msg <= 0.0:
+		_warn("Reitstock steht am Bettende." if d > 0.0 else "Weiter geht es nicht: Bettschlitten oder Werkstück im Weg.")
+		_ts_stop_msg = 1.5
+	ts_off = n
+
+
+func _ts_input(event: InputEvent) -> void:
+	if event.is_action_pressed("interact"):
+		close_tailstock()
+	elif event.is_action_pressed("jump") and not event.is_echo():
+		set_tailstock_brake(not ts_brake)
+	elif event is InputEventMouseButton and event.pressed:
+		var mb := event as InputEventMouseButton
+		var dir := 0.0
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+			dir = 1.0
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			dir = -1.0
+		if dir == 0.0:
+			return
+		if mb.ctrl_pressed or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+			_zoom_step(dir)
+		else:
+			move_quill(dir * (mb.factor if mb.factor > 0.0 else 1.0) * TS_QUILL_STEP)
+	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+		var inv := -1.0 if bool(Settings.mouse["invert_y"]) else 1.0
+		_yaw_t = clampf(_yaw_t - event.relative.x * 0.005, -PI * 0.6, PI * 0.6)
+		_pitch_t = clampf(_pitch_t - event.relative.y * 0.005 * inv, -PI / 2.0, 0.25)
+	else:
+		return
+	get_viewport().set_input_as_handled()
+
+
+## Reitstock, Pinole, Handrad und Klemmhebel nachführen.
+func _step_tailstock(delta: float) -> void:
+	if _ts.is_empty():
+		return
+	_ts_stop_msg = maxf(_ts_stop_msg - delta, 0.0)
+	if ts_mode:
+		move_tailstock(Input.get_axis("move_left", "move_right") * TS_SPEED * delta)
+	tailstock.position.x = ts_off
+	var q := move_toward(_ts_ext_shown, ts_ext, TS_QUILL_SPEED * delta)
+	if q != _ts_ext_shown:
+		_ts_ext_shown = q
+		(_ts["quill"] as Node3D).position.x = -q
+		if _ts.has("crank"):
+			(_ts["crank"] as Node3D).rotation.x = -q / TS_PITCH * TAU
+	if _ts.has("lever"):
+		var want := TS_BRAKE_ANGLE if ts_brake else 0.0
+		_ts_lever_a = move_toward(_ts_lever_a, want, 4.0 * delta)
+		(_ts["lever"] as Node3D).rotation.z = _ts_lever_a
+
+
 func dial_index(k: int) -> int:
 	return _dial_panel.index(k)
 
@@ -556,7 +959,11 @@ func _build() -> void:
 		periphery = Node3D.new()
 		periphery.name = "Peripherie"
 		add_child(periphery)
-		parts = {"machine": self, "carriage": carriage, "door": _door, "guard": _guard, "periphery": periphery}
+		tailstock = Node3D.new()
+		tailstock.name = "Reitstockschlitten"
+		add_child(tailstock)
+		parts = {"machine": self, "carriage": carriage, "door": _door, "guard": _guard, "periphery": periphery,
+			"tailstock": tailstock}
 	model = LatheModel.new() if use_glb else null
 	if model and model.build(spindle_pivot, cross_slide, ts, AXIS_H, 1.07, parts):
 		TOOL_K = model.tool_scale
@@ -574,6 +981,11 @@ func _build() -> void:
 			Build.box(jp, Vector3(0.02, 0.012, 0.03), Vector3(-0.04, 0.0, 0), dark).reparent(j, false)
 			jaws.append(jp)
 	e50 = model != null and model.mach.has("door")
+	if e50 and model.mach.has("ts"):
+		_ts = model.mach["ts"]
+	elif tailstock:
+		tailstock.free()
+		tailstock = null
 	if not conventional and grinder_type == "" and kss == null:
 		kss = KssTank.new()
 	if not e50 and _guard:
@@ -760,6 +1172,8 @@ func _build() -> void:
 	Build.cyl(tw, 0.086, 0.012, Vector3(0, 0, -0.004), dark, Build.AXIS_Z, false, 40)
 	Build.cyl(tw, 0.028, 0.03, Vector3(0, 0, 0.004), chrome, Build.AXIS_Z, false, 24)
 	Build.cyl(tw, 0.011, 0.04, Vector3(0, 0.072, 0.024), dark, Build.AXIS_Z, false, 16)       # Kurbelgriff
+	if not _ts.is_empty():
+		ts.free()      # E50: Reitstock kommt aus dem Modell (bedienbar, siehe ts_mode)
 
 	if not e50:
 		# Bettschlitten mit Schlosskasten: blaues Bedienfeld, Handrad links
@@ -932,6 +1346,11 @@ func _build() -> void:
 	pt.lathe = self
 	add_child(pt)
 	hit2.set_meta("interact", pt)   # E aufs Pult: gleich in die Pultansicht
+	if not _ts.is_empty():
+		# Reitstock: der Blick wird über focus_for auf ihn gelenkt (er steht in der Maschinenhülle)
+		_ts_target = TailstockTarget.new()
+		_ts_target.lathe = self
+		add_child(_ts_target)
 	# Tür und schwarzer Hebel: Linksklick mit dem Fadenkreuz (stehen etwas vor der Maschinenhülle,
 	# damit der Blickstrahl sie zuerst trifft; der Hebel noch vor der Tür)
 	var dt := DoorTarget.new()
@@ -1592,12 +2011,13 @@ func _hose(parent: Node3D, pts: Array, r: float, m: Material) -> void:
 		var p1: Vector3 = pts[i + 1]
 		var d := p1 - p0
 		var seg := Build.cyl(parent, r, d.length(), (p0 + p1) * 0.5, m, Build.AXIS_Y, false, 10)
+		seg.set_meta("soft", true)          # biegsam: kein Anschlag für den Reitstock
 		var y := d.normalized()
 		var x := y.cross(Vector3.FORWARD if absf(y.z) < 0.9 else Vector3.RIGHT).normalized()
 		seg.basis = Basis(x, y, x.cross(y))
 		var n := int(d.length() / 0.02)
 		for k in n:
-			Build.sphere(parent, r * 1.2, p0 + d * (float(k) + 0.5) / n, m)
+			Build.sphere(parent, r * 1.2, p0 + d * (float(k) + 0.5) / n, m).set_meta("soft", true)
 
 
 func _handwheel(parent: Node3D, r: float, ring_m: Material, knob_m: Material) -> void:
@@ -2147,6 +2567,8 @@ func get_machine() -> Node:
 
 
 func focus_for(origin: Vector3, dir: Vector3) -> Node:
+	if _ts_target and _aims_at_tailstock(origin, dir) and (tool_mount == null or (_post_center() - origin).cross(dir).length() > MOUNT_REACH):
+		return _ts_target
 	if tool_mount == null:
 		return self
 	return tool_mount if (_post_center() - origin).cross(dir).length() <= MOUNT_REACH else self
@@ -3316,7 +3738,8 @@ func _physics_process(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_step_index_anim(delta)
-	if operating or panel_open:
+	_step_tailstock(delta)
+	if operating or panel_open or ts_mode:
 		_update_camera(delta)
 	if booting > 0.0:
 		booting = maxf(booting - delta, 0.0)
@@ -3347,6 +3770,8 @@ func _update_camera(delta: float) -> void:
 	var want: Vector3
 	if _lever_view:
 		want = PANEL_POS
+	elif ts_mode:
+		want = _ts_view_point() + cam_pan
 	elif _panel_view:
 		want = screen_center()
 	else:
@@ -3719,6 +4144,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		elif _dial_panel.input(event, op_cam):
 			get_viewport().set_input_as_handled()
+		return
+	if ts_mode:
+		_ts_input(event)
 		return
 	if not operating:
 		return

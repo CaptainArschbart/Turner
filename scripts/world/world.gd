@@ -109,6 +109,11 @@ var shelf_nodes: Array = []
 var _pallet_ghost: Node3D               # Vorschau: wo Q die getragene Palette abstellt
 var _pallet_ghost_mat: StandardMaterial3D
 var _ghost_n := 0                        # so viele Paletten zeigt die Vorschau gerade
+var _crate_ghost: Node3D                 # Vorschau: wo Linksklick die getragene Kiste abstellt
+var _crate_ghost_key := []               # Größe und Inhalt, für die die Kisten-Vorschau gebaut ist
+var _crate_spot_key := []                # letzter Stellplatz der Kiste (Ziel, Aufstellung) ...
+var _crate_spot_cache := {}              # ... und sein Ergebnis
+var _bench_spot_cache := {}              # "Größe|Werkbank" -> freie Stellen auf der Platte, siehe _bench_crate_spots
 var containers: Array = []        # ChipTray je Spänecontainer im Hof
 
 const CONTAINER_KG := 120.0
@@ -245,6 +250,7 @@ func _ready() -> void:
 	player.bucket_scoop = bucket_scoop
 	player.bucket_drop = bucket_drop
 	player.crate_drop = crate_set_down
+	player.crate_spot = crate_spot.bind(true)
 	player.jack_abandon = jack_abandon
 	whiteboard.shop = self
 	whiteboard.overlay.day_app.shop = self
@@ -280,6 +286,7 @@ func _wire_lathe(m: Lathe) -> void:
 	m.levers_changed.connect(func(on: bool):
 		hud.use_lathe(m)
 		hud.set_levers(m, on))
+	m.tailstock_changed.connect(hud.set_other_machine)
 	m.tool_lost.connect(_on_tool_lost.bind(m.MACHINE_ID))
 	m.submit_requested.connect(_submit_hint)
 	if m.grinder_type != "":
@@ -421,6 +428,7 @@ func _process(delta: float) -> void:
 	_update_reflections(delta)
 	_fill_ambient()
 	_update_pallet_ghost()
+	_update_crate_ghost()
 
 
 ## Durchscheinende Palette dort, wo die Ablegen-Taste die getragene Palette abstellt:
@@ -444,9 +452,7 @@ func _update_pallet_ghost() -> void:
 			_pallet_ghost.visible = false
 		return
 	if not _pallet_ghost:
-		_pallet_ghost_mat = StandardMaterial3D.new()
-		_pallet_ghost_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		_pallet_ghost_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_ghost_material()
 		_pallet_ghost = Node3D.new()
 		add_child(_pallet_ghost)
 	if n != _ghost_n:
@@ -466,8 +472,49 @@ func _update_pallet_ghost() -> void:
 	else:
 		is_free = layout.check_shelf("pallet", at, rot) == ""
 		_pallet_ghost.transform = Transform3D(Basis(Vector3.UP, rot * PI / 2.0), Vector3(at.x, 0.003, at.y))
-	_pallet_ghost_mat.albedo_color = Color(0.35, 1.0, 0.45, 0.38) if is_free else Color(1.0, 0.3, 0.25, 0.38)
+	_pallet_ghost_mat.albedo_color = _ghost_color(is_free)
 	_pallet_ghost.visible = true
+
+
+## Durchscheinende Kiste samt Inhalt dort, wo Linksklick die getragene Kiste abstellt (immer beim Tragen):
+## grün = frei, rot = geht dort nicht. Gleiche Optik wie die Paletten-Vorschau.
+func _update_crate_ghost() -> void:
+	var wanted: bool = player != null and player.carrying_crate() and not player.operating and not player.build_mode
+	if not wanted:
+		if _crate_ghost:
+			_crate_ghost.visible = false
+		return
+	var size_id := str(player.carry["size"])
+	var items: Array = player.carry["items"]
+	var key := [size_id, items.size()]
+	if not _crate_ghost or key != _crate_ghost_key:
+		if _crate_ghost:
+			_crate_ghost.queue_free()
+		_ghost_material()
+		_crate_ghost = Crate.make_model(size_id, items)
+		add_child(_crate_ghost)
+		_ghostify(_crate_ghost)
+		_crate_ghost_key = key
+	var s := crate_spot(player.crate_aim(), true)
+	var at: Vector2 = s["pos"]
+	var y := ToolBench.TOP_Y if bool(s["top"]) else 0.0
+	_crate_ghost.transform = Transform3D(Basis(Vector3.UP, int(s["rot"]) * PI / 2.0), Vector3(at.x, y + 0.003, at.y))
+	# Die Paletten-Vorschau teilt das Material: Beide sind nie gleichzeitig zu sehen
+	_pallet_ghost_mat.albedo_color = _ghost_color(str(s["err"]) == "")
+	_crate_ghost.visible = true
+
+
+## Gemeinsames durchscheinendes Material der Vorschauen (Paletten und Kisten).
+func _ghost_material() -> StandardMaterial3D:
+	if _pallet_ghost_mat == null:
+		_pallet_ghost_mat = StandardMaterial3D.new()
+		_pallet_ghost_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_pallet_ghost_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	return _pallet_ghost_mat
+
+
+static func _ghost_color(is_free: bool) -> Color:
+	return Color(0.35, 1.0, 0.45, 0.38) if is_free else Color(1.0, 0.3, 0.25, 0.38)
 
 
 func _ghostify(n: Node) -> void:
@@ -2028,48 +2075,89 @@ func crate_lift(i: int) -> String:
 	return ""
 
 
-## Getragene Kiste abstellen, wohin der Blick zeigt (at, Weltpunkt): Auf einer Werkbank sucht sie sich
-## die nächste freie Stelle auf der Platte, sonst steht sie am Boden neben einer Werkbank wie beim Aufstellen.
-## Fehlertext, leer = abgestellt.
-func crate_set_down(at: Vector3) -> String:
+## Stellplatz für die getragene Kiste zum Blickpunkt at (Weltpunkt): Auf einer Werkbank die nächste freie
+## Stelle auf der Platte, sonst am Boden neben einer Werkbank wie beim Aufstellen.
+## {"pos": Vector2, "rot": int, "top": auf der Platte?, "err": Fehlertext, leer = geht dort}
+## cached: Ergebnis vom letzten Aufruf mit gleichem Ziel wiederverwenden (Vorschau und Hinweis, pro Bild).
+func crate_spot(at: Vector3, cached := false) -> Dictionary:
 	if not player.carrying_crate():
-		return ""
+		return {"pos": Vector2(at.x, at.z), "rot": 0, "top": false, "err": "Keine Kiste in den Händen."}
 	var size_id := str(player.carry["size"])
 	var spot := Vector2(at.x, at.z)
+	var yaw_rot := posmod(int(round(player.yaw / (PI / 2.0))), 4)
+	# Die Bank-Suche ist teuer: Pro Bild nur neu rechnen, wenn sich Ziel oder Aufstellung geändert haben
+	var key := [size_id, spot.snappedf(0.02), at.y > ToolBench.TOP_Y - 0.1, yaw_rot, layout.crates.size(), layout.benches.size()]
+	if cached and key == _crate_spot_key:
+		return _crate_spot_cache
 	var best := {}
-	# Werkbank, auf deren Platte (oder knapp daneben) der Blick zeigt
+	# Werkbank, auf deren Platte (oder knapp daneben) der Blick zeigt: nächste freie Stelle
 	for id in layout.benches:
 		if not layout.bench_area(id).grow(0.15).has_point(spot):
 			continue
-		var rot := int(layout.benches[id]["rot"])
-		var area := layout.bench_area(id)
 		var best_d := INF
-		var x := area.position.x
-		while x <= area.end.x:
-			var z := area.position.y
-			while z <= area.end.y:
-				var p := Vector2(x, z)
-				for r in [rot, posmod(rot + 1, 4)]:
-					if layout.crate_on_top(size_id, p, r, id) and layout.check_crate(size_id, p, r) == "" and p.distance_to(spot) < best_d:
-						best_d = p.distance_to(spot)
-						best = {"pos": p, "rot": r}
-				z += 0.05
-			x += 0.05
+		for s in _bench_crate_spots(size_id, id):
+			var d := (s["pos"] as Vector2).distance_squared_to(spot)
+			if d < best_d:
+				best_d = d
+				best = s
 		if not best.is_empty():
 			break
 	var err := ""
 	if best.is_empty():
-		var r := posmod(int(round(player.yaw / (PI / 2.0))), 4)
-		err = layout.check_crate(size_id, spot, r)
+		err = layout.check_crate(size_id, spot, yaw_rot)
 		if err == "":
-			best = {"pos": spot, "rot": r}
+			best = {"pos": spot, "rot": yaw_rot}
 		elif at.y > ToolBench.TOP_Y - 0.1:
 			err = "Auf dieser Werkbank ist kein Platz mehr für die Kiste."
-	if best.is_empty():
+	var res := {"pos": spot, "rot": yaw_rot, "top": false, "err": err}
+	if not best.is_empty():
+		var bench := layout.crate_bench_at(size_id, best["pos"], best["rot"])
+		res = {"pos": best["pos"], "rot": best["rot"], "bench": bench, "err": "",
+			"top": layout.crate_on_top(size_id, best["pos"], best["rot"], bench)}
+	elif at.y > ToolBench.TOP_Y - 0.1:
+		res["top"] = true
+	_crate_spot_key = key
+	_crate_spot_cache = res
+	return res
+
+
+## Alle freien Stellen (5-cm-Raster, zwei Drehungen) für eine Kiste auf der Platte der Werkbank bench_id.
+## Hängt nicht vom Blick ab, nur von der Aufstellung: einmal rechnen, bis sich in der Werkstatt etwas ändert.
+func _bench_crate_spots(size_id: String, bench_id: String) -> Array:
+	var stamp := [layout.crates.size(), layout.benches.size(), layout.machines.size(), layout.shelves.size(), layout.bins.size()]
+	var key := "%s|%s" % [size_id, bench_id]
+	var hit: Dictionary = _bench_spot_cache.get(key, {})
+	if not hit.is_empty() and hit["stamp"] == stamp:
+		return hit["spots"]
+	var spots: Array = []
+	var rot := int(layout.benches[bench_id]["rot"])
+	var area := layout.bench_area(bench_id)
+	var x := area.position.x
+	while x <= area.end.x:
+		var z := area.position.y
+		while z <= area.end.y:
+			var p := Vector2(x, z)
+			for r in [rot, posmod(rot + 1, 4)]:
+				if layout.crate_on_top(size_id, p, r, bench_id) and layout.check_crate(size_id, p, r) == "":
+					spots.append({"pos": p, "rot": r})
+			z += 0.05
+		x += 0.05
+	_bench_spot_cache[key] = {"stamp": stamp, "spots": spots}
+	return spots
+
+
+## Getragene Kiste abstellen, wohin der Blick zeigt (at, Weltpunkt), siehe crate_spot.
+## Fehlertext, leer = abgestellt.
+func crate_set_down(at: Vector3) -> String:
+	if not player.carrying_crate():
+		return ""
+	var s := crate_spot(at)
+	var err := str(s["err"])
+	if err != "":
 		hud.show_message(err, Color(1, 0.75, 0.2))
 		return err
-	layout.crates.append({"size": size_id, "pos": best["pos"], "rot": best["rot"],
-		"bench": layout.crate_bench_at(size_id, best["pos"], best["rot"]), "items": player.carry["items"]})
+	layout.crates.append({"size": str(player.carry["size"]), "pos": s["pos"], "rot": s["rot"],
+		"bench": s["bench"], "items": player.carry["items"]})
 	player.clear_carry()
 	_rebuild_stands()
 	return ""
@@ -2470,6 +2558,8 @@ func build_node(kind: String, item: String, index: int) -> Node3D:
 ## Kisten und Spänebehälter neu aufstellen.
 func _rebuild_stands() -> void:
 	request_reflections()
+	_crate_spot_key = []
+	_bench_spot_cache.clear()
 	player._focus = null
 	# Nicht sofort free(): der Aufruf kommt oft aus click() genau eines dieser Knoten (Palettenstapel),
 	# der dann gesperrt ist und als Geist mit veraltetem Index stehen bliebe. Aus dem Baum nehmen, später löschen.

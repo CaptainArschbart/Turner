@@ -82,6 +82,66 @@ func _initialize() -> void:
 	ok(w.crate_set_down(Vector3(40.0, 0.0, 40.0)) != "" and p.carrying_crate(), "Irgendwo weit weg geht nicht, Kiste bleibt in den Händen")
 	ok(w.crate_set_down(at) == "", "Wieder auf die Werkbank")
 
+	# Kiste in den Händen: Die Vorschau zeigt immer den Stellplatz, Linksklick stellt die Kiste dort ab
+	ok(w.crate_lift(0) == "", "Für die Vorschau aufgenommen")
+	await process_frame
+	ok(w._crate_ghost != null and w._crate_ghost.visible, "Vorschau der Kiste sichtbar, ohne Q")
+
+	# Blick auf die Werkbank: Die Platzsuche läuft einmal, danach kostet jedes Bild fast nichts
+	var top_c: Vector2 = lay.bench_area(bench).get_center()
+	w._rebuild_stands()
+	var t0 := Time.get_ticks_usec()
+	w.crate_spot(Vector3(top_c.x, top_y, top_c.y))
+	var first_ms := (Time.get_ticks_usec() - t0) / 1000.0
+	t0 = Time.get_ticks_usec()
+	for i in 60:
+		w.crate_spot(Vector3(top_c.x + i * 0.01, top_y, top_c.y), true)
+	var frame_ms := (Time.get_ticks_usec() - t0) / 1000.0 / 60.0
+	print("Kisten-Platzsuche auf der Werkbank: erstes Mal %.2f ms, danach %.3f ms pro Bild" % [first_ms, frame_ms])
+	ok(frame_ms < 0.5, "Blick über die Werkbank wandern lassen ruckelt nicht (%.3f ms pro Bild)" % frame_ms)
+	ok(str(w.crate_spot(Vector3(top_c.x, top_y, top_c.y))["err"]) == "" and bool(w.crate_spot(Vector3(top_c.x, top_y, top_c.y))["top"]), "Stellplatz auf der Platte gefunden")
+
+	# Figur so stellen, dass der Blick auf einen freien Platz zeigt
+	var me: Vector3 = p.global_position
+	var aim_ok := false
+	var s: Dictionary = {}
+	p.pitch = -0.9
+	p.head.rotation.x = -0.9
+	for dx in [0.0, 1.0, -1.0, 2.0, -2.0, 3.0]:
+		for dz in [0.0, 1.0, -1.0, 2.0, -2.0, 3.0]:
+			p.global_position = me + Vector3(dx, 0, dz)
+			for i in 2:
+				await physics_frame
+			p.ray.force_raycast_update()
+			s = w.crate_spot(p.crate_aim())
+			if str(s["err"]) == "":
+				aim_ok = true
+				break
+		if aim_ok:
+			break
+	ok(aim_ok, "Freien Stellplatz im Blick gefunden")
+	for i in 2:
+		await process_frame
+	p.ray.force_raycast_update()
+	s = w.crate_spot(p.crate_aim())
+	ok(str(s["err"]) == "", "Stellplatz noch frei")
+	var g: Node3D = w._crate_ghost
+	var gpos: Vector2 = s["pos"]
+	ok(g.visible and Vector2(g.position.x, g.position.z).distance_to(gpos) < 0.03, "Vorschau steht am Stellplatz")
+	ok(w._pallet_ghost_mat.albedo_color.g > 0.9, "Vorschau grün: Platz ist frei")
+	var n_before: int = lay.crates.size()
+	p.click_focus()
+	ok(p.hands_free() and lay.crates.size() == n_before + 1, "Linksklick stellt die Kiste ab")
+	if lay.crates.size() > n_before:
+		var placed: Dictionary = lay.crates[-1]
+		ok((placed["pos"] as Vector2).distance_to(gpos) < 0.03, "Kiste steht dort, wo die Vorschau war")
+		ok((placed["items"] as Array).size() == 1, "Inhalt kommt mit")
+	else:
+		p.clear_carry()
+	await process_frame
+	ok(not g.visible, "Vorschau weg, sobald die Kiste steht")
+	p.global_position = me
+
 	# Mittlere Kiste ist zu schwer
 	var mspot: Vector2 = floor_spot(lay, "crate_m", bench)
 	ok(mspot != Vector2.INF and w.place_crate(-1, "crate_m", mspot, 0) == "", "Mittlere Kiste aufgestellt")
