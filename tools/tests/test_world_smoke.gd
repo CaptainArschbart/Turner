@@ -104,7 +104,8 @@ func _initialize() -> void:
 	# E auf das Bedienpult: direkt in die Pultansicht, Dreh-Anzeigen aus
 	var pt: Node = null
 	for ch in cnc.get_children():
-		if ch.has_method("interact") and ch.has_method("get_prompt") and not ch.has_method("click"):
+		# Das Pult, nicht der Reitstock (der hat auch ein eigenes Ziel)
+		if ch.has_method("interact") and ch.has_method("get_prompt") and not ch.has_method("click") 				and str(ch.get_prompt()).contains("Bedienpult"):
 			pt = ch
 	ok(pt != null, "Bedienpult hat ein eigenes Interaktionsziel")
 	pt.interact(w.player)
