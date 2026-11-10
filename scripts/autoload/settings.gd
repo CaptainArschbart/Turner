@@ -71,6 +71,12 @@ const BINDINGS := [
 	["crane_right", "Kran nach Osten fahren", "Hallenkran", "k", KEY_RIGHT],
 	["crane_up", "Haken heben", "Hallenkran", "k", KEY_PAGEUP],
 	["crane_down", "Haken senken", "Hallenkran", "k", KEY_PAGEDOWN],
+	["fork_up", "Gabel heben", "Gabelstapler", "k", KEY_UP],
+	["fork_down", "Gabel senken", "Gabelstapler", "k", KEY_DOWN],
+	["fork_left", "Gabel nach links schieben", "Gabelstapler", "k", KEY_LEFT],
+	["fork_right", "Gabel nach rechts schieben", "Gabelstapler", "k", KEY_RIGHT],
+	["fork_tilt_fwd", "Hubgerüst nach vorn neigen", "Gabelstapler", "k", KEY_PAGEUP],
+	["fork_tilt_back", "Hubgerüst nach hinten neigen", "Gabelstapler", "k", KEY_PAGEDOWN],
 ]
 
 var graphics: Dictionary = {}

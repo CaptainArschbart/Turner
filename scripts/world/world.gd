@@ -76,6 +76,8 @@ var debug_menu: DebugMenu
 var deliveries: Array = []        # bestellt, steht noch vor dem Lagertor
 var site: Site
 var crane: HallCrane              # Hallenkran mit Funkfernbedienung
+var forklift: Forklift            # Gabelstapler, solange jemand darauf sitzt (sonst Ausstattung "forklift")
+const FORKLIFT_DUMP_H := 1.4      # so hoch muss die Gabel stehen, damit der Behälter über den Containerrand kippt
 var job_menu: JobMenu
 var rack_menu: RackMenu
 var places: Places                # Orte außerhalb des Geländes: Supermarkt, je Spieler ein Zuhause
@@ -246,6 +248,7 @@ func _ready() -> void:
 	player.bucket_drop = bucket_drop
 	player.crate_drop = crate_set_down
 	player.jack_abandon = jack_abandon
+	player.forklift_leave = forklift_leave
 	whiteboard.shop = self
 	whiteboard.overlay.day_app.shop = self
 	whiteboard.using_changed.connect(func(on: bool): hud.visible = not on)
@@ -2191,6 +2194,244 @@ func pallet_click(i: int) -> void:
 	_rebuild_stands()
 
 
+# ------------------------------------------------------------ Gabelstapler
+
+func forklift_prompt(i: int) -> String:
+	var n := int(layout.shelves[i].get("load", 0))
+	var what := "Gabelstapler" if n == 0 else "Gabelstapler mit %d Palette%s" % [n, "" if n == 1 else "n"]
+	if not player.hands_free():
+		return "%s    |    Hände voll" % what
+	return "[%s] Einsteigen    |    %s    |    im Baumenü umstellen" % [Settings.binding_text("interact"), what]
+
+
+## E auf den abgestellten Gabelstapler: einsteigen. Er wird zum fahrbaren Körper, die Figur sitzt darauf.
+func forklift_click(i: int) -> void:
+	if not player.hands_free() or forklift != null:
+		return
+	var s: Dictionary = layout.shelves[i]
+	if str(s["size"]) != "forklift":
+		return
+	layout.shelves.remove_at(i)
+	var f := Forklift.new()
+	f.world = self
+	f.lift = float(s.get("lift", 0.0))
+	f.load_n = int(s.get("load", 0))
+	f.load_rot = int(s.get("load_rot", 0))
+	f.shift = float(s.get("shift", 0.0))
+	f.tilt = float(s.get("tilt", 0.0))
+	add_child(f)
+	f.place(s["pos"], float(s.get("angle", int(s["rot"]) * PI / 2.0)))
+	f.add_collision_exception_with(player)
+	forklift = f
+	f.driver = player
+	player.board_forklift(f)
+	_rebuild_stands()
+	hud.show_message("Gabelstapler: [WASD] fahren   [%s / %s] Gabel heben / senken   [%s / %s] Seitenschieber   [%s / %s] neigen   [%s] aussteigen" % [
+		Settings.binding_text("fork_up"), Settings.binding_text("fork_down"), Settings.binding_text("fork_left"), Settings.binding_text("fork_right"),
+		Settings.binding_text("fork_tilt_fwd"), Settings.binding_text("fork_tilt_back"), Settings.binding_text("interact")], Color(0.7, 0.95, 1.0))
+
+
+func _forklift_entry(f: Forklift) -> Dictionary:
+	return {"size": "forklift", "pos": f.origin2(), "rot": posmod(roundi(f.phi / (PI / 2.0)), 4), "angle": f.phi,
+		"lift": f.lift, "load": f.load_n, "load_rot": f.load_rot, "shift": f.shift, "tilt": f.tilt}
+
+
+func _forklift_entry_state(f: Forklift) -> Dictionary:
+	var e := _forklift_entry(f)
+	e["pos"] = [e["pos"].x, e["pos"].y]
+	e["stack"] = 1
+	e["cross"] = false
+	return e
+
+
+## E auf dem Gabelstapler: aussteigen, links neben dem Fahrersitz (sonst rechts). Fehlertext, leer = ausgestiegen.
+func forklift_leave() -> String:
+	var f := forklift
+	if f == null:
+		return ""
+	if f.load_bin >= 0:
+		hud.show_message("Erst den Spänebehälter absetzen: Gabel ganz absenken.", Color(1, 0.75, 0.2))
+		return "Behälter auf der Gabel."
+	var spot := Vector3.INF
+	for side in [-1.0, 1.0]:
+		for back in [0.0, -0.6, 0.6]:
+			var q: Vector3 = f.to_global(Vector3(Forklift.SEAT.x + back, 0.0, side * (Forklift.WIDTH * 0.5 + 0.45)))
+			if spot == Vector3.INF and _stand_free(Vector3(q.x, 0.05, q.z), f):
+				spot = q
+	if spot == Vector3.INF:
+		hud.show_message("Hier ist kein Platz zum Aussteigen.", Color(1, 0.75, 0.2))
+		return "Kein Platz zum Aussteigen."
+	layout.shelves.append(_forklift_entry(f))
+	forklift = null
+	player.leave_forklift(Vector3(spot.x, 0.05, spot.z))
+	f.queue_free()
+	_rebuild_stands()
+	return ""
+
+
+## Palettenstapel unter der Gabelmitte, in den die Gabel gerade genug hineinsteht: {"i", "rot"} oder {}.
+func _forklift_stack(f: Forklift) -> Dictionary:
+	var at := f.fork_spot()
+	for i in layout.shelves.size():
+		var s: Dictionary = layout.shelves[i]
+		if str(s["size"]) != "pallet":
+			continue
+		var r := Layout.shelf_rect("pallet", s["pos"], int(s["rot"]))
+		if not r.has_point(at):
+			continue
+		var al: Array = f.align_to(int(s["rot"]))
+		if float(al[0]) > Forklift.PICK_TOL_DEG:
+			continue
+		return {"i": i, "rot": int(al[1])}
+	return {}
+
+
+## Leere Gabel hebt an und steckt auf Höhe der Unterkante der k-ten Palette (0 = unterste): Diese und alle
+## darüber kommen auf die Gabel, die unteren k bleiben stehen. Ganz unten ohne Stapel nimmt sie einen
+## Spänebehälter. {"n", "rot"}, {"bin", "rot"} oder {}.
+func forklift_pick(f: Forklift, k := 0) -> Dictionary:
+	var st := _forklift_stack(f)
+	if not st.is_empty():
+		var s: Dictionary = layout.shelves[int(st["i"])]
+		var n := int(s.get("stack", 1))
+		if k >= n:
+			return {}
+		if k == 0:
+			layout.shelves.remove_at(int(st["i"]))
+		else:
+			s["stack"] = k
+		_rebuild_stands()
+		return {"n": n - k, "rot": int(st["rot"])}
+	if k != 0:
+		return {}
+	var at := f.fork_spot()
+	for i in layout.bins.size():
+		var b: Dictionary = layout.bins[i]
+		if b["out"] or bool(b.get("hooked", false)) or bool(b.get("fork", false)) or _bin_under_conveyor(b):
+			continue
+		if not Layout.bin_rect(b["pos"], int(b["rot"]), str(b["size"])).has_point(at):
+			continue
+		var al: Array = f.align_to(int(b["rot"]))
+		if float(al[0]) > Forklift.PICK_TOL_DEG:
+			continue
+		b["fork"] = true
+		bin_nodes[i].set_carried(true)
+		_sync_machine_bins()
+		return {"bin": i, "rot": int(al[1])}
+	return {}
+
+
+## Spänebehälter auf der Gabel mitführen: Lage der Last, Drehung zur Gabel, Kippwinkel nach vorn.
+func forklift_carry_bin(i: int, holder: Transform3D, rot_q: int, dump: float) -> void:
+	if i < 0 or i >= bin_nodes.size() or not is_instance_valid(bin_nodes[i]):
+		return
+	var s := ChipBin.size_of(str(layout.bins[i]["size"]))
+	var ext := s.x if rot_q % 2 == 0 else s.z
+	# Kippen um die Vorderkante: Der Behälter schwenkt über den Rand nach vorn
+	var edge := Vector3(ext * 0.5, 0.0, 0.0)
+	var xf := holder * Transform3D(Basis.IDENTITY, edge) * Transform3D(Basis(Vector3(0, 0, 1), -dump), Vector3.ZERO) \
+			* Transform3D(Basis.IDENTITY, -edge) * Transform3D(Basis(Vector3.UP, rot_q * PI / 2.0), Vector3.ZERO)
+	bin_nodes[i].global_transform = xf
+
+
+## Hubgerüst ganz nach vorn geneigt: Hängt der Behälter über einem Container und hoch genug, wird er
+## hineingekippt. true = gekippt (die Kippbewegung läuft dann).
+func forklift_dump(f: Forklift) -> bool:
+	var i := f.load_bin
+	var chips: ChipTray = layout.bins[i]["chips"]
+	var at := f.fork_spot()
+	for ci in containers.size():
+		var cp := Site.container_pos(ci)
+		# Öffnung 1,9 x 3,6 m (lange Seite nach Norden), der Behälter darf ein Stück überstehen
+		if absf(at.x - cp.x) > 0.95 + 0.6 or absf(at.y - cp.z) > 1.8 + 0.6:
+			continue
+		if f.lift < FORKLIFT_DUMP_H:
+			hud.show_message("Zu tief: Den Behälter über den Rand heben (mind. %.1f m), dann nach vorn kippen." % FORKLIFT_DUMP_H, Color(1, 0.75, 0.2))
+			return false
+		var c: ChipTray = containers[ci]
+		var moved := c.take_from(chips)
+		if moved <= 0.0:
+			var why := "Der Behälter ist leer."
+			if c.is_full():
+				why = "Der Container ist voll: am PC im Programm Entsorgung abholen lassen."
+			elif not chips.is_empty():
+				why = "Das sind %sspäne, sie gehören nicht in diesen Container." % ChipTray.SORT_TITLES[chips.sort()]
+			hud.show_message(why, Color(1, 0.75, 0.2))
+			return false
+		bin_nodes[i].show_state(chips.fraction(), false)
+		site.show_containers(containers)
+		hud.show_message("%d kg in den Container gekippt, jetzt %d von %d kg." % [int(round(moved)), int(c.kg), int(c.capacity)], Color(0.7, 0.95, 1.0))
+		if is_instance_valid(office_pc) and office_pc.overlay:
+			office_pc.overlay.waste_tab.refresh()
+		return true
+	return false
+
+
+## Worauf die Last abgesenkt würde: {"h": Höhe, "i": Stapel} (Stapel unter der Gabel) oder {"h": 0}.
+func forklift_base(f: Forklift) -> Dictionary:
+	var st := _forklift_stack(f)
+	if st.is_empty():
+		return {"h": 0.0}
+	var s: Dictionary = layout.shelves[int(st["i"])]
+	return {"h": int(s.get("stack", 1)) * float(Shelf.SIZES["pallet"]["height"]), "i": int(st["i"])}
+
+
+## Last ganz abgesenkt: auf den Stapel darunter oder auf den Boden. Fehlertext, leer = abgesetzt.
+func forklift_drop(f: Forklift) -> String:
+	if f.load_bin >= 0:
+		return _forklift_drop_bin(f)
+	var base := forklift_base(f)
+	if base.has("i"):
+		var s: Dictionary = layout.shelves[int(base["i"])]
+		var n := int(s.get("stack", 1))
+		if n + f.load_n > Shelf.MAX_STACK:
+			return "Zu hoch: höchstens %d Paletten auf einem Stapel." % Shelf.MAX_STACK
+		s["stack"] = n + f.load_n
+		_rebuild_stands()
+		return ""
+	var rot: int = posmod(roundi(f.phi / (PI / 2.0)) + f.load_rot, 4)
+	var at := f.fork_spot()
+	var err := layout.check_shelf("pallet", at, rot)
+	if err != "":
+		return "Hier lassen sich die Paletten nicht absetzen: %s" % err
+	layout.shelves.append({"size": "pallet", "pos": at, "rot": rot, "stack": f.load_n})
+	_rebuild_stands()
+	return ""
+
+
+## Spänebehälter von der Gabel auf den Boden stellen. Die Spänekiste einer Maschine rastet unter ihrem
+## Förderer ein, wenn sie nahe genug steht.
+func _forklift_drop_bin(f: Forklift) -> String:
+	var i := f.load_bin
+	var b: Dictionary = layout.bins[i]
+	var at := f.fork_spot()
+	var rot: int = posmod(roundi(f.phi / (PI / 2.0)) + f.load_rot, 4)
+	var mid := str(b.get("machine", ""))
+	var m: Node3D = _machine_node(mid) if mid != "" and layout.machines.has(mid) else null
+	if m is Lathe and m.has_chip_bin_spot:
+		var t: Transform3D = m.transform * m.chip_bin_spot
+		if at.distance_to(Vector2(t.origin.x, t.origin.z)) < 0.8:
+			b.erase("fork")
+			bin_nodes[i].set_carried(false)
+			b["away"] = false
+			_sync_machine_bins()
+			bin_nodes[i].global_transform = Transform3D(Basis(Vector3.UP, int(b["rot"]) * PI / 2.0), Vector3(b["pos"].x, 0, b["pos"].y))
+			return ""
+	var err := layout.check_bin(at, rot, i, str(b["size"]))
+	if err != "":
+		return "Hier lässt sich der Behälter nicht absetzen: %s" % err
+	b.erase("fork")
+	bin_nodes[i].set_carried(false)
+	b["pos"] = at
+	b["rot"] = rot
+	if mid != "":
+		b["away"] = true
+	bin_nodes[i].global_transform = Transform3D(Basis(Vector3.UP, rot * PI / 2.0), Vector3(at.x, 0, at.y))
+	_sync_machine_bins()
+	request_reflections()
+	return ""
+
+
 # ------------------------------------------------------------ Hubwagen
 
 ## Abgesenkte Paletten rasten auf 90° ein, dafür darf der Wagen höchstens so viele Grad davon entfernt stehen
@@ -2478,6 +2719,10 @@ func _rebuild_stands() -> void:
 		for b in layout.bins:
 			b.erase("hooked")
 		crane.drop_hook()
+	if forklift and is_instance_valid(forklift) and forklift.load_bin >= 0:
+		for b in layout.bins:
+			b.erase("fork")
+		forklift.load_bin = -1
 	for n in crate_nodes + bin_nodes + shelf_nodes:
 		if is_instance_valid(n):
 			if n.get_parent():
@@ -2495,6 +2740,10 @@ func _rebuild_stands() -> void:
 		sn.cargo = int(s.get("load", 0))
 		sn.chips = s.get("chips") as ChipTray
 		sn.cargo_cross = bool(s.get("cross", false))
+		sn.lift = float(s.get("lift", 0.0))
+		sn.load_rot = int(s.get("load_rot", 0))
+		sn.fork_shift = float(s.get("shift", 0.0))
+		sn.fork_tilt = float(s.get("tilt", 0.0))
 		sn.world = self
 		sn.position = Vector3(s["pos"].x, 0, s["pos"].y)
 		sn.rotation.y = float(s.get("angle", int(s["rot"]) * PI / 2.0))
@@ -2543,6 +2792,8 @@ func bin_prompt(i: int) -> String:
 		what += " %sspäne" % ChipTray.SORT_TITLES[b["chips"].sort()]
 	if bool(b.get("hooked", false)):
 		return "%s    |    Hängt am Hallenkran" % what
+	if bool(b.get("fork", false)):
+		return "%s    |    Auf dem Gabelstapler" % what
 	if b["out"]:
 		if player.carrying_bin() and int(player.carry["bin"]) == i:
 			return "[Linksklick] Zurück an den Stellplatz    |    %s" % what
@@ -2568,7 +2819,7 @@ func bin_click(i: int) -> void:
 		_bin_bucket_click(i)
 		return
 	var b: Dictionary = layout.bins[i]
-	if bool(b.get("hooked", false)):
+	if bool(b.get("hooked", false)) or bool(b.get("fork", false)):
 		return
 	if b["out"]:
 		if player.carrying_bin() and int(player.carry["bin"]) == i:
@@ -2672,7 +2923,7 @@ func crane_find_bin(hook: Vector3) -> int:
 	var best_d := 0.9
 	for i in layout.bins.size():
 		var b: Dictionary = layout.bins[i]
-		if b["out"] or bool(b.get("hooked", false)):
+		if b["out"] or bool(b.get("hooked", false)) or bool(b.get("fork", false)):
 			continue
 		var gap := hook.y - HallCrane.SLING - ChipBin.height(str(b["size"]))
 		if gap < -0.15 or gap > 0.5:
@@ -2858,8 +3109,8 @@ func _sync_machine_bins() -> void:
 		b["chips"].capacity = float(ChipBin.SIZES[Lathe.CHIP_BIN_SIZE]["kg"])
 		m.chip_bin = b["chips"]
 		# Mit dem Kran herausgehoben: Der Förderer hat keine Kiste, bis sie wieder darunter steht
-		m.chip_bin_away = bool(b.get("away", false)) or bool(b.get("hooked", false)) or bool(b.get("out", false))
-		if bool(b.get("away", false)) or bool(b.get("hooked", false)):
+		m.chip_bin_away = bool(b.get("away", false)) or bool(b.get("hooked", false)) or bool(b.get("out", false)) or bool(b.get("fork", false))
+		if bool(b.get("away", false)) or bool(b.get("hooked", false)) or bool(b.get("fork", false)):
 			continue
 		var t: Transform3D = m.transform * m.chip_bin_spot
 		b["pos"] = Vector2(t.origin.x, t.origin.z)
@@ -3345,6 +3596,11 @@ func _apply_layout(d: Dictionary) -> void:
 					layout.shelves.back()["chips"] = Bucket.chips_of(s.get("chips", {}))
 				if s.has("angle"):
 					layout.shelves.back()["angle"] = float(s["angle"])
+				if s.has("lift"):
+					layout.shelves.back()["lift"] = clampf(float(s["lift"]), 0.0, Forklift.MAX_LIFT)
+					layout.shelves.back()["load_rot"] = posmod(int(s.get("load_rot", 0)), 4)
+					layout.shelves.back()["shift"] = clampf(float(s.get("shift", 0.0)), -Forklift.MAX_SHIFT, Forklift.MAX_SHIFT)
+					layout.shelves.back()["tilt"] = clampf(float(s.get("tilt", 0.0)), -Forklift.TILT_FWD, Forklift.TILT_BACK)
 		for c in saved.get("crates", []):
 			var items = c.get("items", [])
 			layout.crates.append({"size": str(c["size"]), "pos": Vector2(c["pos"][0], c["pos"][1]), "rot": int(c["rot"]),
@@ -3367,6 +3623,16 @@ func _apply_layout(d: Dictionary) -> void:
 				layout.shelves.append({"size": str(st[0]), "pos": pos, "rot": int(st[3])})
 			else:
 				inventory[str(st[0])] = int(inventory.get(str(st[0]), 0)) + 1
+	# Test: Ein Gabelstapler steht einmalig in der Lagerhalle, auch in älteren Spielständen
+	if not (saved is Dictionary and bool(saved.get("starter_forklift", false))):
+		var fk_placed := false
+		for c in Shelf.STARTER_FORKLIFT:
+			if layout.check_shelf("forklift", c[0], int(c[1])) == "":
+				layout.shelves.append({"size": "forklift", "pos": c[0], "rot": int(c[1])})
+				fk_placed = true
+				break
+		if not fk_placed:
+			inventory["forklift"] = int(inventory.get("forklift", 0)) + 1
 	# Ein Eimer steht von Anfang an im Lager, auch in älteren Spielständen
 	if not (saved is Dictionary and bool(saved.get("starter_bucket", false))):
 		var placed := false
@@ -3641,6 +3907,9 @@ func save_game() -> bool:
 		"pins": _pin_states(), "places": places.to_state(), "crane": crane.get_state(),
 		"dropped": get_tree().get_nodes_in_group(DroppedItem.GROUP).map(func(n: DroppedItem) -> Dictionary: return n.get_state()),
 	}
+	# Sitzt jemand auf dem Gabelstapler, wird er dort gespeichert, wo er gerade steht
+	if forklift and is_instance_valid(forklift):
+		data["layout"]["shelves"].append(_forklift_entry_state(forklift))
 	return SaveManager.write_slot(GameState.current_slot, data)
 
 

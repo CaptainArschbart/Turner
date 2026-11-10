@@ -50,6 +50,7 @@ func _pivot(m: Node3D, names: Array) -> Node3D:
 		var part := m.get_node_or_null(NodePath(str(n))) as Node3D
 		if part != null:
 			var xf := part.transform
+			part.owner = null              # Besitzer aus der Modellszene passt nach dem Umhängen nicht mehr
 			m.remove_child(part)
 			p.add_child(part)
 			part.transform = Transform3D(xf.basis, xf.origin - p.position)

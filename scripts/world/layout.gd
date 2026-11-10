@@ -289,6 +289,11 @@ func to_state() -> Dictionary:
 		sh.append({"size": s["size"], "pos": [s["pos"].x, s["pos"].y], "rot": s["rot"], "stack": int(s.get("stack", 1)), "load": int(s.get("load", 0)), "cross": bool(s.get("cross", false))})
 		if s.has("angle"):
 			sh.back()["angle"] = float(s["angle"])
+		if s.has("lift"):
+			sh.back()["lift"] = float(s["lift"])
+			sh.back()["load_rot"] = int(s.get("load_rot", 0))
+			sh.back()["shift"] = float(s.get("shift", 0.0))
+			sh.back()["tilt"] = float(s.get("tilt", 0.0))
 		if s.has("chips"):
 			sh.back()["chips"] = (s["chips"] as ChipTray).to_state()
-	return {"machines": ms, "benches": bs, "crates": cs, "bins": ch, "shelves": sh, "starter_transport": true, "starter_bucket": true}
+	return {"machines": ms, "benches": bs, "crates": cs, "bins": ch, "shelves": sh, "starter_transport": true, "starter_bucket": true, "starter_forklift": true}

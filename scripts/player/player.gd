@@ -67,6 +67,9 @@ var crane_put: Callable           # Spielwelt: (Collider, Punkt, Normale) -> Fer
 var jack_lift: Callable           # Spielwelt: Leertaste mit Hubwagen (Palette anheben oder absenken)
 var jack_drop: Callable           # Spielwelt: Hubwagen loslassen und abstellen (E oder Q)
 var jack_abandon: Callable        # Spielwelt: Hubwagen sofort an seiner Stelle abstellen (Figur zu weit weg)
+var forklift_leave: Callable      # Spielwelt: vom Gabelstapler absteigen -> Fehlertext
+var forklift: Node3D = null       # Gabelstapler, auf dem die Figur sitzt
+var _fork_phi := 0.0              # letzte Drehung des Staplers: Der Blick dreht mit
 var jack_cart: JackCart           # der Hubwagen selbst: eigener Körper in der Welt
 var noclip := false               # Debug: fliegen und durch Wände gehen
 var player_id := "local"          # wem Zuhause und Sachen gehören; im Multiplayer je Spieler eindeutig
@@ -176,6 +179,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("toggle_view"):
 		third_person = not third_person
 		_update_camera()
+	elif event.is_action_pressed("interact") and driving_forklift() and not build_mode:
+		get_viewport().set_input_as_handled()
+		if forklift_leave.is_valid():
+			forklift_leave.call()
 	elif event.is_action_pressed("interact") and carrying_pendant() and not build_mode:
 		# Fernbedienung: E legt sie nur an der Halterung ab, sonst bleibt sie in der Hand
 		get_viewport().set_input_as_handled()
@@ -293,6 +300,9 @@ func _physics_process(delta: float) -> void:
 		velocity.z = 0.0
 		move_and_slide()
 		_set_prompt("")
+		return
+	if driving_forklift():
+		_ride_forklift()
 		return
 
 	rotation.y = yaw
@@ -636,6 +646,50 @@ func _crate_put_down() -> void:
 	else:
 		var p := pallet_spot()
 		crate_drop.call(Vector3(p.x, 0.0, p.y))
+
+
+## Sitzt die Spielfigur auf dem Gabelstapler?
+func driving_forklift() -> bool:
+	return forklift != null and is_instance_valid(forklift)
+
+
+## Auf den Gabelstapler setzen: Er fährt, die Figur sitzt und schaut frei herum.
+func board_forklift(f: Node3D) -> void:
+	clear_held()
+	carry = {"kind": "forklift", "title": "Gabelstapler"}
+	forklift = f
+	_fork_phi = float(f.get("phi"))
+	velocity = Vector3.ZERO
+	arms.set_mode("none")
+	body.set_holding("", 0.0)
+	held_changed.emit("Auf dem Gabelstapler")
+	_ride_forklift()
+
+
+func leave_forklift(at: Vector3) -> void:
+	forklift = null
+	carry = {}
+	global_position = at
+	velocity = Vector3.ZERO
+	held_changed.emit("")
+
+
+## Sitzen: Die Figur folgt dem Sitz, der Blick dreht mit dem Stapler, Maus schaut frei umher.
+func _ride_forklift() -> void:
+	var fp := float(forklift.get("phi"))
+	yaw += fp - _fork_phi
+	_fork_phi = fp
+	rotation.y = yaw
+	head.rotation.x = pitch
+	head.rotation.z = 0.0
+	global_position = forklift.call("seat_point")
+	velocity = Vector3.ZERO
+	_focus = null
+	_set_prompt("[WASD] Fahren    [%s / %s] Gabel %s   [%s / %s] Seitenschieber    [%s / %s] Neigen    [%s] Aussteigen" % [
+		Settings.binding_text("fork_up"), Settings.binding_text("fork_down"),
+		"(Last %d)" % int(forklift.get("load_n")) if int(forklift.get("load_n")) > 0 else "",
+		Settings.binding_text("fork_left"), Settings.binding_text("fork_right"),
+		Settings.binding_text("fork_tilt_fwd"), Settings.binding_text("fork_tilt_back"), Settings.binding_text("interact")])
 
 
 ## Hält die Spielfigur den Hängetaster des Hallenkrans?
@@ -992,6 +1046,9 @@ func drop() -> DroppedItem:
 	if carrying_crate():
 		_crate_put_down()
 		return null
+	# Vom Gabelstapler fällt nichts herunter
+	if driving_forklift():
+		return null
 	# Die Kran-Fernbedienung fällt nicht, sie gehört in ihre Halterung
 	if carrying_pendant():
 		if crane_drop_hint.is_valid():
@@ -1121,7 +1178,7 @@ func set_state(d: Dictionary) -> void:
 	location = str(d.get("location", "site"))
 	var c = d.get("carry", {})
 	# Kran-Hängetaster und Spänebehälter bleiben beim Laden an ihrem Platz
-	if c is Dictionary and not c.is_empty() and not str(c.get("kind", "")) in ["pendant", "chip_bin"]:
+	if c is Dictionary and not c.is_empty() and not str(c.get("kind", "")) in ["pendant", "chip_bin", "forklift"]:
 		set_carry(c)
 	var cig = d.get("cigarette", {})
 	if cig is Dictionary:
