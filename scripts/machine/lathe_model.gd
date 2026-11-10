@@ -216,7 +216,9 @@ func build(spindle_pivot: Node3D, cross_slide: Node3D, tailstock: Node3D, axis_h
 				back_z = minf(back_z, v.z)
 				cmn = cmn.min(v)
 				cmx = cmx.max(v)
-	if tip_z > -INF and tip_z - back_z > 0.0001:
+	# E50 mit eigenem Reitstock im Modell: die Spitze bleibt in dessen Pinole (siehe _build_tailstock)
+	var model_ts := e50 and parts.has("tailstock") and root.find_child("tailstock_body", true, false) != null
+	if tip_z > -INF and tip_z - back_z > 0.0001 and not model_ts:
 		var cs := CENTER_LEN / (tip_z - back_z)
 		var cc := (cmn + cmx) * 0.5                            # Spitzenachse (x, y) im Modell
 		var back_x := -0.3                                     # Ende steckt in der Pinole
@@ -360,8 +362,12 @@ func _build_machine(root: Node3D, parts: Dictionary, spindle_pivot: Node3D, cros
 	for n in STATIC_PARTS:
 		var p := _take(root, n, mach_ad)
 		if p and n == "rails":
-			bed_top = _bounds(_xf_verts(p, mach_ad, mxf)).end.y
+			var rb := _bounds(_xf_verts(p, mach_ad, mxf))
+			bed_top = rb.end.y
+			mach["rails"] = rb
 	mach["bed_top"] = bed_top
+	if parts.has("tailstock") and root.find_child("tailstock_body", true, false):
+		_build_tailstock(root, parts["tailstock"], mxf)
 	var body := mach_ad.find_child("machine_body", false, false) as MeshInstance3D
 	if body:
 		mach["body"] = _bounds(_xf_verts(body, mach_ad, mxf))
@@ -471,6 +477,116 @@ func _build_machine(root: Node3D, parts: Dictionary, spindle_pivot: Node3D, cros
 		if g:
 			g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mach["lamps"] = lamps
+
+
+## Reitstock aus dem E50-Modell unter slide (verschiebt Lathe längs des Betts): Körper fest, die Pinole
+## mit der mitlaufenden Spitze auf eigenem Knoten (fährt in -X aus), das große Handrad dreht um die
+## Pinolenachse, der Klemmhebel (im Modell Teil des Körpers) um seine Querwelle. Ergebnis in mach["ts"].
+func _build_tailstock(root: Node3D, slide: Node3D, mxf: Transform3D) -> void:
+	var ts_ad := _adapter(slide, mxf)
+	ts_ad.name = "Reitstock"
+	var body := _take(root, "tailstock_body", ts_ad) as MeshInstance3D
+	var shaft := _pick(root, ["Cylinder_013", "Cylinder.013"])
+	if root.find_child(shaft, true, false):
+		_take(root, shaft, ts_ad)
+	var ts := {}
+	if body:
+		ts["box"] = _bounds(_xf_verts(body, ts_ad, mxf))
+	# Pinole samt Spitze (hängt im Modell an der Pinole)
+	var quill := Node3D.new()
+	quill.name = "Pinole"
+	slide.add_child(quill)
+	var q_ad := _adapter(quill, mxf)
+	var pin := _take(root, "tailstock", q_ad)
+	var axis := Vector3.ZERO
+	if pin:
+		axis = mxf * _rel(pin, q_ad).origin      # Pinolenachse (y, z) im Reitstock
+		var meshes: Array = pin.find_children("*", "MeshInstance3D", true, false)
+		if pin is MeshInstance3D:
+			meshes.append(pin)
+		var qb := AABB()
+		for i in meshes.size():
+			var b := _bounds(_xf_verts(meshes[i] as MeshInstance3D, q_ad, mxf))
+			qb = b if i == 0 else qb.merge(b)
+		ts["tip_x"] = qb.position.x
+		ts["quill_box"] = qb                      # Pinole mit Spitze, eingefahren
+	ts["quill"] = quill
+	# Großes Handrad: dreht um die Pinolenachse (Spiel-X)
+	var crank := root.find_child("tailstock_crank", true, false) as MeshInstance3D
+	if crank:
+		var cb := _bounds(_xf_verts(crank, root, mxf))
+		var piv := Node3D.new()
+		piv.name = "Handrad"
+		piv.position = Vector3(cb.get_center().x, axis.y, axis.z)
+		slide.add_child(piv)
+		_take(root, "tailstock_crank", _adapter(piv, Transform3D(Basis.IDENTITY, -piv.position) * mxf))
+		ts["crank"] = piv
+	# Klemmhebel: Metallbügel und sein schwarzer Griff vorne oben aus dem Körper lösen
+	if body and body.mesh:
+		var parts := _split_mesh(body.mesh, func(mat: String, c: Vector3) -> bool:
+			return mat.begins_with("metal_polished") or (mat.begins_with("plastic_black") and c.z < 0.0))
+		if parts[1] != null:
+			body.mesh = parts[0]
+			var lever := MeshInstance3D.new()
+			lever.name = "Klemmhebel"
+			lever.mesh = parts[1]
+			var lxf := mxf * body.transform           # gleiche Lage wie der Körper
+			var lv := PackedVector3Array()
+			for s in lever.mesh.get_surface_count():
+				for v in lever.mesh.surface_get_arrays(s)[Mesh.ARRAY_VERTEX]:
+					lv.append(lxf * v)
+			var lb := _bounds(lv)
+			# Drehpunkt: Mitte des untersten Viertels (Querwelle im Körper)
+			var low := PackedVector3Array()
+			for v in lv:
+				if v.y < lb.position.y + lb.size.y * 0.25:
+					low.append(v)
+			var pc := _bounds(low).get_center()
+			var lpiv := Node3D.new()
+			lpiv.name = "Klemmhebel"
+			lpiv.position = Vector3(pc.x, pc.y, 0.0)
+			slide.add_child(lpiv)
+			var l_ad := _adapter(lpiv, Transform3D(Basis.IDENTITY, -lpiv.position) * mxf)
+			l_ad.add_child(lever)
+			lever.transform = body.transform
+			ts["lever"] = lpiv
+	mach["ts"] = ts
+
+
+## Dreiecke eines Meshs aufteilen: pick(Materialname, Dreiecksmitte in Mesh-Koordinaten) -> true =
+## in den zweiten Teil. Ergebnis [Rest, herausgelöst]; ein leerer Teil ist null.
+static func _split_mesh(mesh: Mesh, pick: Callable) -> Array:
+	var keep := ArrayMesh.new()
+	var take := ArrayMesh.new()
+	for s in mesh.get_surface_count():
+		var arr := mesh.surface_get_arrays(s)
+		var mat := mesh.surface_get_material(s)
+		var nm := mat.resource_name if mat else ""
+		var vs: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var idx := PackedInt32Array()
+		if arr[Mesh.ARRAY_INDEX] != null:
+			idx = arr[Mesh.ARRAY_INDEX]
+		else:
+			for i in vs.size():
+				idx.append(i)
+		var a := PackedInt32Array()
+		var b := PackedInt32Array()
+		for t in range(0, idx.size() - 2, 3):
+			var c := (vs[idx[t]] + vs[idx[t + 1]] + vs[idx[t + 2]]) / 3.0
+			if pick.call(nm, c):
+				b.append_array([idx[t], idx[t + 1], idx[t + 2]])
+			else:
+				a.append_array([idx[t], idx[t + 1], idx[t + 2]])
+		for pair in [[keep, a], [take, b]]:
+			var dst: ArrayMesh = pair[0]
+			var ids: PackedInt32Array = pair[1]
+			if ids.is_empty():
+				continue
+			var arr2 := arr.duplicate()
+			arr2[Mesh.ARRAY_INDEX] = ids
+			dst.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr2)
+			dst.surface_set_material(dst.get_surface_count() - 1, mat)
+	return [keep if keep.get_surface_count() > 0 else null, take if take.get_surface_count() > 0 else null]
 
 
 ## Bildschirmfläche des Bedienpults: die große Platte, die zur Maschine hin (+X) zeigt, oberhalb der

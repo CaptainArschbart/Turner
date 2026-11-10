@@ -56,6 +56,7 @@ var pallet_drop: Callable         # Spielwelt: getragene Palette bei (x, z) abst
 var bucket_scoop: Callable        # Spielwelt: Linksklick mit dem Eimer auf eine Maschine (Späne aus der Wanne)
 var bucket_drop: Callable         # Spielwelt: Eimer bei (x, z) aufrecht abstellen -> Fehlertext
 var crate_drop: Callable          # Spielwelt: getragene Kiste beim Blickpunkt (Welt) abstellen -> Fehlertext
+var crate_spot: Callable          # Spielwelt: Stellplatz der Kiste zum Blickpunkt -> {"pos", "rot", "top", "err"}
 var _bucket_ego: Node3D           # Eimer in der Ego-Ansicht (hängt an der Faust)
 var _bucket_body: Node3D          # Eimer an der Figur
 var bin_drop: Callable            # Spielwelt: geschobenen Spänebehälter vor der Figur abstellen
@@ -236,7 +237,7 @@ func click_focus() -> bool:
 	# Hubwagen: Linksklick tut nichts, E nimmt Paletten auf und setzt sie ab, Q stellt den Hubwagen ab
 	if driving_jack():
 		return true
-	# Kiste in den Händen: Linksklick stellt sie ab, auf die Werkbank oder daneben
+	# Kiste in den Händen: Linksklick stellt sie an der Vorschau ab, auf die Werkbank oder daneben
 	if carrying_crate():
 		_crate_put_down()
 		return true
@@ -299,7 +300,8 @@ func _physics_process(delta: float) -> void:
 		velocity.x = 0.0
 		velocity.z = 0.0
 		move_and_slide()
-		_set_prompt("")
+		# Stationen (z. B. Reitstock) zeigen ihre Tasten in der Hinweiszeile
+		_set_prompt(str(operating.station_prompt()) if operating.has_method("station_prompt") else "")
 		return
 	if driving_forklift():
 		_ride_forklift()
@@ -442,11 +444,14 @@ func _update_focus() -> void:
 			text = target.get_prompt()
 		_set_prompt("%s    |    %s" % [text, tip] if text != "" else tip)
 		return
-	# Mit der Kiste: Linksklick oder E stellt sie auf die anvisierte Werkbank, Q dorthin, wohin der Blick zeigt
+	# Mit der Kiste: Die Vorschau zeigt immer den Stellplatz, Linksklick (oder E / Q) stellt die Kiste dort ab
 	if carrying_crate():
 		_focus = target
-		var put := "[Linksklick] Kiste auf die Werkbank stellen" if _aims_at_bench(target) else "[%s] Kiste abstellen (auf oder neben eine Werkbank)" % Settings.binding_text("drop")
-		_set_prompt(put)
+		var err := ""
+		if crate_spot.is_valid():
+			err = str((crate_spot.call(crate_aim()) as Dictionary).get("err", ""))
+		var put := "[Linksklick] Kiste auf die Werkbank stellen" if _aims_at_bench(target) else "[Linksklick] Kiste hier abstellen"
+		_set_prompt(err if err != "" else put)
 		return
 	# Mit einer Palette in den Händen zählen nur Palettenstapel und der Boden
 	if carrying_pallet():
@@ -637,15 +642,18 @@ func _aims_at_bench(target: Object) -> bool:
 	return ray.is_colliding() and ray.get_collision_point().y > ToolBench.TOP_Y - 0.05 and target is Crate
 
 
-## Getragene Kiste dort abstellen, wohin der Blick zeigt (auf die Werkbank oder daneben auf den Boden).
-func _crate_put_down() -> void:
-	if not crate_drop.is_valid():
-		return
+## Blickpunkt für die getragene Kiste (Welt): die anvisierte Fläche, sonst der Bodenpunkt wie bei Paletten.
+func crate_aim() -> Vector3:
 	if ray.is_colliding():
-		crate_drop.call(ray.get_collision_point())
-	else:
-		var p := pallet_spot()
-		crate_drop.call(Vector3(p.x, 0.0, p.y))
+		return ray.get_collision_point()
+	var p := pallet_spot()
+	return Vector3(p.x, 0.0, p.y)
+
+
+## Getragene Kiste an der Vorschau abstellen, wohin der Blick zeigt (auf die Werkbank oder daneben auf den Boden).
+func _crate_put_down() -> void:
+	if crate_drop.is_valid():
+		crate_drop.call(crate_aim())
 
 
 ## Sitzt die Spielfigur auf dem Gabelstapler?
@@ -1042,7 +1050,7 @@ func drop() -> DroppedItem:
 		if jack_drop.is_valid():
 			jack_drop.call()
 		return null
-	# Die Kiste wird abgestellt, nicht fallen gelassen
+	# Die Kiste fällt nicht, sie wird an der Vorschau abgestellt (wie Linksklick)
 	if carrying_crate():
 		_crate_put_down()
 		return null
