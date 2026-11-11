@@ -36,7 +36,7 @@ func _initialize() -> void:
 	ok(w.buy_equipment("lathe") != "" and w.buy_equipment("saw") != "", "Nicht noch einmal gratis")
 	# Speichern und neu laden: nichts kommt doppelt
 	var bench = w.bench_nodes["lathe"]
-	ok(bench.holders.size() == 36, "36 Halterungen unter der Werkbank")
+	ok(bench.holders.size() == 28, "28 Mulden auf der Werkbank")
 	# Der Blick trifft die Halterung, auch aus dem schmalen Gang zwischen Maschine und Werkbank
 	await physics_frame
 	# Auf der Platte (Drehmaschine) zielt der Blick auf den Fühler über der Mulde, sonst vor die Halterung

@@ -18,6 +18,9 @@ var mill_bench: ToolBench:
 var cnc_lathe: Lathe:
 	get:
 		return extra_machines.get("cnc_lathe", null)
+var cnc_mill: CncMill:
+	get:
+		return extra_machines.get("cnc_mill", null)
 var hud: HUD
 var mill_hud: MillHUD
 var mill_huds: Dictionary = {}    # Maschinen-id -> MillHUD der Bohr- und Flachschleifmaschine
@@ -66,14 +69,15 @@ const NIGHT_SECONDS := 720.0      # die Nacht nach Feierabend (18 bis 6 Uhr) dau
 const REP_DONE := 2.0             # Ansehen für einen erfolgreichen Auftrag
 const REP_LATE := -8.0            # Ansehen für eine verpasste Frist
 const REP_SCRAP := -3.0           # Ansehen für Ausschuss beim Schleifen
-## Die Spänekiste unter dem Späneförderer steht fest, sie wird mit dem Hallenkran herausgehoben.
-const MACHINE_BIN_FIXED := "Die Spänekiste steht unter dem Späneförderer: mit dem Hallenkran herausheben."
+## Die Spänekiste unter dem Späneförderer schiebt man nicht von Hand: Hallenkran, Stapler oder Baumodus.
+const MACHINE_BIN_FIXED := "Die Spänekiste steht unter dem Späneförderer: mit dem Hallenkran herausheben oder im Baumodus umstellen."
 var play_time := 0.0
 var stock: Array = []             # bestelltes Rohmaterial im Lager
 var free_mode := false            # Testmodus: alles gratis, wird nicht gespeichert
 var time_scale := 1.0             # Zeitraffer aus dem Debug-Menü, wird nicht gespeichert
 var debug_menu: DebugMenu
 var deliveries: Array = []        # bestellt, steht noch vor dem Lagertor
+var delivery_spots: Dictionary = {}   # delivery_key -> {"pos": Vector2, "rot": int, "carried": bool}: Lieferpaletten, die mit Stapler oder Hubwagen bewegt wurden
 var site: Site
 var crane: HallCrane              # Hallenkran mit Funkfernbedienung
 var forklift: Forklift            # Gabelstapler, solange jemand darauf sitzt (sonst Ausstattung "forklift")
@@ -92,6 +96,7 @@ var inventory: Dictionary = {}    # gekauft, aber noch nicht aufgestellt
 var extra_machines: Dictionary = {}
 var drawing: DrawingOverlay
 var clamp_dialog: ClampDialog
+var tool_slot_dialog: ToolSlotDialog
 var quality: QualityStation        # Qualitätsmanagement: hier werden ausgespannte Teile abgegeben
 var pins: Array = []               # angepinnte Zeichnungen (PinnedDrawing)
 var _drawing_vps: Dictionary = {}  # Auftrag -> SubViewport, das die Zeichnung als Bild rendert
@@ -241,6 +246,7 @@ func _ready() -> void:
 	player.material_to_machine.connect(ask_clamp)
 	player.gate = _work_blocked
 	player.pallet_drop = put_pallet
+	player.goods_attach = attach_goods
 	player.bin_drop = bin_set_down
 	player.crane_click = crane.hook_click
 	player.crane_release = crane.release
@@ -311,7 +317,7 @@ func _wire_mill(m: Mill, mh: MillHUD) -> void:
 		m.operating_changed.connect(func(on: bool): _hint_grinder(on, m))
 		m.new_part_requested.connect(_on_grind_new_part)
 	else:
-		m.operating_changed.connect(func(on: bool): _hint_empty(on, m.has_part, _need_of(JobBoard.key(m.MACHINE_ID, _active_index(m.MACHINE_ID)))); _hint_tool(on, m))
+		m.operating_changed.connect(func(on: bool): _hint_empty(on, m.has_part, _need_of(JobBoard.key(job_kind(m.MACHINE_ID), _active_index(m.MACHINE_ID)))); _hint_tool(on, m))
 		m.new_part_requested.connect(_on_mill_new_part.bind(m))
 
 
@@ -324,8 +330,19 @@ func _add_mount(machine: Node) -> void:
 	var mount := ToolMount.new()
 	mount.machine = machine
 	mount.player = player
+	if machine is Lathe:
+		mount.dialog = _tool_slot_dialog()
 	machine.add_child(mount)
 	machine.tool_mount = mount
+
+
+## Fenster am Werkzeughalter, wird beim ersten Halter angelegt.
+func _tool_slot_dialog() -> ToolSlotDialog:
+	if tool_slot_dialog == null:
+		tool_slot_dialog = ToolSlotDialog.new()
+		tool_slot_dialog.world = self
+		add_child(tool_slot_dialog)
+	return tool_slot_dialog
 
 
 func _build_environment() -> void:
@@ -788,13 +805,23 @@ func accept_error(key: String) -> String:
 
 ## Ist für diese Maschine der gewählte Auftrag angenommen?
 func has_job(machine: String) -> bool:
-	return accepted.has(JobBoard.key(machine, _active_index(machine)))
+	return accepted.has(JobBoard.key(job_kind(machine), _active_index(machine)))
 
 
-## Gewählter Auftrag einer Maschinenart. Beide Drehmaschinen teilen sich einen.
-func _active_index(machine: String) -> int:
+## Auftragsart einer Maschine: Beide Drehmaschinen bekommen Drehaufträge, beide Fräsmaschinen Fräsaufträge.
+static func job_kind(machine: String) -> String:
 	match machine:
-		"lathe", "cnc_lathe":
+		"cnc_lathe":
+			return "lathe"
+		"cnc_mill":
+			return "mill"
+	return machine
+
+
+## Gewählter Auftrag einer Maschinenart. Beide Drehmaschinen teilen sich einen, beide Fräsmaschinen auch.
+func _active_index(machine: String) -> int:
+	match job_kind(machine):
+		"lathe":
 			return job_index
 		"drill":
 			return drill_job_index
@@ -802,7 +829,7 @@ func _active_index(machine: String) -> int:
 
 
 func _active_job(machine: String) -> Dictionary:
-	var kind := "lathe" if machine == "cnc_lathe" else machine
+	var kind := job_kind(machine)
 	return JobBoard.job_of(JobBoard.key(kind, _active_index(kind)))
 
 
@@ -955,6 +982,11 @@ func _refresh_hud() -> void:
 				mh.set_job(JobBoard.job_of(m.semi_key), true)
 			else:
 				mh.set_no_job("Kein vorbearbeitetes Teil eingespannt.")
+		elif job_kind(id) == "mill":
+			if has_job(id):
+				mh.set_job(_active_job(id), JobBoard.grind_active(_active_job(id), company))
+			else:
+				mh.set_no_job()
 		elif has_job(id):
 			mh.set_job(_active_job(id))
 		else:
@@ -975,7 +1007,7 @@ func drawing_job() -> Dictionary:
 		if op.grinder_type != "":
 			return JobBoard.job_of(op.semi_key) if op.semi_key != "" else {}
 		var id: String = op.MACHINE_ID
-		var category := "lathe" if op is Lathe else id
+		var category := "lathe" if op is Lathe else job_kind(id)
 		if has_job(category):
 			return _current_job() if op is Lathe else _active_job(id)
 		return {}
@@ -1089,7 +1121,7 @@ func _submit_hint() -> void:
 func _key_in(m: Node) -> String:
 	if m.grinder_type != "":
 		return str(m.semi_key)
-	var category := "lathe" if m is Lathe else str(m.MACHINE_ID)
+	var category := "lathe" if m is Lathe else job_kind(str(m.MACHINE_ID))
 	return JobBoard.key(category, _active_index(category)) if has_job(category) else ""
 
 
@@ -1116,6 +1148,9 @@ func unclamp_part(m: Node) -> String:
 		return "Es ist kein Teil eingespannt."
 	if m.spindle_speed > 5.0:
 		return "Erst die Spindel stoppen."
+	var door := _door_block(m)
+	if door != "":
+		return door
 	if not player.hands_free():
 		return "Erst die Hände frei machen."
 	var item := {}
@@ -1279,7 +1314,7 @@ func _on_submit(m: Lathe = null) -> void:
 func _on_mill_submit(m: Mill = null) -> void:
 	if m == null:
 		m = mill
-	_submit_direct(m, m.untouched, m.MACHINE_ID)
+	_submit_direct(m, m.untouched, job_kind(m.MACHINE_ID))
 
 
 func _on_grind_submit(m: Node) -> void:
@@ -1290,6 +1325,8 @@ func _on_grind_submit(m: Node) -> void:
 func _clamp_part(machine: Node) -> String:
 	var item: Dictionary = player.carry
 	var err := _part_fit(machine, item)
+	if err == "":
+		err = _door_block(machine)
 	if err == "" and machine.spindle_speed > 5.0:
 		err = "Erst die Spindel stoppen."
 	elif err == "" and machine.has_part:
@@ -1455,7 +1492,7 @@ func _input(event: InputEvent) -> void:
 		return
 	# Beim Eintippen von Werten oder NC-Programmen schaltet die Taste nichts um
 	var focus := get_viewport().gui_get_focus_owner()
-	if focus is LineEdit or focus is TextEdit or lathe.typing() or (cnc_lathe != null and cnc_lathe.typing()):
+	if focus is LineEdit or focus is TextEdit or lathe.typing() or (cnc_lathe != null and cnc_lathe.typing()) or (cnc_mill != null and cnc_mill.typing()):
 		return
 	# An einer Maschine oder in einem anderen Menü bleibt es zu, das Debug-Menü selbst schließt die Taste
 	if debug_menu.visible or player.operating == null:
@@ -1495,8 +1532,16 @@ func _on_tool_lost(_price: int, tool_name: String, _machine: String) -> void:
 
 
 func _hint_tool(on: bool, machine: Node) -> void:
+	# Die CNC-Fräsmaschine holt ihre Werkzeuge aus dem Magazin, ein Platz dort zählt als vorhanden
+	if machine is CncMill and not machine.magazine_tools().is_empty():
+		return
 	if on and machine.has_part and not machine.has_cutter():
 		hud.show_message("Kein Werkzeug eingesetzt: am PC kaufen, an der Werkbank nehmen und mit Linksklick einsetzen.", Color(1, 0.75, 0.2))
+
+
+## Kabinentür der CNC-Fräsmaschine: Teile spannt man nur bei ganz offener Tür. Fehlertext, leer = erlaubt.
+func _door_block(machine: Node) -> String:
+	return machine.clamp_blocked() if machine is CncMill else ""
 
 
 ## Preis eines Werkzeugs nach Schneidstoff und Skills.
@@ -1693,7 +1738,10 @@ func _lathe_take_part(m: Lathe = null) -> String:
 func _mill_take_part(m: Mill = null) -> String:
 	if m == null:
 		m = mill
-	var id: String = m.MACHINE_ID
+	var id: String = job_kind(m.MACHINE_ID)
+	var door := _door_block(m)
+	if door != "":
+		return door
 	var job := _active_job(id)
 	var s: Array = job["size"]
 	if m.has_part and m.untouched and m.material == str(job["material"]) \
@@ -1741,7 +1789,113 @@ func order_material(spec: Dictionary) -> String:
 
 
 func _deliveries_changed() -> void:
-	site.show_deliveries(deliveries)
+	# Höchstens PALLET_MAX_LOAD Ladehöhe je Palette: Was nicht draufpasst, kommt auf eine weitere
+	Site.split_pallets(deliveries)
+	# Eine Palette, von der nichts mehr da ist, braucht keinen Platz mehr gemerkt
+	if not delivery_spots.is_empty():
+		var keys := {}
+		for it in deliveries:
+			keys[Site.delivery_key(it)] = true
+		for k in delivery_spots.keys():
+			if not keys.has(k):
+				delivery_spots.erase(k)
+	site.show_deliveries(deliveries, delivery_spots)
+	if layout:
+		layout.goods.clear()
+		for g in delivery_view():
+			if not bool(g["carried"]):
+				var p: Vector3 = g["pos"]
+				layout.goods.append(Site.delivery_rect(Vector2(p.x, p.z), int(g["rot"]), g["extent"]))
+
+
+## Lieferpaletten samt Lage, wie sie gerade stehen (Site.place_deliveries).
+func delivery_view() -> Array:
+	return Site.place_deliveries(deliveries, delivery_spots)
+
+
+## Die Stücke der Lieferpalette mit diesem delivery_key.
+func _goods_items(key: String) -> Array:
+	return deliveries.filter(func(it: Dictionary) -> bool: return Site.delivery_key(it) == key)
+
+
+## Ware der Lieferpalette key auf eine Palette legen, die gerade ein Fahrzeug trägt (parent: Palettenmitte am Boden der Palette).
+func attach_goods(parent: Node3D, key: String) -> void:
+	var list := _goods_items(key)
+	if list.is_empty() or site == null:
+		return
+	var holder := Node3D.new()
+	holder.name = "Goods"
+	holder.position.y = Site.PALLET_TOP
+	holder.rotation.y = -PI / 2.0         # Stücke liegen längs Z, die lange Palettenseite längs X
+	parent.add_child(holder)
+	site.add_goods(holder, list)
+
+
+## Alle Lieferpaletten am Boden an ihrem jetzigen Platz festhalten, bevor eine davon aufgenommen wird
+## (sonst rücken die übrigen im Raster nach). Die oberen Lagen des Rasters bleiben im Raster.
+func _freeze_deliveries() -> void:
+	for g in delivery_view():
+		var p: Vector3 = g["pos"]
+		if bool(g["moved"]) or p.y > Site.PALLET_TOP + 0.01:
+			continue
+		delivery_spots[str(g["key"])] = {"pos": Vector2(p.x, p.z), "rot": int(g["rot"]), "carried": false}
+
+
+## Lieferpalette g (aus delivery_view) auf ein Fahrzeug nehmen: Sie verschwindet vom Boden, bleibt in deliveries.
+func _carry_goods(g: Dictionary) -> String:
+	_freeze_deliveries()
+	var key := str(g["key"])
+	delivery_spots[key]["carried"] = true
+	player._focus = null
+	_deliveries_changed()
+	return key
+
+
+## Lieferpalette key am Boden absetzen. Fehlertext, leer = steht.
+func put_goods(key: String, at: Vector2, rot: int) -> String:
+	var list := _goods_items(key)
+	if list.is_empty():
+		return "Diese Lieferung gibt es nicht mehr."
+	var err := check_goods_spot(at, rot, Site.delivery_extent(list), key)
+	if err != "":
+		return err
+	delivery_spots[key] = {"pos": at, "rot": posmod(rot, 4), "carried": false}
+	player._focus = null
+	_deliveries_changed()
+	return ""
+
+
+## Fehlertext, wenn dort keine Lieferpalette (ext: lange Seite, Breite) stehen darf. Die Palette key zählt nicht als Hindernis.
+func check_goods_spot(at: Vector2, rot: int, ext: Vector2, key: String) -> String:
+	var r := Site.delivery_rect(at, rot, ext).grow(-0.001)
+	for g in delivery_view():
+		if bool(g["carried"]) or str(g["key"]) == key:
+			continue
+		var p: Vector3 = g["pos"]
+		if r.intersects(Site.delivery_rect(Vector2(p.x, p.z), int(g["rot"]), g["extent"])):
+			return "Dort steht schon eine Lieferung."
+	var err := layout.check_goods(at, rot, ext)
+	if err != "":
+		return err
+	for ci in containers.size():
+		var cp := Site.container_pos(ci)
+		if r.intersects(Rect2(cp.x - 1.25, cp.z - 2.9, 2.5, 5.8)):
+			return "Dort steht ein Container."
+	return ""
+
+
+## Nach dem Laden: Eine Lieferpalette, die weder Stapler noch Hubwagen trägt, steht wieder an ihrem letzten Platz.
+func _release_orphan_goods() -> void:
+	var live := {}
+	for s in layout.shelves:
+		if str(s.get("goods", "")) != "":
+			live[str(s["goods"])] = true
+	if player.driving_jack() and player.jack_goods() != "":
+		live[player.jack_goods()] = true
+	for k in delivery_spots:
+		if bool(delivery_spots[k].get("carried", false)) and not live.has(k):
+			delivery_spots[k]["carried"] = false
+	_deliveries_changed()
 
 
 func _stock_changed() -> void:
@@ -1760,6 +1914,8 @@ func delivery_prompt(i: int) -> String:
 			same += 1
 	if same > 1:
 		what += "    |    %d Stück auf der Palette" % same
+	if int(it.get("pallet", 0)) > 0:
+		what += " %d" % (int(it["pallet"]) + 1)
 	if not player.hands_free():
 		return "%s    |    Hände voll" % what
 	return "[Linksklick] %s aufheben" % what
@@ -1775,6 +1931,7 @@ func pick_delivery(i: int) -> String:
 		return full
 	var item: Dictionary = deliveries[i]
 	deliveries.remove_at(i)
+	item.erase("pallet")       # die Palettennummer gilt nur im Hof
 	player.set_carry(item)
 	# Vorher entfernen: Die Lieferung löscht gerade das Ziel, auf das der Sichtstrahl zeigt
 	player._focus = null
@@ -1883,8 +2040,10 @@ func clamp_carried(machine: Node) -> String:
 		return ""
 	var item: Dictionary = player.carry
 	var round_bar := str(item["kind"]) == Materials.KIND_ROUND
-	var err := ""
-	if machine is Lathe and machine.grinder_type != "" or machine is Mill and machine.grinder_type != "":
+	var err := _door_block(machine)
+	if err != "":
+		pass
+	elif machine is Lathe and machine.grinder_type != "" or machine is Mill and machine.grinder_type != "":
 		err = "Schleifmaschinen spannen nur vorbearbeitete Teile."
 	elif machine is Lathe and not round_bar:
 		err = "Die Drehmaschine spannt nur Rundmaterial."
@@ -1937,6 +2096,9 @@ func ask_clamp(machine: Node, flip: bool) -> void:
 
 ## Fehler, die schon vor der Frage nach der Spanntiefe feststehen.
 func _clamp_precheck(machine: Node) -> String:
+	var door := _door_block(machine)
+	if door != "":
+		return door
 	if player.carry.is_empty():
 		return "Erst die Spindel stoppen, dann umspannen." if machine.spindle_speed > 5.0 else ""
 	if player.carrying_semi():
@@ -2221,20 +2383,28 @@ func place_crate(moving: int, size_id: String, pos: Vector2, rot: int) -> String
 	return ""
 
 
-## Spänebehälter aufstellen oder umstellen.
+## Spänebehälter aufstellen oder umstellen. Die Spänekiste einer Maschine (E50) lässt sich wie jeder
+## Behälter umstellen, nahe ihrem Stellplatz rastet sie wieder unter dem Förderer ein.
 func place_bin(moving: int, size_id: String, pos: Vector2, rot: int) -> String:
 	if moving >= 0:
-		if layout.bins[moving].has("machine"):
-			return MACHINE_BIN_FIXED
-		size_id = str(layout.bins[moving]["size"])
+		var mb: Dictionary = layout.bins[moving]
+		if mb["out"] or bool(mb.get("hooked", false)) or bool(mb.get("fork", false)):
+			return "Erst den Behälter abstellen."
+		size_id = str(mb["size"])
+		if not machine_bin_snap(moving, pos).is_empty():
+			mb["away"] = false
+			_sync_machine_bins()
+			_rebuild_stands()
+			return ""
 	var err := layout.check_bin(pos, rot, moving, size_id)
 	if err != "":
 		return err
 	if moving >= 0:
-		if layout.bins[moving]["out"]:
-			return "Erst den Behälter abstellen."
 		layout.bins[moving]["pos"] = pos
 		layout.bins[moving]["rot"] = rot
+		if layout.bins[moving].has("machine"):
+			layout.bins[moving]["away"] = true
+			_sync_machine_bins()
 	else:
 		if int(inventory.get(size_id, 0)) <= 0:
 			return "Dieser Behälter wurde nicht gekauft."
@@ -2242,6 +2412,172 @@ func place_bin(moving: int, size_id: String, pos: Vector2, rot: int) -> String:
 		layout.bins.append({"size": size_id, "pos": pos, "rot": rot, "chips": ChipTray.new(float(ChipBin.SIZES[size_id]["kg"])), "out": false})
 	_rebuild_stands()
 	return ""
+
+
+## Spänekiste einer Maschine nahe ihrem Stellplatz unter dem Förderer: {"pos", "rot"} dieses Platzes,
+## sonst {}. Für alle anderen Behälter immer {}.
+func machine_bin_snap(i: int, at: Vector2) -> Dictionary:
+	if i < 0 or i >= layout.bins.size():
+		return {}
+	var mid := str(layout.bins[i].get("machine", ""))
+	var m: Node3D = _machine_node(mid) if mid != "" and layout.machines.has(mid) else null
+	if not (m is Lathe and m.has_chip_bin_spot):
+		return {}
+	var t: Transform3D = m.transform * m.chip_bin_spot
+	var spot := Vector2(t.origin.x, t.origin.z)
+	if at.distance_to(spot) >= 0.8:
+		return {}
+	return {"pos": spot, "rot": posmod(roundi(t.basis.get_euler().y / (PI / 2.0)), 4)}
+
+
+## Q im Baumodus: Das umgestellte Teil kommt zurück in die Liste Nicht aufgestellt.
+## Fehlertext, leer = eingelagert.
+func store_equipment(kind: String, item: String, index: int) -> String:
+	match kind:
+		"bench":
+			return take_down_bench(item)
+		"crate":
+			if index < 0 or index >= layout.crates.size():
+				return "Hier steht keine Kiste."
+			var c: Dictionary = layout.crates[index]
+			if not (c["items"] as Array).is_empty():
+				return "Erst die Kiste leeren."
+			layout.crates.remove_at(index)
+			inventory[str(c["size"])] = int(inventory.get(str(c["size"]), 0)) + 1
+		"bin":
+			if index < 0 or index >= layout.bins.size():
+				return "Hier steht kein Behälter."
+			var b: Dictionary = layout.bins[index]
+			if b.has("machine"):
+				return "Die Spänekiste gehört zur %s und bleibt in der Werkstatt." % Layout.SPECS[str(b["machine"])]["title"]
+			if b["out"] or bool(b.get("hooked", false)) or bool(b.get("fork", false)):
+				return "Erst den Behälter abstellen."
+			if not (b["chips"] as ChipTray).is_empty():
+				return "Erst den Behälter leeren."
+			layout.bins.remove_at(index)
+			# Ein gerade geschobener Behälter rückt in der Liste nach
+			if player.carrying_bin() and int(player.carry["bin"]) > index:
+				player.carry["bin"] = int(player.carry["bin"]) - 1
+			inventory[str(b["size"])] = int(inventory.get(str(b["size"]), 0)) + 1
+		"shelf":
+			if index < 0 or index >= layout.shelves.size():
+				return "Hier steht nichts."
+			var s: Dictionary = layout.shelves[index]
+			if str(s.get("goods", "")) != "" or int(s.get("load", 0)) > 0:
+				return "Erst die Last abladen."
+			var chips = s.get("chips")
+			if chips is ChipTray and not (chips as ChipTray).is_empty():
+				return "Erst den Eimer leeren."
+			layout.shelves.remove_at(index)
+			inventory[str(s["size"])] = int(inventory.get(str(s["size"]), 0)) + int(s.get("stack", 1))
+		"machine":
+			return "Maschinen bleiben aufgestellt: mit Linksklick woanders hinstellen."
+		_:
+			return "Lagerregale bleiben stehen: mit Linksklick woanders hinstellen."
+	player._focus = null
+	_rebuild_stands()
+	_refresh_hud()
+	return ""
+
+
+## Debug: Was der Strahl trifft, als Beschreibung fürs Debug-Menü. Leer = nichts Entfernbares.
+func debug_target(hit: Object) -> Dictionary:
+	if hit is DroppedItem and is_instance_valid(hit):
+		return {"kind": "dropped", "node": hit, "title": "Liegender Gegenstand"}
+	# Beladene Lieferpalette aus dem Shop im Hof
+	var meta = hit.get_meta("interact", null) if hit != null and hit.has_meta("interact") else null
+	if meta is Site.Delivery and int(meta.index) >= 0 and int(meta.index) < deliveries.size():
+		var it: Dictionary = deliveries[int(meta.index)]
+		var key := Site.delivery_key(it)
+		var n := _goods_items(key).size()
+		return {"kind": "delivery", "item": key, "index": -1,
+			"title": "Lieferpalette %s  %s (%d Stück)" % [Materials.label(str(it["material"])), RawMaterialTab.describe(it), n]}
+	var t := build_target(hit)
+	if t.is_empty() or t["kind"] == "rack":
+		return {}
+	return t
+
+
+## Debug: Angeschautes endgültig entfernen, ohne Rückgabe ins Lager. Inhalt (Teile in Kisten, Späne) geht
+## mit verloren. Fehlertext, leer = entfernt.
+func debug_remove(t: Dictionary) -> String:
+	if t.is_empty():
+		return "Nichts Entfernbares im Blick."
+	var index := int(t.get("index", -1))
+	match str(t["kind"]):
+		"dropped":
+			var n = t["node"]
+			if not is_instance_valid(n):
+				return "Der Gegenstand ist schon weg."
+			(n as Node).remove_from_group(DroppedItem.GROUP)
+			(n as Node).queue_free()
+			player._focus = null
+			return ""
+		"delivery":
+			var key := str(t["item"])
+			if _goods_items(key).is_empty():
+				return "Diese Lieferung gibt es nicht mehr."
+			if bool(delivery_spots.get(key, {}).get("carried", false)):
+				return "Die Palette hängt gerade an Stapler oder Hubwagen: erst absetzen."
+			_drop_goods(key)
+			player._focus = null
+			_deliveries_changed()
+			_refresh_hud()
+			office_pc.overlay.stock_changed()
+			return ""
+		"machine":
+			return "Maschinen lassen sich hier nicht entfernen."
+		"bench":
+			var id := str(t["item"])
+			if not layout.benches.has(id):
+				return "Hier steht keine Werkbank."
+			if layout.crates_of(id) > 0:
+				return "Erst die Kisten neben dieser Werkbank entfernen."
+			_remove_bench(id)
+			player._focus = null
+			_refresh_hud()
+			return ""
+		"crate":
+			if index < 0 or index >= layout.crates.size():
+				return "Hier steht keine Kiste."
+			if player.carrying_crate():
+				return "Erst die getragene Kiste abstellen."
+			layout.crates.remove_at(index)
+		"bin":
+			if index < 0 or index >= layout.bins.size():
+				return "Hier steht kein Behälter."
+			var b: Dictionary = layout.bins[index]
+			if b.has("machine"):
+				return "Die Spänekiste gehört zur %s." % Layout.SPECS[str(b["machine"])]["title"]
+			if b["out"] or bool(b.get("hooked", false)) or bool(b.get("fork", false)) or player.carrying_bin():
+				return "Erst den Behälter abstellen."
+			layout.bins.remove_at(index)
+		"shelf":
+			if index < 0 or index >= layout.shelves.size():
+				return "Hier steht nichts."
+			var s: Dictionary = layout.shelves[index]
+			if player.carrying_pallet():
+				return "Erst die getragene Palette abstellen."
+			# Steht eine Lieferung darauf (abgestellter Hubwagen), geht sie mit
+			var goods := str(s.get("goods", ""))
+			layout.shelves.remove_at(index)
+			if goods != "":
+				_drop_goods(goods)
+				_deliveries_changed()
+		_:
+			return "Das lässt sich nicht entfernen."
+	player._focus = null
+	_rebuild_stands()
+	_refresh_hud()
+	return ""
+
+
+## Debug: Alle Stücke der Lieferpalette key samt gemerktem Platz löschen.
+func _drop_goods(key: String) -> void:
+	for i in range(deliveries.size() - 1, -1, -1):
+		if Site.delivery_key(deliveries[i]) == key:
+			deliveries.remove_at(i)
+	delivery_spots.erase(key)
 
 
 ## Holzregal aufstellen oder umstellen.
@@ -2340,6 +2676,9 @@ func forklift_leave() -> String:
 	if f.load_bin >= 0:
 		hud.show_message("Erst den Spänebehälter absetzen: Gabel ganz absenken.", Color(1, 0.75, 0.2))
 		return "Behälter auf der Gabel."
+	if f.load_goods != "":
+		hud.show_message("Erst die Lieferpalette absetzen: Gabel ganz absenken.", Color(1, 0.75, 0.2))
+		return "Lieferpalette auf der Gabel."
 	var spot := Vector3.INF
 	for side in [-1.0, 1.0]:
 		for back in [0.0, -0.6, 0.6]:
@@ -2374,6 +2713,23 @@ func _forklift_stack(f: Forklift) -> Dictionary:
 	return {}
 
 
+## Lieferpalette am Boden unter der Gabelmitte, in die die Gabel gerade genug hineinsteht: {"g": Eintrag aus delivery_view, "rot"} oder {}.
+func _forklift_goods(f: Forklift) -> Dictionary:
+	var at := f.fork_spot()
+	var foot := Shelf.foot("pallet")
+	for g in delivery_view():
+		var p: Vector3 = g["pos"]
+		if bool(g["carried"]) or p.y > Site.PALLET_TOP + 0.01:
+			continue
+		if not Layout.rect_at(Rect2(-foot * 0.5, foot), Vector2(p.x, p.z), int(g["rot"])).has_point(at):
+			continue
+		var al: Array = f.align_to(int(g["rot"]))
+		if float(al[0]) > Forklift.PICK_TOL_DEG:
+			continue
+		return {"g": g, "rot": int(al[1])}
+	return {}
+
+
 ## Leere Gabel hebt an und steckt auf Höhe der Unterkante der k-ten Palette (0 = unterste): Diese und alle
 ## darüber kommen auf die Gabel, die unteren k bleiben stehen. Ganz unten ohne Stapel nimmt sie einen
 ## Spänebehälter. {"n", "rot"}, {"bin", "rot"} oder {}.
@@ -2392,6 +2748,9 @@ func forklift_pick(f: Forklift, k := 0) -> Dictionary:
 		return {"n": n - k, "rot": int(st["rot"])}
 	if k != 0:
 		return {}
+	var gd := _forklift_goods(f)
+	if not gd.is_empty():
+		return {"n": 1, "rot": int(gd["rot"]), "goods": _carry_goods(gd["g"])}
 	var at := f.fork_spot()
 	for i in layout.bins.size():
 		var b: Dictionary = layout.bins[i]
@@ -2469,6 +2828,13 @@ func forklift_drop(f: Forklift) -> String:
 	if f.load_bin >= 0:
 		return _forklift_drop_bin(f)
 	var base := forklift_base(f)
+	if f.load_goods != "":
+		if base.has("i"):
+			return "Lieferpaletten lassen sich nicht auf andere Paletten stapeln."
+		var gl := _goods_items(f.load_goods)
+		if gl.is_empty():
+			return "Diese Lieferung gibt es nicht mehr."
+		return put_goods(f.load_goods, f.fork_spot(), posmod(roundi(f.phi / (PI / 2.0)) + f.load_rot, 4))
 	if base.has("i"):
 		var s: Dictionary = layout.shelves[int(base["i"])]
 		var n := int(s.get("stack", 1))
@@ -2573,7 +2939,7 @@ func jack_click(i: int) -> void:
 	player.rotation.y = player.yaw
 	player.global_position = Vector3(spot.x, player.global_position.y, spot.y)
 	player.velocity = Vector3.ZERO
-	player.set_carry({"kind": "jack", "title": "Hubwagen", "load": load_n, "cross": cross, "pos": [center.x, center.y], "rot": phi})
+	player.set_carry({"kind": "jack", "title": "Hubwagen", "load": load_n, "cross": cross, "goods": str(s.get("goods", "")), "pos": [center.x, center.y], "rot": phi})
 	_rebuild_stands()
 
 
@@ -2607,6 +2973,13 @@ func jack_lift() -> void:
 			hud.show_message("Palette gerader ausrichten.", Color(1, 0.75, 0.2))
 			return
 		var rot: int = player.jack_load_rot()
+		if cart.goods != "":
+			var err_g := put_goods(cart.goods, spot, rot)
+			if err_g != "":
+				hud.show_message(err_g, Color(1, 0.75, 0.2))
+				return
+			player.set_jack_load(0)
+			return
 		var err := layout.check_shelf("pallet", spot, rot)
 		if err != "":
 			hud.show_message(err, Color(1, 0.75, 0.2))
@@ -2616,8 +2989,6 @@ func jack_lift() -> void:
 		_rebuild_stands()
 		_settle_pallets(shelf_nodes.back())
 		return
-	var f: Vector2 = cart.forward()
-	var l: Vector2 = cart.lateral()
 	var best := -1
 	var best_d := INF
 	var best_cross := false
@@ -2625,28 +2996,51 @@ func jack_lift() -> void:
 		var s: Dictionary = layout.shelves[i]
 		if str(s["size"]) != "pallet":
 			continue
-		var d: Vector2 = s["pos"] - spot
-		# Lastmitte muss nahe der Zinkenmitte liegen
-		if absf(d.dot(f)) > 0.3 or absf(d.dot(l)) > LIFT_SIDE_TOL:
-			continue
-		# Längs oder quer zu den Zinken (Euro-Paletten lassen sich von beiden Seiten unterfahren), um 180° gedreht ist egal
-		var axis := Vector2.RIGHT.rotated(-int(s["rot"]) * PI / 2.0)
-		var is_cross := false
-		if absf(f.cross(axis)) > 0.26:
-			if absf(f.dot(axis)) > 0.26:
-				continue       # schräg: passt nicht auf die Zinken
-			is_cross = true
-		if d.length() < best_d:
-			best_d = d.length()
+		var fit := _jack_fit(cart, s["pos"], int(s["rot"]))
+		if not fit.is_empty() and float(fit["d"]) < best_d:
+			best_d = float(fit["d"])
 			best = i
-			best_cross = is_cross
-	if best < 0:
+			best_cross = bool(fit["cross"])
+	# Lieferpaletten am Boden (nicht die oberen Lagen des Rasters)
+	var best_goods := {}
+	for g in delivery_view():
+		var p: Vector3 = g["pos"]
+		if bool(g["carried"]) or p.y > Site.PALLET_TOP + 0.01:
+			continue
+		var fit := _jack_fit(cart, Vector2(p.x, p.z), int(g["rot"]))
+		if not fit.is_empty() and float(fit["d"]) < best_d:
+			best_d = float(fit["d"])
+			best_goods = g
+			best_cross = bool(fit["cross"])
+			best = -1
+	if best < 0 and best_goods.is_empty():
 		hud.show_message("Die Zinken stecken nicht unter einer Palette.", Color(1, 0.75, 0.2))
+		return
+	if not best_goods.is_empty():
+		player.set_jack_load(1, best_cross, _carry_goods(best_goods))
 		return
 	var n := int(layout.shelves[best].get("stack", 1))
 	layout.shelves.remove_at(best)
 	player.set_jack_load(n, best_cross)
 	_rebuild_stands()
+
+
+## Steckt eine Palette mit Mitte p und Drehung rot auf den Zinken? {"d": Abstand zur Zinkenmitte, "cross": quer?} oder {}.
+func _jack_fit(cart: JackCart, p: Vector2, rot: int) -> Dictionary:
+	var f: Vector2 = cart.forward()
+	var l: Vector2 = cart.lateral()
+	var d: Vector2 = p - cart.load_spot()
+	# Lastmitte muss nahe der Zinkenmitte liegen
+	if absf(d.dot(f)) > 0.3 or absf(d.dot(l)) > LIFT_SIDE_TOL:
+		return {}
+	# Längs oder quer zu den Zinken (Euro-Paletten lassen sich von beiden Seiten unterfahren), um 180° gedreht ist egal
+	var axis := Vector2.RIGHT.rotated(-rot * PI / 2.0)
+	var is_cross := false
+	if absf(f.cross(axis)) > 0.26:
+		if absf(f.dot(axis)) > 0.26:
+			return {}       # schräg: passt nicht auf die Zinken
+		is_cross = true
+	return {"d": d.length(), "cross": is_cross}
 
 
 ## Die abgesenkte Palette sinkt in 0,4 s die Hubhöhe herunter (nur Optik).
@@ -2683,7 +3077,7 @@ func _leave_jack() -> void:
 	var cart: JackCart = player.jack_cart
 	layout.shelves.append({"size": "pallet_jack", "pos": player.jack_center(), "rot": player.jack_rot(),
 			"angle": cart.phi if cart else player.jack_rot() * PI / 2.0,
-			"load": player.jack_load(), "cross": player.jack_cross()})
+			"load": player.jack_load(), "cross": player.jack_cross(), "goods": player.jack_goods()})
 	player.clear_carry()
 	_rebuild_stands()
 
@@ -2830,6 +3224,7 @@ func _rebuild_stands() -> void:
 		sn.cargo = int(s.get("load", 0))
 		sn.chips = s.get("chips") as ChipTray
 		sn.cargo_cross = bool(s.get("cross", false))
+		sn.cargo_goods = str(s.get("goods", ""))
 		sn.lift = float(s.get("lift", 0.0))
 		sn.load_rot = int(s.get("load_rot", 0))
 		sn.fork_shift = float(s.get("shift", 0.0))
@@ -2891,7 +3286,7 @@ func bin_prompt(i: int) -> String:
 	if _bin_under_conveyor(b):
 		return "%s    |    Unter dem Späneförderer der %s: zum Leeren mit dem Hallenkran herausheben" % [what, Layout.SPECS[str(b["machine"])]["title"]]
 	if str(b.get("machine", "")) != "":
-		what += "    |    Spänekiste der %s, mit dem Kran wieder unter den Förderer stellen" % Layout.SPECS[str(b["machine"])]["title"]
+		what += "    |    Spänekiste der %s, mit dem Kran oder im Baumodus wieder unter den Förderer stellen" % Layout.SPECS[str(b["machine"])]["title"]
 	if player.hands_free():
 		return "[Linksklick] Auf den Rollen schieben    |    %s" % what
 	return what
@@ -3405,6 +3800,8 @@ func _machine_node(id: String) -> Node3D:
 
 func machine_busy(id: String) -> bool:
 	var m := _machine_node(id)
+	if m is CncMill and (m.channel.busy() or m.changing):
+		return true
 	return m != null and m.get("spindle_speed") != null and float(m.get("spindle_speed")) > 5.0
 
 
@@ -3419,6 +3816,8 @@ func place_machine(id: String, pos: Vector2, rot: int) -> String:
 	if err != "":
 		return err
 	if machine_busy(id):
+		if id == "cnc_mill":
+			return "Erst das Programm beenden und die Spindel stoppen, dann umstellen."
 		return "Erst die Spindel stoppen, dann umstellen."
 	var moved := layout.machines.has(id)
 	if not moved and int(inventory.get(id, 0)) <= 0:
@@ -3459,6 +3858,8 @@ func _make_machine(id: String) -> void:
 			var l := Lathe.new()
 			l.MACHINE_ID = "cnc_lathe"
 			m = l
+		"cnc_mill":
+			m = CncMill.new()
 		"drill":
 			m = DrillPress.new()
 		"flat_grinder":
@@ -3684,6 +4085,8 @@ func _apply_layout(d: Dictionary) -> void:
 						"load": clampi(int(s.get("load", 0)), 0, Shelf.MAX_STACK), "cross": bool(s.get("cross", false))})
 				if str(s["size"]) == "bucket":
 					layout.shelves.back()["chips"] = Bucket.chips_of(s.get("chips", {}))
+				if str(s["size"]) == "pallet_jack" and str(s.get("goods", "")) != "" and int(s.get("load", 0)) > 0:
+					layout.shelves.back()["goods"] = str(s["goods"])
 				if s.has("angle"):
 					layout.shelves.back()["angle"] = float(s["angle"])
 				if s.has("lift"):
@@ -3786,6 +4189,9 @@ func _lathe_fit(d: float, l: float, m: Lathe) -> String:
 
 
 func _mill_fit(l: float, w: float, h: float, m: Mill) -> String:
+	var door := _door_block(m)
+	if door != "":
+		return door
 	if m.spindle_speed > 5.0:
 		return "Erst die Spindel stoppen."
 	if l < RawMaterialTab.CUT_MIN or l > MILL_MAX_LEN:
@@ -3822,7 +4228,7 @@ func _apply_pending(d: Dictionary) -> void:
 		store.clear()
 		if saved_tools is Dictionary:
 			store.load_state(saved_tools.get(m, {}))
-		elif veteran:
+		elif veteran and m != "cnc_mill":
 			var all_tools: Array = Wheels.list(m) if Wheels.WIDTHS.has(m) else (LatheTools.all() if m == "lathe" or m == "cnc_lathe" else MillTools.TOOLS)
 			for t in all_tools:
 				store.add(str(t["id"]), "wheel" if Wheels.WIDTHS.has(m) else "hm")
@@ -3874,6 +4280,14 @@ func _apply_pending(d: Dictionary) -> void:
 	stock = st.duplicate(true) if st is Array else []
 	var dl = d.get("deliveries", [])
 	deliveries = dl.duplicate(true) if dl is Array else []
+	delivery_spots = {}
+	var ds = d.get("delivery_spots", {})
+	if ds is Dictionary:
+		for k in ds:
+			var e = ds[k]
+			if e is Dictionary and e.get("pos") is Array and e["pos"].size() == 2:
+				delivery_spots[str(k)] = {"pos": Vector2(float(e["pos"][0]), float(e["pos"][1])), "rot": posmod(int(e.get("rot", 1)), 4),
+					"carried": bool(e.get("carried", false))}
 	var sd = d.get("site", {})
 	_apply_site(sd if sd is Dictionary else {}, veteran)
 	if starter and not d.has("site"):
@@ -3944,6 +4358,7 @@ func _apply_pending(d: Dictionary) -> void:
 		if h is Dictionary and h.has("id"):
 			var hm: Node3D = _machine_node(str(h.get("machine", "lathe")))
 			player.set_held(hm if hm != null else lathe, str(h["id"]))
+	_release_orphan_goods()
 	# Fallen Gelassenes liegt wieder da
 	var saved_drops = d.get("dropped", [])
 	if saved_drops is Array:
@@ -3985,6 +4400,11 @@ func _tick_autosave(delta: float) -> void:
 
 func save_game() -> bool:
 	_autosave_t = 0.0
+	return SaveManager.write_slot(GameState.current_slot, save_data())
+
+
+## Der ganze Spielstand als Dictionary (so landet er im Speicherplatz).
+func save_data() -> Dictionary:
 	var data := {
 		"name": save_name, "money": money, "machines": company.machines, "job": job_index, "parts": parts, "play_time": play_time,
 		"player": player.get_state(), "lathe": lathe.get_state(),
@@ -3997,10 +4417,21 @@ func save_game() -> bool:
 		"pins": _pin_states(), "places": places.to_state(), "crane": crane.get_state(),
 		"dropped": get_tree().get_nodes_in_group(DroppedItem.GROUP).map(func(n: DroppedItem) -> Dictionary: return n.get_state()),
 	}
+	var spots := delivery_spots.duplicate(true)
 	# Sitzt jemand auf dem Gabelstapler, wird er dort gespeichert, wo er gerade steht
 	if forklift and is_instance_valid(forklift):
-		data["layout"]["shelves"].append(_forklift_entry_state(forklift))
-	return SaveManager.write_slot(GameState.current_slot, data)
+		var fe := _forklift_entry_state(forklift)
+		if forklift.load_goods != "":
+			# Die Lieferpalette steht dann dort, wo die Gabel sie gerade trägt
+			spots[forklift.load_goods] = {"pos": forklift.fork_spot(), "rot": posmod(roundi(forklift.phi / (PI / 2.0)) + forklift.load_rot, 4), "carried": false}
+			fe["load"] = 0
+		data["layout"]["shelves"].append(fe)
+	var ds := {}
+	for k in spots:
+		var p: Vector2 = spots[k]["pos"]
+		ds[k] = {"pos": [p.x, p.y], "rot": int(spots[k]["rot"]), "carried": bool(spots[k].get("carried", false))}
+	data["delivery_spots"] = ds
+	return data
 
 
 func _tool_states() -> Dictionary:

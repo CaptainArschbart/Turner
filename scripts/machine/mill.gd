@@ -68,6 +68,15 @@ var semi_key := ""                # Auftrag des eingespannten, vorbearbeiteten T
 var ceramic_part := false         # Kundenteil mit Keramikschicht
 var panel_pos := MillModel.PANEL_POS
 var panel_stand := PANEL_STAND
+# Maße und Verfahrwege je Maschine: Vorgabe sind die Konstanten der konventionellen Fräse, die CNC-Fräse überschreibt sie
+var top_y := MillModel.TOP_Y      # Höhe der Rohteil-Oberseite über dem Boden (m)
+var table_y := MillModel.TABLE_Y  # Höhe der Tischoberkante (m)
+var vise_l := MillModel.VISE_L    # Länge der Schraubstockbacken in X (m)
+var x_travel := X_TRAVEL
+var y_travel := Y_TRAVEL
+var z_max := Z_MAX
+var z_min := Z_MIN
+var op_stand := Vector3(0.0, 0.0, 0.85)    # Standplatz des Spielers an der Arbeitsansicht
 var _cut_mark := 1.0              # Eintrag in die Höhenkarte für bearbeitete Zellen
 var operating := false
 var player: Node = null
@@ -232,6 +241,16 @@ func default_tool_index() -> int:
 	return 0
 
 
+## Darf von Hand verfahren werden (Tippen, Handrad, Vorschubtaste)? Die CNC-Fräse sperrt das bei laufendem Programm.
+func _manual_ok() -> bool:
+	return true
+
+
+## Fehlertext, solange das Teil nicht umgespannt werden darf (leer = erlaubt). Die CNC-Fräse verlangt offene Tür.
+func _clamp_gate() -> String:
+	return ""
+
+
 func machine_title() -> String:
 	return MachineCatalog.MILL_NAME
 
@@ -282,10 +301,10 @@ func _build_workholding(vise: Node3D) -> void:
 	for i in 2:
 		var jaw := Node3D.new()
 		vise.add_child(jaw)
-		Build.box(jaw, Vector3(MillModel.VISE_L, 0.05, JAW_T * 0.001), Vector3(0, 0, 0), dark)
+		Build.box(jaw, Vector3(vise_l, 0.05, JAW_T * 0.001), Vector3(0, 0, 0), dark)
 		_jaws.append(jaw)
 	_block = Node3D.new()
-	_block.position.y = MillModel.TOP_Y - MillModel.TABLE_Y
+	_block.position.y = top_y - table_y
 	table.add_child(_block)
 	_block_mi = MeshInstance3D.new()
 	_block.add_child(_block_mi)
@@ -499,7 +518,7 @@ func get_machine() -> Node:
 func focus_for(origin: Vector3, dir: Vector3) -> Node:
 	if tool_mount == null:
 		return self
-	var c := to_global(Vector3(0, MillModel.TOP_Y + (tool_z + MillTools.tool_length(tool()) * 0.5) * 0.001, 0))
+	var c := to_global(Vector3(0, top_y + (tool_z + MillTools.tool_length(tool()) * 0.5) * 0.001, 0))
 	return tool_mount if (c - origin).cross(dir).length() <= MOUNT_REACH else self
 
 
@@ -622,7 +641,7 @@ func _make_block() -> void:
 	# Backen liegen in Y links und rechts am Rohteil
 	_place_jaws()
 	# Unterlage füllt den Platz zwischen Schraubstock und Rohteil
-	var bottom := MillModel.TOP_Y - MillModel.TABLE_Y - block_h * 0.001
+	var bottom := top_y - table_y - block_h * 0.001
 	var bm := _parallel.mesh as BoxMesh
 	bm.size = Vector3(block_l * 0.001, maxf(bottom - 0.03, 0.002), block_w * 0.001)
 	_parallel.position = Vector3(0, 0.03 + bm.size.y * 0.5, 0)
@@ -630,7 +649,7 @@ func _make_block() -> void:
 
 func _place_jaws() -> void:
 	var half := block_w * 0.0005 + JAW_T * 0.0005
-	var jaw_y := MillModel.TOP_Y - MillModel.TABLE_Y - jaw_drop() * 0.001 - 0.025
+	var jaw_y := top_y - table_y - jaw_drop() * 0.001 - 0.025
 	_jaws[0].position = Vector3(0, jaw_y, -half)
 	_jaws[1].position = Vector3(0, jaw_y, half)
 
@@ -649,6 +668,9 @@ func grip_depth() -> float:
 func reclamp(depth: float, flip: bool) -> String:
 	if not has_part:
 		return "Es ist kein Teil eingespannt."
+	var gate := _clamp_gate()
+	if gate != "":
+		return gate
 	if spindle_speed > 5.0:
 		return "Erst die Spindel stoppen, dann umspannen."
 	if tool_z < 0.0:
@@ -698,8 +720,8 @@ func height_at(x: float, y: float) -> float:
 func _sync_axes() -> void:
 	table.position.x = -(tool_x - block_l * 0.5) * 0.001
 	saddle.position.z = (tool_y - block_w * 0.5) * 0.001
-	head.position.y = MillModel.TOP_Y + (tool_z + MillTools.tool_length(tool())) * 0.001
-	var tip_y := MillModel.TOP_Y + tool_z * 0.001
+	head.position.y = top_y + (tool_z + MillTools.tool_length(tool())) * 0.001
+	var tip_y := top_y + tool_z * 0.001
 	chips.position = Vector3(0, tip_y + 0.002, 0)
 	coolant_fx.position = Vector3(-0.05, tip_y + 0.08, 0.05)
 
@@ -721,9 +743,9 @@ func move_tool(dx: float, dy: float, dz: float, speed: float) -> void:
 
 
 func _step_tool(sx: float, sy: float, sz: float, speed: float) -> bool:
-	var x := clampf(tool_x + sx, block_l * 0.5 - X_TRAVEL * 0.5, block_l * 0.5 + X_TRAVEL * 0.5)
-	var y := clampf(tool_y + sy, block_w * 0.5 - Y_TRAVEL * 0.5, block_w * 0.5 + Y_TRAVEL * 0.5)
-	var z := clampf(tool_z + sz, Z_MIN, Z_MAX)
+	var x := clampf(tool_x + sx, block_l * 0.5 - x_travel * 0.5, block_l * 0.5 + x_travel * 0.5)
+	var y := clampf(tool_y + sy, block_w * 0.5 - y_travel * 0.5, block_w * 0.5 + y_travel * 0.5)
+	var z := clampf(tool_z + sz, z_min, z_max)
 	var ex := x - tool_x
 	var ey := y - tool_y
 	var ez := z - tool_z
@@ -757,7 +779,7 @@ func _step_tool(sx: float, sy: float, sz: float, speed: float) -> bool:
 ## Prüft die Werkzeugspitze gegen Schraubstock und Unterlage.
 func _clash(x: float, y: float, z: float) -> String:
 	var r := tool_radius()
-	var over_x := x + r > block_l * 0.5 - MillModel.VISE_L * 500.0 and x - r < block_l * 0.5 + MillModel.VISE_L * 500.0
+	var over_x := x + r > block_l * 0.5 - vise_l * 500.0 and x - r < block_l * 0.5 + vise_l * 500.0
 	if z < -jaw_drop() and over_x:
 		if (y - r < 0.0 and y + r > -JAW_T) or (y + r > block_w and y - r < block_w + JAW_T):
 			return "KOLLISION! Werkzeug im Schraubstock - Not-Halt."
@@ -1010,6 +1032,8 @@ func axis_name(axis: int) -> String:
 
 ## Auto-Vorschub: axis 0..2, sign ±1. Dieselbe Richtung nochmal oder axis -1 schaltet ab.
 func set_auto(axis: int, sign: int) -> void:
+	if axis >= 0 and not _manual_ok():
+		return
 	if axis < 0 or (axis == auto_axis and sign == auto_sign):
 		auto_axis = -1
 		return
@@ -1050,7 +1074,7 @@ func _physics_process(delta: float) -> void:
 	_spin_spindle(delta)
 
 	# Tippbetrieb im eingestellten Vorschub, Shift = 10-fach
-	if operating and not estop:
+	if operating and not estop and _manual_ok():
 		var ax := Vector3(Input.get_axis("lathe_z_minus", "lathe_z_plus"), Input.get_axis("lathe_x_out", "lathe_x_in"),
 			Input.get_axis("mill_z_down", "mill_z_up"))
 		if ax != Vector3.ZERO:
@@ -1123,7 +1147,7 @@ func _update_camera(delta: float) -> void:
 	cam_dist = lerpf(cam_dist, _dist_t, k)
 	cam_yaw = lerpf(cam_yaw, _yaw_t, k)
 	cam_pitch = lerpf(cam_pitch, _pitch_t, k)
-	var want := Vector3(0, MillModel.TOP_Y + maxf(tool_z, 0.0) * 0.0005, 0) + cam_pan
+	var want := Vector3(0, top_y + maxf(tool_z, 0.0) * 0.0005, 0) + cam_pan
 	if _lever_view:
 		want = panel_pos
 	cam_target = cam_target.lerp(want, clampf(8.0 * delta, 0.0, 1.0))
@@ -1162,7 +1186,7 @@ func interact(p: Node) -> void:
 		return
 	player = p
 	operating = true
-	p.start_operating(self, to_global(Vector3(0.0, 0.0, 0.85)), global_rotation.y)
+	p.start_operating(self, to_global(op_stand), global_rotation.y)
 	set_view("reset")
 	_activate_camera()
 	operating_changed.emit(true)
@@ -1206,7 +1230,7 @@ func _activate_camera() -> void:
 	cam_dist = _dist_t
 	cam_yaw = _yaw_t
 	cam_pitch = _pitch_t
-	cam_target = panel_pos if _lever_view else Vector3(0, MillModel.TOP_Y, 0)
+	cam_target = panel_pos if _lever_view else Vector3(0, top_y, 0)
 	_update_camera(1.0)
 	op_cam.make_current()
 

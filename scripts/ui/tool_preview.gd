@@ -16,6 +16,7 @@ const VIEWS := {
 	"drill": {"tilt": Vector3(0.0, 0.0, -1.2), "wide": true, "dist": 1.0},
 	"holders": {"tilt": Vector3(0.2, 0.0, 0.0), "wide": true, "dist": 1.2},
 	"mill_machine": {"tilt": Vector3(0.12, 0.0, 0.0), "wide": false, "dist": 0.8},
+	"mill_cnc": {"tilt": Vector3(0.2, 0.0, 0.0), "wide": true, "dist": 0.9},
 	"lathe_cnc": {"tilt": Vector3(0.22, 0.0, 0.0), "wide": true, "dist": 0.95},
 	"lathe_conv": {"tilt": Vector3(0.22, 0.0, 0.0), "wide": true, "dist": 0.95},
 	"band_saw": {"tilt": Vector3(0.25, 0.0, 0.0), "wide": true, "dist": 0.8},
@@ -26,6 +27,7 @@ const VIEWS := {
 ## Maschinen der Übersicht: Skript und Eigenschaften, die vor dem Einhängen gesetzt werden.
 const MACHINES := {
 	"lathe_cnc": ["res://scripts/machine/lathe.gd", {"conventional": false, "demo": true}],
+	"mill_cnc": ["res://scripts/machine/cnc_mill.gd", {}],
 	"lathe_conv": ["res://scripts/machine/lathe.gd", {"conventional": true, "demo": true}],
 	"band_saw": ["res://scripts/machine/band_saw.gd", {}],
 	"round_grinder": ["res://scripts/machine/round_grinder.gd", {"demo": true}],

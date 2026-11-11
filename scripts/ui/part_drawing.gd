@@ -193,6 +193,27 @@ func _draw_turned(area: Rect2) -> void:
 				var at: Vector2 = P.call(float(f["z"]), float(f["d"]) * 0.5)
 				draw_circle(at, 3.0, INK)
 				_centered(at + Vector2(0, 18), "Ø%s" % _num(float(f["d"])), SMALL)
+			"bore":
+				# Bohrung: verdeckte Kanten gestrichelt, Maß in der Mitte
+				var rb := float(f["d"]) * 0.5
+				var b0: Vector2 = P.call(float(f["z0"]), rb)
+				var b1: Vector2 = P.call(float(f["z1"]), rb)
+				var b2: Vector2 = P.call(float(f["z0"]), -rb)
+				var b3: Vector2 = P.call(float(f["z1"]), -rb)
+				draw_dashed_line(b0, b1, INK, 1.2, 5.0)
+				draw_dashed_line(b2, b3, INK, 1.2, 5.0)
+				draw_dashed_line(b0, b2, INK, 1.2, 5.0)
+				_centered((b0 + b3) * 0.5 + Vector2(0, -4), "Ø%s" % _num(float(f["d"])), SMALL)
+			"thread":
+				# Gewinde: Kernlinie dünn, Bezeichnung M d x P
+				var inner := bool(f.get("inner", false))
+				var rn := float(f["d"]) * 0.5
+				var rk := rn - float(f["p"]) * (0.5413 if inner else 0.6134)
+				var rl := rk if not inner else rn
+				for sgn in [1.0, -1.0]:
+					draw_line(P.call(float(f["z0"]), rl * sgn), P.call(float(f["z1"]), rl * sgn), THIN, 1.0)
+				var tag: Vector2 = P.call((float(f["z0"]) + float(f["z1"])) * 0.5, rn)
+				_centered(tag + Vector2(0, -8 if not inner else 14), "M%s x %s%s" % [_num(float(f["d"])), _num(float(f["p"])), " innen" if inner else ""], SMALL)
 	if job.has("rz"):
 		_text(Vector2(area.position.x + 8.0, area.end.y - 8.0), "Oberfläche Rz %s µm" % _num(float(job["rz"])), FONT)
 

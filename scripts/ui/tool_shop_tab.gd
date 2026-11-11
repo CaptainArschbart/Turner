@@ -8,6 +8,7 @@ const MACHINES := [
 	{"id": "lathe", "title": "Drehmaschine"},
 	{"id": "cnc_lathe", "title": "CNC-Drehmaschine"},
 	{"id": "mill", "title": "Fräsmaschine"},
+	{"id": "cnc_mill", "title": "CNC-Fräsmaschine"},
 	{"id": "drill", "title": "Standbohrmaschine"},
 	{"id": "flat_grinder", "title": "Flachschleifmaschine"},
 	{"id": "round_grinder", "title": "Rundschleifmaschine"},
@@ -18,6 +19,8 @@ const LATHE_CATEGORIES := [
 	{"title": "Schlichten und Kopieren", "ids": ["T3", "T4"]},
 	{"title": "Fasen und Radien", "ids": ["T5", "T7"]},
 	{"title": "Stechen", "ids": ["T6"]},
+	{"title": "Bohren und Innendrehen", "ids": ["T9", "T8"]},
+	{"title": "Gewinde", "ids": ["T10", "T11"]},
 ]
 
 ## Spielwelt: money, free_mode, company, tool_price(machine, id, grade), buy_tool(machine, id, grade)

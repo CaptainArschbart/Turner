@@ -590,8 +590,8 @@ func _process(delta: float) -> void:
 		var spindle := "LÄUFT" if lathe.spindle_speed > 5.0 else "steht"
 		var parts: Array[String] = []
 		var t := lathe.tool()
-		_main.text = "S    %d /min\nF    %s mm/U\nKSS  %s\nT    Platz %d: %s" % [
-			int(round(lathe.rpm())), ("%.2f" % lathe.feed()).replace(".", ","), ("EIN" if lathe.coolant else "aus") + lathe.kss_suffix(),
+		_main.text = "S    %d /min\nF    %s\nKSS  %s\nT    Platz %d: %s" % [
+			int(round(lathe.rpm())), lathe.feed_text(lathe.feed()), ("EIN" if lathe.coolant else "aus") + lathe.kss_suffix(),
 			lathe.active_slot + 1, "%s %s" % [t["id"], t["name"]] if lathe.has_cutter() else "leer"]
 		_alert.visible = lathe.estop
 		var feed_txt := "längs" if lathe.auto_feed else ("plan" if lathe.auto_feed_x else "aus")
@@ -628,7 +628,7 @@ func _conv_lines(t: Dictionary, vc: float) -> Array[String]:
 		"Werkstoff  %s  (%s)" % [Materials.label(lathe.material), Materials.group_of(lathe.material)["title"]],
 		"T  Platz %d: %s %s" % [lathe.active_slot + 1, t["id"], t["name"]] if lathe.has_cutter() else "T  Halter ist leer",
 		"S  %d /min  (Soll %d)   Spindel: %s" % [int(round(lathe.spindle_speed)), int(lathe.rpm_set), "LÄUFT" if lathe.spindle_speed > 5.0 else "steht"],
-		"F  %s mm/U   Auto: %s" % [("%.2f" % lathe.feed_set).replace(".", ","), auto],
+		"F  %s   Auto: %s" % [lathe.feed_text(lathe.feed_set), auto],
 		"vc %d m/min %s  Soll %d-%d   KSS: %s" % [int(vc), _vc_hint(vc), int(win.x), int(win.y), ("EIN" if lathe.coolant else "aus") + lathe.kss_suffix()],
 		"Schneide: %d %% Hitze, %d %% Verschleiß   Spänewanne: %d %%" % [int(lathe.tool_heat * 100.0), int(lathe.tool_wear() * 100.0), int(lathe.tray.fraction() * 100.0)],
 		"Handrad: %s   Schritt %s / Raste" % [lathe.hw_axis_name(), Settings.handwheel_step_name()],

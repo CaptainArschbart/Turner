@@ -7,7 +7,13 @@ extends RefCounted
 ##   contour - Kontur: Startpunkt X0 (Ø) / Z0 und Geraden-Elemente {x (Ø), z, tr, tv}
 ##             tr = Übergang zum nächsten Element: 0 keiner, 1 Fase (tv = Schenkellänge), 2 Radius
 ##   cut     - Abspanen Rechteck: Bereich Z0..Z1 auf Ø X1 (Rohteil = Ist-Material)
-##   stock   - Konturabspanen: Material außerhalb der Kontur bis zum Werkstückende
+##   stock   - Konturabspanen: Material außerhalb der Kontur bis zum Werkstückende; side 1 = innen
+##             (Bohrung mit der Bohrstange auf die Kontur ausdrehen, nur längs)
+##   thread  - Gewinde außen / innen (side): Nenn-Ø X0, Steigung P, Tiefe H1, NN Schnitte, Z0..Z1
+##   drill   - Bohren in der Drehmitte: Z0 (Start) bis Z1 (Tiefe an Spitze bzw. Schaft), Zustelltiefe
+##             D, Spanbruch oder Entspänen
+## Konturelemente sind Geraden oder Kreisbögen (arc 1 im / 2 gegen den Uhrzeigersinn, mit Radius
+## r oder Mittelpunkt ci (Ø) / ck).
 ## Abspansätze: mode 0 Schruppen / 1 Schlichten, dir 0 längs / 1 plan, Werkzeug t, F (mm/U),
 ## V (m/min, konstante Schnittgeschwindigkeit), D Zustellung, UX Aufmaß X (Ø), UZ Aufmaß Z,
 ## hs Hinterschnitte bearbeiten (1 ja / 0 nein, nur Konturabspanen Schruppen).
@@ -28,6 +34,10 @@ const CENTER_OVER := -0.4       # über die Drehmitte hinaus plandrehen (Restzap
 const MODES := ["Schruppen", "Schlichten", "Komplett"]   # Komplett = Schruppen + Schlichten, ein Werkzeug
 const DIRS := ["längs", "plan"]
 const TRANS := ["-", "Fase", "Radius"]
+const SIDES := ["außen", "innen"]
+const TIPS := ["Spitze", "Schaft"]
+const CHIPS := ["Spanbruch", "Entspänen"]
+const ARCS := ["Gerade", "Bogen im UZS", "Bogen gegen UZS"]
 const UC_FORMS := ["Gewinde DIN 76", "Form E DIN 509"]
 ## Gewindefreistich DIN 76-1 (Regelfall, außen): [Steigung P, d - dg, g1 (Breite am Grund), r]
 const DIN76 := [
@@ -65,10 +75,15 @@ static func migrate_to_wks(prog: Dictionary, zero_z: float) -> bool:
 				b["z1"] = float(b["z1"]) - zero_z
 			"undercut":
 				b["z0"] = float(b["z0"]) - zero_z
+			"thread", "drill":
+				b["z0"] = float(b["z0"]) - zero_z
+				b["z1"] = float(b["z1"]) - zero_z
 			"contour":
 				b["z0"] = float(b["z0"]) - zero_z
 				for e in b["els"]:
 					e["z"] = float(e["z"]) - zero_z
+					if e.has("ck"):
+						e["ck"] = float(e["ck"]) - zero_z
 	prog["wks"] = true
 	return true
 
@@ -94,8 +109,15 @@ static func new_block(type: String, prog := {}) -> Dictionary:
 			for b in prog.get("blocks", []):
 				if str(b["type"]) == "contour":
 					cname = str(b["name"])
-			return {"type": "stock", "contour": cname, "mode": 0, "dir": 0, "t": "T1", "f": 0.25,
+			return {"type": "stock", "contour": cname, "side": 0, "mode": 0, "dir": 0, "t": "T1", "f": 0.25,
 				"v": 180.0, "d": 2.0, "ux": 0.4, "uz": 0.2, "hs": 1}
+		"thread":
+			# M20 x 1,5 außen, 25 mm lang ab der Stirnfläche
+			return {"type": "thread", "side": 0, "t": "T10", "p": 1.5, "x0": 20.0, "z0": 0.0, "z1": -25.0,
+				"h": iso_depth(1.5, false), "n": 6, "v": 100.0}
+		"drill":
+			return {"type": "drill", "t": "T9", "f": 0.15, "v": 30.0, "z0": 0.0, "z1": -40.0, "tip": 0,
+				"q": 15.0, "chip": 1}
 		"undercut":
 			# Bezugspunkt X0/Z0: Ecke Gewinde- bzw. Zylinderdurchmesser an der Schulter
 			return {"type": "undercut", "form": 0, "mode": 2, "t": "T3", "f": 0.1, "v": 200.0,
@@ -118,7 +140,31 @@ static func find_contour(prog: Dictionary, cname: String) -> Dictionary:
 
 
 static func is_machining(b: Dictionary) -> bool:
-	return str(b.get("type", "")) in ["cut", "stock", "undercut"]
+	return str(b.get("type", "")) in ["cut", "stock", "undercut", "thread", "drill"]
+
+
+## Gewindetiefe nach ISO 68 für Steigung p: außen h3 = 0,6134 P, innen H1 = 0,5413 P.
+static func iso_depth(p: float, inner: bool) -> float:
+	return snappedf(p * (0.5413 if inner else 0.6134), 0.001)
+
+
+## Vorschub je Umdrehung eines Satzes: beim Gewinde die Steigung.
+static func block_feed(b: Dictionary) -> float:
+	return float(b["p"]) if str(b["type"]) == "thread" else float(b["f"])
+
+
+## Feste Drehzahl (Gewinde, Bohren) statt konstanter Schnittgeschwindigkeit, 0 = konstantes V.
+static func block_rpm(b: Dictionary, smax: float) -> float:
+	var d := 0.0
+	match str(b["type"]):
+		"thread":
+			d = float(b["x0"])
+		"drill":
+			var t := LatheTools.get_tool(maxi(LatheTools.index_of(str(b["t"])), 0))
+			d = float(t.get("dia", 20.0))
+		_:
+			return 0.0
+	return clampf(float(b["v"]) * 1000.0 / (PI * maxf(d, 1.0)), RPM_MIN, minf(smax, 3000.0))
 
 
 static func fmt(v: float, dec := 3) -> String:
@@ -137,7 +183,16 @@ static func summary(b: Dictionary) -> String:
 		"cut":
 			return "Abspanen %s %s   %s F%s V%d   Z%s..%s auf Ø%s" % [MODES[int(b["mode"])], DIRS[int(b["dir"])],
 				b["t"], fmt(b["f"]), int(b["v"]), fmt(b["z0"]), fmt(b["z1"]), fmt(b["x1"])]
+		"thread":
+			return "Gewinde %s M%s x %s   Z%s..%s   H1 %s  %d Schnitte   %s V%d" % [SIDES[int(b["side"])], fmt(b["x0"]),
+				fmt(b["p"]), fmt(b["z0"]), fmt(b["z1"]), fmt(b["h"]), int(b["n"]), b["t"], int(b["v"])]
+		"drill":
+			return "Bohren mittig   Z%s..%s (%s)   D%s %s   %s F%s V%d" % [fmt(b["z0"]), fmt(b["z1"]),
+				TIPS[int(b["tip"])], fmt(b["q"]), CHIPS[int(b["chip"])], b["t"], fmt(b["f"]), int(b["v"])]
 		"stock":
+			if int(b.get("side", 0)) == 1:
+				return "Kontur abspanen innen %s   %s   %s F%s V%d%s" % [MODES[int(b["mode"])],
+					b["contour"], b["t"], fmt(b["f"]), int(b["v"]), ("  D%s" % fmt(b["d"])) if int(b["mode"]) != 1 else ""]
 			return "Kontur abspanen %s %s   %s   %s F%s V%d%s" % [MODES[int(b["mode"])], DIRS[int(b["dir"])],
 				b["contour"], b["t"], fmt(b["f"]), int(b["v"]), ("  D%s%s" % [fmt(b["d"]),
 				"" if int(b.get("hs", 1)) == 1 else "  ohne Hinterschn."]) if int(b["mode"]) != 1 else ""]
@@ -228,22 +283,35 @@ static func examples() -> Array:
 
 # ======================================================================= Kontur
 
-## Kontur als Polylinie Vector2(z, r) mit eingerechneten Fasen und Rundungen.
+## Kontur als Polylinie Vector2(z, r) mit eingerechneten Fasen, Rundungen und Kreisbögen.
+## Ein Element mit "arc" 1 (im Uhrzeigersinn, G2) bzw. 2 (gegen den Uhrzeigersinn, G3) ist ein
+## Kreisbogen vom vorigen Punkt zu seinem Endpunkt - Drehsinn so, wie die Konturgrafik ihn zeigt
+## (Z nach rechts, X nach oben). Angabe über den Radius r ("cm" 0, kürzerer Bogen) oder den
+## Mittelpunkt ci (Ø) / ck ("cm" 1). Fasen und Rundungen (tr) gibt es nur zwischen zwei Geraden.
 static func contour_points(c: Dictionary, zoff := 0.0) -> PackedVector2Array:
 	var pts: Array[Vector2] = [Vector2(float(c["z0"]) + zoff, float(c["x0"]) * 0.5)]
 	var trs: Array = [[0, 0.0]]
+	var arcs: Array = [{}]
 	for e in c.get("els", []):
 		var p := Vector2(float(e["z"]) + zoff, float(e["x"]) * 0.5)
 		if p.distance_to(pts[pts.size() - 1]) < 0.0005:
 			continue
+		var a := {}
+		if int(e.get("arc", 0)) != 0:
+			a = arc_of(e, pts[pts.size() - 1], zoff)
 		pts.append(p)
 		trs.append([int(e.get("tr", 0)), float(e.get("tv", 0.0))])
+		arcs.append(a)
+	arcs.append({})
 	var out := PackedVector2Array([pts[0]])
 	for i in range(1, pts.size()):
 		var p := pts[i]
+		if not (arcs[i] as Dictionary).is_empty():
+			_arc_pts(out, arcs[i], pts[i - 1], p)
+			continue
 		var tr: int = trs[i][0]
 		var tv: float = trs[i][1]
-		if i == pts.size() - 1 or tr == 0 or tv <= 0.0:
+		if i == pts.size() - 1 or tr == 0 or tv <= 0.0 or not (arcs[i + 1] as Dictionary).is_empty():
 			out.append(p)
 			continue
 		var u := pts[i - 1] - p
@@ -274,6 +342,64 @@ static func contour_points(c: Dictionary, zoff := 0.0) -> PackedVector2Array:
 	return out
 
 
+## Kreisbogen eines Konturelements e, das bei start (z, r) beginnt: {"c" Mittelpunkt (z, r),
+## "r" Radius, "cw" im Uhrzeigersinn, "err" Fehlertext}.
+static func arc_of(e: Dictionary, start: Vector2, zoff := 0.0) -> Dictionary:
+	var end := Vector2(float(e["z"]) + zoff, float(e["x"]) * 0.5)
+	var cw := int(e.get("arc", 0)) == 1
+	if int(e.get("cm", 0)) == 1:
+		var cen := Vector2(float(e.get("ck", 0.0)) + zoff, float(e.get("ci", 0.0)) * 0.5)
+		var r0 := start.distance_to(cen)
+		var err := ""
+		if r0 < 0.01:
+			err = "Mittelpunkt liegt auf dem Startpunkt"
+		elif absf(end.distance_to(cen) - r0) > 0.02:
+			err = "Endpunkt liegt nicht auf dem Kreis (R %s / %s)" % [fmt(r0), fmt(end.distance_to(cen))]
+		return {"c": cen, "r": r0, "cw": cw, "err": err}
+	var r := absf(float(e.get("r", 0.0)))
+	var chord := start.distance_to(end)
+	var err2 := ""
+	if r < chord * 0.5 - 0.0005:
+		err2 = "Radius %s kleiner als die halbe Sehne (%s)" % [fmt(r), fmt(chord * 0.5)]
+		r = chord * 0.5
+	var dir := (end - start) / maxf(chord, 0.000001)
+	var left := Vector2(-dir.y, dir.x)
+	var h := sqrt(maxf(r * r - chord * chord * 0.25, 0.0))
+	var cen2 := (start + end) * 0.5 + left * h * (-1.0 if cw else 1.0)
+	return {"c": cen2, "r": r, "cw": cw, "err": err2}
+
+
+## Bogenpunkte nach start bis einschließlich end anhängen.
+static func _arc_pts(out: PackedVector2Array, a: Dictionary, start: Vector2, end: Vector2) -> void:
+	var c: Vector2 = a["c"]
+	var r: float = a["r"]
+	var a0 := (start - c).angle()
+	var da := (end - c).angle() - a0
+	da = wrapf(da, -TAU, 0.0) if bool(a["cw"]) else wrapf(da, 0.0, TAU)
+	var n := maxi(4, int(ceil(absf(da) * r / 0.25)))
+	for s in range(1, n):
+		out.append(c + Vector2.from_angle(a0 + da * float(s) / n) * r)
+	out.append(end)
+
+
+## Fehler in einer Kontur ("" = in Ordnung): Bögen, die nicht aufgehen, Durchmesser unter null.
+static func contour_error(c: Dictionary) -> String:
+	var prev := Vector2(float(c["z0"]), float(c["x0"]) * 0.5)
+	var els: Array = c.get("els", [])
+	for k in els.size():
+		var e: Dictionary = els[k]
+		var p := Vector2(float(e["z"]), float(e["x"]) * 0.5)
+		if int(e.get("arc", 0)) != 0 and p.distance_to(prev) >= 0.0005:
+			var a := arc_of(e, prev)
+			if str(a["err"]) != "":
+				return "Element %d: %s." % [k + 1, a["err"]]
+		prev = p
+	for q in contour_points(c):
+		if q.y < -0.001:
+			return "Kontur geht unter die Drehmitte (negativer Durchmesser)."
+	return ""
+
+
 ## Größter Radius der Polylinie im z-Intervall [a, b], -1 wenn sie dort nicht liegt.
 static func poly_max(poly: PackedVector2Array, a: float, b: float) -> float:
 	var m := -1.0
@@ -298,7 +424,7 @@ static func poly_max(poly: PackedVector2Array, a: float, b: float) -> float:
 ## Sollradius je Segment für einen Abspansatz. prof = Ist-Material (Radius je Segment).
 ## Segmente außerhalb des Bearbeitungsbereichs behalten ihr Material (geschützt).
 ## zoff = Lage des Werkstücknullpunkts (Programm-Z 0) über der Backen-Stirnfläche (mm).
-static func target(b: Dictionary, prog: Dictionary, prof: PackedFloat32Array, zoff := 0.0) -> Dictionary:
+static func target(b: Dictionary, prog: Dictionary, prof: PackedFloat32Array, zoff := 0.0, rref := 0.0) -> Dictionary:
 	var n := prof.size()
 	var tg := PackedFloat32Array()
 	tg.resize(n)
@@ -316,6 +442,10 @@ static func target(b: Dictionary, prog: Dictionary, prof: PackedFloat32Array, zo
 	if c.is_empty():
 		return {"err": "Kontur \"%s\" nicht im Programm." % b.get("contour", "")}
 	var poly := contour_points(c, zoff)
+	if rref > 0.0:
+		# Innenkontur im gespiegelten Raum (r' = rref - r), siehe _plan_inner
+		for q in poly.size():
+			poly[q].y = rref - poly[q].y
 	if poly.size() < 2:
 		return {"err": "Kontur %s hat keine Elemente." % c["name"]}
 	var zlo := INF
@@ -394,10 +524,18 @@ static func plan(b: Dictionary, prog: Dictionary, t: Dictionary, ctx: Dictionary
 	var err := check_block(b, t)
 	if err != "":
 		return {"err": err}
+	match str(b["type"]):
+		"thread":
+			return _plan_thread(b, prog, t, ctx)
+		"drill":
+			return _plan_drill(b, prog, t, ctx)
+		"stock":
+			if int(b.get("side", 0)) == 1:
+				return _plan_inner(b, prog, t, ctx)
 	if int(b["mode"]) == 2:
 		return _plan_complete(b, prog, t, ctx)
 	var prof: PackedFloat32Array = ctx["prof"]
-	var tr := target(b, prog, prof, float(ctx.get("zoff", 0.0)))
+	var tr := target(b, prog, prof, float(ctx.get("zoff", 0.0)), float(ctx.get("rref", 0.0)))
 	if tr.has("err"):
 		return {"err": tr["err"]}
 	var tg: PackedFloat32Array = tr["tg"]
@@ -427,10 +565,26 @@ static func plan(b: Dictionary, prog: Dictionary, t: Dictionary, ctx: Dictionary
 	for i in after.size():
 		after[i] = minf(after[i], maxf(cur[i], goal[i]))
 	res["after"] = after
+	_apply_bore(res, ctx)
 	res["tg"] = tg
 	if tr.has("poly"):
 		res["poly"] = tr["poly"]
 	return res
+
+
+## Außenbearbeitung an einem Teil mit Bohrung: wo außen bis auf die Bohrung abgedreht wird, ist
+## kein Material mehr. Ergebnis in res["after"] / res["bore_after"].
+static func _apply_bore(res: Dictionary, ctx: Dictionary) -> void:
+	if not ctx.has("bore"):
+		return
+	var after: PackedFloat32Array = res["after"]
+	var bo: PackedFloat32Array = (ctx["bore"] as PackedFloat32Array).duplicate()
+	for i in mini(after.size(), bo.size()):
+		if bo[i] > 0.0 and after[i] <= bo[i] + 0.02:
+			after[i] = 0.0
+			bo[i] = 0.0
+	res["after"] = after
+	res["bore_after"] = bo
 
 
 ## Komplettbearbeitung (∇ + ∇∇∇): erst schruppen mit Aufmaß, dann mit demselben Werkzeug auf dem
@@ -444,6 +598,8 @@ static func _plan_complete(b: Dictionary, prog: Dictionary, t: Dictionary, ctx: 
 	var mv1: Array = r1["moves"]
 	var c2 := ctx.duplicate()
 	c2["prof"] = r1["after"]
+	if r1.has("bore_after"):
+		c2["bore"] = r1["bore_after"]
 	if not mv1.is_empty():
 		var e: Array = mv1[mv1.size() - 1]
 		c2["pos"] = Vector2(e[0], e[1])
@@ -459,10 +615,319 @@ static func _plan_complete(b: Dictionary, prog: Dictionary, t: Dictionary, ctx: 
 	return res
 
 
+## Ende des Werkstücks (Maschinen-Z): rechts davon steht kein Material mehr.
+static func _part_end(prof: PackedFloat32Array, bore: PackedFloat32Array) -> float:
+	for i in range(prof.size() - 1, -1, -1):
+		if prof[i] > 0.05 and (i >= bore.size() or prof[i] > bore[i] + 0.02):
+			return (i + 1) * SEG
+	return 0.0
+
+
+## Kleinste Bohrung (Radius) mit Material zwischen za und zb (Maschinen-Z), INF = keine Stelle.
+static func _min_bore(prof: PackedFloat32Array, bore: PackedFloat32Array, za: float, zb: float) -> float:
+	var m := INF
+	for i in range(maxi(int(floor(za / SEG)), 0), mini(int(ceil(zb / SEG)), prof.size())):
+		if prof[i] > 0.05 and prof[i] > bore[i] + 0.02:
+			m = minf(m, bore[i])
+	return m
+
+
+static func _bore_of(ctx: Dictionary, n: int) -> PackedFloat32Array:
+	var bo: PackedFloat32Array = ctx.get("bore", PackedFloat32Array())
+	if bo.size() == n:
+		return bo
+	var z := PackedFloat32Array()
+	z.resize(n)
+	z.fill(0.0)
+	return z
+
+
+## Gewindezyklus: radiale Zustellung mit abnehmender Spantiefe (Schnitt k auf H1·√(k/NN)).
+## Je Schnitt im Eilgang auf den Anlaufweg vor Z0 (2 Steigungen), Gewindezug mit Vorschub =
+## Steigung bis Z1 (spindelsynchron, ohne Override), im Eilgang abheben und zurück. Außen:
+## Nenn-Ø X0 ist der Außen-Ø, die Schneide geht bis X0 - 2·H1. Innen: im Kernloch (Ø X0 - 2·H1)
+## bis X0; ein- und ausgefahren wird axial, die Gewindebohrstange darf die Gegenseite nicht berühren.
+static func _plan_thread(b: Dictionary, prog: Dictionary, t: Dictionary, ctx: Dictionary) -> Dictionary:
+	var prof: PackedFloat32Array = ctx["prof"]
+	var bore := _bore_of(ctx, prof.size())
+	var zoff := float(ctx.get("zoff", 0.0))
+	var sc := maxf(float(head(prog)["sc"]), 0.2)
+	var inner := int(b["side"]) == 1
+	var p := float(b["p"])
+	var h := float(b["h"])
+	var n := int(b["n"])
+	var r_nom := float(b["x0"]) * 0.5
+	var za := minf(float(b["z0"]), float(b["z1"])) + zoff
+	var zb := maxf(float(b["z0"]), float(b["z1"])) + zoff
+	var z_start := zb + maxf(2.0 * p, 3.0)
+	var pos: Vector2 = ctx["pos"]
+	var end := _part_end(prof, bore)
+	var xs: Array[float] = []
+	for k in range(1, n + 1):
+		var a := h * sqrt(float(k) / n)
+		xs.append((r_nom - h) + a if inner else r_nom - a)
+	var x_last: float = xs[xs.size() - 1]
+	var mv: Array = []
+	var x_safe := 0.0
+	var x_clear := 0.0
+	var z_out := maxf(end + sc, z_start)
+	if inner:
+		var r_core := r_nom - h
+		var bmin := _min_bore(prof, bore, za, maxf(end, zb))
+		if bmin == INF:
+			return {"err": "Innengewinde: zwischen Z0 und Z1 ist kein Material."}
+		if bmin < r_core - 0.05:
+			return {"err": "Kernloch Ø%s zu klein für Innengewinde M%s (Kern-Ø %s nötig)." % [fmt(bmin * 2.0), fmt(b["x0"]), fmt(r_core * 2.0)]}
+		x_safe = r_core - 0.5
+		if x_safe + float(t["bottom"]) < -bmin + 0.2:
+			return {"err": "%s passt nicht in die Bohrung Ø%s." % [t["id"], fmt(bmin * 2.0)]}
+		# Anlauf frei: an der Zustellstelle keine Bohrung enger als der Gewindegrund
+		var ba := _min_bore(prof, bore, z_start - 2.0, z_start + 2.0)
+		if ba < x_last - 0.01:
+			return {"err": "Gewindeanlauf bei Z%s nicht frei." % fmt(z_start - zoff)}
+		if pos.x < z_out - 0.001:
+			mv.append([z_out, pos.y, true])
+		mv.append([z_out, x_safe, true])
+		mv.append([z_start, x_safe, true])
+	else:
+		x_safe = r_nom + sc
+		x_clear = maxf(_max_prof(prof) + sc, x_safe)
+		var ma := 0.0
+		for i in range(maxi(int(floor((z_start - 3.0) / SEG)), 0), mini(int(ceil((z_start + 3.0) / SEG)), prof.size())):
+			if prof[i] > bore[i] + 0.02:
+				ma = maxf(ma, prof[i])
+		if ma > x_last + 0.01:
+			return {"err": "Gewindeanlauf bei Z%s nicht frei (Material Ø%s)." % [fmt(z_start - zoff), fmt(ma * 2.0)]}
+		_approach(mv, pos, z_start, x_safe, x_clear)
+	for x in xs:
+		mv.append([z_start, x, true])
+		mv.append([za, x, false])
+		mv.append([za, x_safe, true])
+		mv.append([z_start, x_safe, true])
+	if inner:
+		mv.append([z_out, x_safe, true])
+	else:
+		mv.append([z_start, x_clear, true])
+	return {"moves": _simplify(mv), "after": prof.duplicate(), "bore_after": bore.duplicate(), "sync": true,
+		"poly": block_poly(b)}
+
+
+## Bohrzyklus in der Drehmitte: vor dem Teil auf X 0, dann in Zustellungen D bis zur Tiefe.
+## Spanbruch: nach jeder Zustellung 0,5 mm zurück. Entspänen: ganz heraus (Sicherheitsabstand
+## vor Z0) und im Eilgang bis 0,5 mm vor den Bohrgrund wieder hinein. Tiefe Z1 an der Spitze
+## oder am Schaft (voller Durchmesser, die Spitze geht also um den Kegel tiefer).
+static func _plan_drill(b: Dictionary, prog: Dictionary, t: Dictionary, ctx: Dictionary) -> Dictionary:
+	var prof: PackedFloat32Array = ctx["prof"]
+	var bore := _bore_of(ctx, prof.size())
+	var zoff := float(ctx.get("zoff", 0.0))
+	var sc := maxf(float(head(prog)["sc"]), 0.2)
+	var r := float(t["dia"]) * 0.5
+	var cone := r / tan(deg_to_rad(59.0))
+	var zs := float(b["z0"]) + zoff
+	var z_tip := float(b["z1"]) + zoff - (cone if int(b["tip"]) == 1 else 0.0)
+	var reach := float(t["zmax"]) - 10.0
+	if zs - z_tip > reach:
+		return {"err": "Bohrtiefe %s mm zu groß für %s (max. %s mm)." % [fmt(zs - z_tip), t["id"], fmt(reach)]}
+	if z_tip < float(ctx.get("zlim", 1.0)):
+		return {"err": "Bohrtiefe reicht bis ins Futter."}
+	var pos: Vector2 = ctx["pos"]
+	var end := _part_end(prof, bore)
+	var z_out := maxf(end, zs) + sc
+	var mv: Array = []
+	if pos.x < z_out - 0.001:
+		mv.append([z_out, pos.y, true])
+	mv.append([z_out, 0.0, true])
+	mv.append([zs + sc, 0.0, true])
+	var q := float(b["q"]) if float(b["q"]) > 0.01 else INF
+	var zc := zs + sc     # Lage der Spitze
+	var zd := zs          # bisher erreichte Tiefe
+	while zd > z_tip + 0.001:
+		var zn := maxf(zd - q, z_tip)
+		if zc > zd + 0.6:
+			mv.append([zd + 0.5, 0.0, true])   # Entspänen: im Eilgang bis kurz vor den Bohrgrund
+		mv.append([zn, 0.0, false])
+		zd = zn
+		zc = zn
+		if zd <= z_tip + 0.001:
+			break
+		if int(b["chip"]) == 0:
+			mv.append([zd + 0.5, 0.0, true])
+			zc = zd + 0.5
+		else:
+			mv.append([zs + sc, 0.0, true])
+			zc = zs + sc
+	mv.append([zs + sc, 0.0, true])
+	mv.append([z_out, 0.0, true])
+	var prof_a := prof.duplicate()
+	var bore_a := bore.duplicate()
+	var tn := tan(deg_to_rad(59.0))
+	for i in prof.size():
+		var zm := (i + 0.5) * SEG
+		if zm < z_tip or prof[i] <= 0.05 or prof[i] <= bore[i] + 0.02:
+			continue
+		var w := minf(r, (zm - z_tip) * tn)
+		if w >= prof[i] - 0.02:
+			prof_a[i] = 0.0
+			bore_a[i] = 0.0
+		elif w > bore_a[i]:
+			bore_a[i] = w
+	return {"moves": _simplify(mv), "after": prof_a, "bore_after": bore_a, "poly": block_poly(b)}
+
+
+## Innenkontur abspanen (Bohrstange): gerechnet wie außen in einem gespiegelten Raum, in dem
+## die Bohrungswand das Außenprofil ist (r_spiegel = R - r, R knapp über dem Außen-Ø). Die
+## Hüllkurve der Bohrstange wird mitgespiegelt (Oberkante wird Unterkante). Danach zurück-
+## gespiegelt; Eilgänge zur Mitte hin enden dort, wo die Stange die Gegenseite der Bohrung noch
+## nicht berührt, und zum Schluss fährt das Werkzeug axial aus der Bohrung.
+static func _plan_inner(b: Dictionary, prog: Dictionary, t: Dictionary, ctx: Dictionary) -> Dictionary:
+	var prof: PackedFloat32Array = ctx["prof"]
+	var bore := _bore_of(ctx, prof.size())
+	var zoff := float(ctx.get("zoff", 0.0))
+	var sc := maxf(float(head(prog)["sc"]), 0.2)
+	var c := find_contour(prog, str(b.get("contour", "")))
+	if c.is_empty():
+		return {"err": "Kontur \"%s\" nicht im Programm." % b.get("contour", "")}
+	var zlo := INF
+	for q in contour_points(c, zoff):
+		zlo = minf(zlo, q.x)
+	var end := _part_end(prof, bore)
+	var bmin := INF
+	for i in range(maxi(int(floor(zlo / SEG)), 0), mini(int(ceil(end / SEG)), prof.size())):
+		if bore[i] > 0.05 and prof[i] > bore[i] + 0.02:
+			bmin = minf(bmin, bore[i])
+	if bmin == INF:
+		return {"err": "Keine Bohrung für die Innenkontur %s - erst bohren (Zyklus Bohren)." % c["name"]}
+	var x_floor := -bmin - float(t["bottom"]) + 0.3
+	if x_floor > bmin - 0.3:
+		return {"err": "Bohrung Ø%s zu klein für %s (min. Ø%s)." % [fmt(bmin * 2.0), t["id"], fmt(-float(t["bottom"]) + 0.6)]}
+	var rref := _max_prof(prof) + 1.0
+	var pm := PackedFloat32Array()
+	pm.resize(prof.size())
+	for i in prof.size():
+		pm[i] = rref - bore[i] if (prof[i] > 0.05 and prof[i] > bore[i] + 0.02) else 0.0
+	var bo := b.duplicate()
+	bo["side"] = 0
+	bo["dir"] = 0
+	var c2 := ctx.duplicate()
+	c2.erase("bore")
+	c2["prof"] = pm
+	c2["rref"] = rref
+	var pos: Vector2 = ctx["pos"]
+	c2["pos"] = Vector2(pos.x, rref - pos.y)
+	var r := plan(bo, prog, LatheTools.mirrored(t), c2)
+	if r.has("err"):
+		return r
+	var moves: Array = []
+	for m in r["moves"]:
+		var x := rref - float(m[1])
+		if x < x_floor - 0.01:
+			if not bool(m[2]):
+				return {"err": "Innenkontur %s: Ø%s zu klein für %s." % [c["name"], fmt(x * 2.0), t["id"]]}
+			x = x_floor
+		moves.append([m[0], x, m[2]])
+	if not moves.is_empty():
+		var e: Array = moves[moves.size() - 1]
+		if float(e[0]) < end + sc:
+			moves.append([end + sc, maxf(float(e[1]), x_floor), true])
+	var am: PackedFloat32Array = r["after"]
+	var prof_a := prof.duplicate()
+	var bore_a := bore.duplicate()
+	for i in prof.size():
+		if pm[i] <= 0.0 or am[i] >= pm[i] - 0.0001:
+			continue
+		var nb := rref - am[i]
+		if nb >= prof[i] - 0.02:
+			prof_a[i] = 0.0
+			bore_a[i] = 0.0
+		else:
+			bore_a[i] = maxf(bore[i], nb)
+	var res := r.duplicate()
+	res["moves"] = _simplify(moves)
+	res["after"] = prof_a
+	res["bore_after"] = bore_a
+	res.erase("tg")
+	return res
+
+
+## Darstellung eines Gewinde- oder Bohrsatzes (Programm-Z, Radius): Gewinde als Zickzack zwischen
+## Spitze und Grund, Bohrung als Umriss mit Bohrerspitze. Leer für andere Sätze.
+static func block_poly(b: Dictionary) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	match str(b.get("type", "")):
+		"thread":
+			var r_nom := float(b["x0"]) * 0.5
+			var h := float(b["h"])
+			var inner := int(b["side"]) == 1
+			var r_crest := r_nom - h if inner else r_nom
+			var r_root := r_nom if inner else r_nom - h
+			var za := minf(float(b["z0"]), float(b["z1"]))
+			var zb := maxf(float(b["z0"]), float(b["z1"]))
+			var step := maxf(float(b["p"]), (zb - za) / 60.0)
+			var z := zb
+			out.append(Vector2(z, r_crest))
+			while z - step * 0.5 > za:
+				out.append(Vector2(z - step * 0.5, r_root))
+				z = maxf(z - step, za)
+				out.append(Vector2(z, r_crest))
+		"drill":
+			var t := LatheTools.get_tool(maxi(LatheTools.index_of(str(b["t"])), 0))
+			var r := float(t.get("dia", 20.0)) * 0.5
+			var cone := r / tan(deg_to_rad(59.0))
+			var z_full := float(b["z1"]) if int(b["tip"]) == 1 else float(b["z1"]) + cone
+			out.append(Vector2(float(b["z0"]), r))
+			out.append(Vector2(z_full, r))
+			out.append(Vector2(z_full - cone, 0.0))
+	return out
+
+
 ## Plausibilität eines Abspansatzes für Werkzeug t ("" = in Ordnung).
 static func check_block(b: Dictionary, t: Dictionary) -> String:
 	if int(t.get("feed_dir", -1)) > 0:
 		return "%s ist ein Linksmeißel - die Zyklen arbeiten zum Futter bzw. zur Mitte hin (z. B. T1, T3)." % t["id"]
+	var k := LatheTools.kind(t)
+	match str(b["type"]):
+		"thread":
+			var side := clampi(int(b["side"]), 0, 1)
+			if k != ("thread_in" if side == 1 else "thread_out"):
+				return "Gewinde %s braucht den Gewindemeißel %s (%s)." % [SIDES[side], SIDES[side], "T11" if side == 1 else "T10"]
+			var p := float(b["p"])
+			if p < 0.2 or p > 6.0:
+				return "Steigung P muss zwischen 0.2 und 6 mm liegen."
+			if float(b["x0"]) <= 2.0:
+				return "Nenndurchmesser X0 zu klein."
+			var h := float(b["h"])
+			if h <= 0.01 or h > 0.8 * p:
+				return "Gewindetiefe H1 muss zwischen 0 und %s mm liegen (ISO: %s)." % [fmt(0.8 * p), fmt(iso_depth(p, side == 1))]
+			var n := int(b["n"])
+			if n < 1 or n > 60:
+				return "Anzahl Schnitte NN zwischen 1 und 60."
+			if float(b["v"]) < 10.0 or float(b["v"]) > 400.0:
+				return "Schnittgeschwindigkeit V muss zwischen 10 und 400 m/min liegen."
+			if absf(float(b["z0"]) - float(b["z1"])) < p:
+				return "Gewindelänge Z0 bis Z1 zu kurz."
+			var first := h * sqrt(1.0 / n)
+			if first > float(t["max_dx"]) + 0.001:
+				return "Erste Zustellung %s mm zu groß für %s (max. %s mm) - mehr Schnitte NN." % [fmt(first), t["id"], fmt(t["max_dx"])]
+			return ""
+		"drill":
+			if k != "drill":
+				return "Bohren braucht einen Bohrer (T9)."
+			if float(b["f"]) < 0.01 or float(b["f"]) > 0.5:
+				return "Vorschub F muss zwischen 0.01 und 0.5 mm/U liegen."
+			if float(b["v"]) < 5.0 or float(b["v"]) > 400.0:
+				return "Schnittgeschwindigkeit V muss zwischen 5 und 400 m/min liegen."
+			if float(b["q"]) < 0.0:
+				return "Zustelltiefe D darf nicht negativ sein."
+			if float(b["z1"]) >= float(b["z0"]):
+				return "Bohrtiefe Z1 muss links von Z0 liegen (kleiner)."
+			return ""
+	if k == "drill" or LatheTools.is_thread(t):
+		return "%s %s ist kein Drehmeißel - für Konturen z. B. T1, T3, innen T8." % [t["id"], t["short"]]
+	var inner := str(b["type"]) == "stock" and int(b.get("side", 0)) == 1
+	if inner and k != "bore":
+		return "Innenkontur braucht eine Bohrstange (T8)."
+	if not inner and k == "bore":
+		return "%s ist ein Innenwerkzeug - Kontur abspanen innen wählen." % t["id"]
 	if float(b["f"]) < 0.01 or float(b["f"]) > 0.5:
 		return "Vorschub F muss zwischen 0.01 und 0.5 mm/U liegen."
 	if float(b["v"]) < 20.0 or float(b["v"]) > 400.0:
@@ -1068,6 +1533,7 @@ static func _simplify(mv: Array) -> Array:
 ## dem fortgeschriebenen Material, Bearbeitungszeit. lathe liefert Material, Lage und Werkzeuge.
 static func simulate(prog: Dictionary, lathe) -> Dictionary:
 	var prof: PackedFloat32Array = lathe.profile.duplicate()
+	var bore: PackedFloat32Array = lathe.bore.duplicate() if lathe.bore.size() == prof.size() else _bore_of({}, prof.size())
 	var hd := head(prog)
 	var zoff: float = lathe.wcs_z
 	var pos := Vector2(lathe.tool_z, lathe.tool_x)
@@ -1083,6 +1549,8 @@ static func simulate(prog: Dictionary, lathe) -> Dictionary:
 			polys.append(contour_points(b))
 		elif str(b["type"]) == "undercut":
 			polys.append(contour_points(undercut_contour(b)))
+		elif str(b["type"]) in ["thread", "drill"]:
+			polys.append(block_poly(b))
 		if not is_machining(b):
 			continue
 		var tid := str(b["t"])
@@ -1098,10 +1566,12 @@ static func simulate(prog: Dictionary, lathe) -> Dictionary:
 			time += pos.distance_to(wp) / RAPID + 4.0
 			pos = wp
 			cur_t = tid
-		var r := plan(b, prog, t, {"prof": prof, "pos": pos, "zlim": maxf(1.0, -float(t["zmin"]) + 0.5), "zoff": zoff})
+		var r := plan(b, prog, t, {"prof": prof, "bore": bore, "pos": pos, "zlim": maxf(1.0, -float(t["zmin"]) + 0.5), "zoff": zoff})
 		if r.has("err"):
 			errs.append("Satz %d: %s" % [bi + 1, r["err"]])
 			continue
+		var f := block_feed(b)
+		var n_fix := block_rpm(b, float(hd["smax"]))
 		for m in r["moves"]:
 			var q := Vector2(m[0], m[1])
 			var dist := pos.distance_to(q)
@@ -1109,9 +1579,10 @@ static func simulate(prog: Dictionary, lathe) -> Dictionary:
 				time += dist / RAPID
 			else:
 				var x := maxf(absf((pos.y + q.y) * 0.5), 0.5)
-				var nn := clampf(float(b["v"]) * 1000.0 / (PI * 2.0 * x), RPM_MIN, float(hd["smax"]))
-				time += dist / maxf(float(b["f"]) * nn / 60.0, 0.01)
+				var nn := n_fix if n_fix > 0.0 else clampf(float(b["v"]) * 1000.0 / (PI * 2.0 * x), RPM_MIN, float(hd["smax"]))
+				time += dist / maxf(f * nn / 60.0, 0.01)
 			moves.append([m[0], m[1], m[2], bi])
 			pos = q
 		prof = r["after"]
-	return {"moves": moves, "prof": prof, "polys": polys, "time": time, "errs": errs}
+		bore = r.get("bore_after", bore)
+	return {"moves": moves, "prof": prof, "bore": bore, "polys": polys, "time": time, "errs": errs}

@@ -66,6 +66,7 @@ var crane_drop_hint: Callable     # Spielwelt: Hinweis, wohin die Fernbedienung 
 var crane_bench: Callable         # Spielwelt: (Collider, Punkt, Normale) -> Werkbank unter dem Blick oder ""
 var crane_put: Callable           # Spielwelt: (Collider, Punkt, Normale) -> Fernbedienung dort ablegen, true = abgelegt
 var jack_lift: Callable           # Spielwelt: Leertaste mit Hubwagen (Palette anheben oder absenken)
+var goods_attach: Callable        # Spielwelt: (Knoten, delivery_key) legt die Ware einer Lieferpalette auf eine Palette
 var jack_drop: Callable           # Spielwelt: Hubwagen loslassen und abstellen (E oder Q)
 var jack_abandon: Callable        # Spielwelt: Hubwagen sofort an seiner Stelle abstellen (Figur zu weit weg)
 var forklift_leave: Callable      # Spielwelt: vom Gabelstapler absteigen -> Fehlertext
@@ -429,7 +430,7 @@ func _update_focus() -> void:
 	# Mit dem Hubwagen zählen nur Leertaste (heben, senken) sowie E und Q (loslassen, abstellen)
 	if driving_jack():
 		_focus = null
-		var act := "Palette absenken" if jack_load() > 0 else "Palette anheben (Zinken darunter)"
+		var act := ("Lieferpalette absenken" if jack_goods() != "" else "Palette absenken") if jack_load() > 0 else "Palette anheben (Zinken darunter)"
 		_set_prompt("[%s] %s    [%s] Hubwagen loslassen" % [Settings.binding_text("jump"), act, Settings.binding_text("interact")])
 		return
 	# Mit dem Eimer: Linksklick schöpft Späne aus der Wanne oder kippt aus, Q stellt ab
@@ -720,16 +721,23 @@ func jack_load() -> int:
 	return jack_cart.load_n if jack_cart else 0
 
 
+## Delivery_key der Lieferpalette auf der Gabel, "" = leere Palette oder keine Last.
+func jack_goods() -> String:
+	return jack_cart.goods if jack_cart else ""
+
+
 ## Liegt die Last quer zur Gabel (lange Palettenseite quer)?
 func jack_cross() -> bool:
 	return jack_cart != null and jack_cart.cross
 
 
 ## Last auf der Gabel ändern (aufgenommen oder abgesenkt): Die Gabel hebt oder senkt sich dabei.
-func set_jack_load(n: int, cross := false) -> void:
+func set_jack_load(n: int, cross := false, goods := "") -> void:
 	if jack_cart == null:
 		return
-	jack_cart.set_load(n, cross)
+	jack_cart.goods_attach = goods_attach
+	jack_cart.set_load(n, cross, false, goods)
+	carry["goods"] = goods if n > 0 else ""
 	carry["load"] = n
 	carry["cross"] = cross and n > 0
 
@@ -785,7 +793,8 @@ func _set_carry_jack(item: Dictionary) -> void:
 		origin = Vector2(float(pos[0]), float(pos[1]))
 		phi = float(carry.get("rot", phi))
 	jack_cart.place(origin, phi)
-	jack_cart.set_load(int(carry["load"]), bool(carry.get("cross", false)), true)
+	jack_cart.goods_attach = goods_attach
+	jack_cart.set_load(int(carry["load"]), bool(carry.get("cross", false)), true, str(carry.get("goods", "")))
 	arms.set_mode("grip")
 	body.set_holding("none")
 	held_changed.emit("Hubwagen")
@@ -1172,6 +1181,7 @@ func _carry_state() -> Dictionary:
 		c["rot"] = jack_cart.phi
 		c["load"] = jack_cart.load_n
 		c["cross"] = jack_cart.cross
+		c["goods"] = jack_cart.goods
 	return c
 
 

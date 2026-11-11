@@ -402,6 +402,23 @@ func _initialize() -> void:
 	ok(menu.placing and menu.kind == "bench", "Taste 1 nimmt die Werkbank")
 	menu.cancel()
 	ok(menu.menu_open() and not menu.placing and w.inventory["bench"] == 1, "Zurückgelegt, Baumodus läuft weiter")
+	# Q legt ein umgestelltes Teil zurück in die Liste Nicht aufgestellt
+	w.inventory["bin_s"] = 1
+	var qpos := Vector2.INF
+	for cand in [Vector2(2.0, 6.0), Vector2(0.0, 7.0), Vector2(-3.0, 7.0), Vector2(4.0, 7.5)]:
+		if qpos == Vector2.INF and lay.check_bin(cand, 0, -1, "bin_s") == "":
+			qpos = cand
+	ok(qpos != Vector2.INF and w.place_bin(-1, "bin_s", qpos, 0) == "", "Behälter aufgestellt")
+	var qn: int = lay.bins.size()
+	menu.start("bin", "bin_s", qn - 1)
+	ok(menu.placing and menu._hint.text.contains("einlagern"), "Hinweis nennt Q: " + menu._hint.text)
+	menu._input(key_action("drop"))
+	ok(not menu.placing and lay.bins.size() == qn - 1 and int(w.inventory["bin_s"]) == 1, "Q lagert den Behälter ein")
+	menu.start("bin", "bin_s")
+	menu._input(key_action("drop"))
+	ok(not menu.placing and int(w.inventory["bin_s"]) == 1, "Q legt Frisches aus der Liste nur weg")
+	w.inventory.erase("bin_s")
+	menu._refresh_list()
 	# Anvisieren und E nimmt die Maschine
 	await aim(p, Vector3(6.85, 0.05, 1.0), Vector3(6.85, 1.0, -3.1))
 	await process_frame

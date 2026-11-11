@@ -6,6 +6,7 @@ extends Control
 
 var lathe: Lathe
 var prof := PackedFloat32Array()          # leer = Ist-Material der Maschine
+var bore := PackedFloat32Array()          # Bohrung zu prof (leer: bei Ist-Material die der Maschine)
 var polys: Array = []                      # Konturen (PackedVector2Array in Programm-z, r)
 var hi_poly := PackedVector2Array()        # hervorgehobene Kontur (Programm-z)
 var hi_point := Vector2(NAN, NAN)          # hervorgehobener Konturpunkt (Programm-z, r)
@@ -29,6 +30,12 @@ func _profile() -> PackedFloat32Array:
 	if not prof.is_empty():
 		return prof
 	return lathe.profile if lathe else PackedFloat32Array()
+
+
+func _bore() -> PackedFloat32Array:
+	if not prof.is_empty():
+		return bore
+	return lathe.bore if lathe else PackedFloat32Array()
 
 
 func _p(z: float, r: float) -> Vector2:
@@ -95,6 +102,21 @@ func _draw() -> void:
 	if pts.size() >= 3:
 		draw_colored_polygon(pts, Color(0.36, 0.39, 0.44))
 		draw_polyline(pts, Color(0.62, 0.66, 0.72), 1.0)
+	# Bohrung: Halbschnitt bis zur Bohrungswand freistellen (Rechtecke je Stufe)
+	var bo := _bore()
+	if bo.size() == pr.size():
+		var k := 0
+		while k < bo.size():
+			var b := bo[k]
+			var j := k
+			while j + 1 < bo.size() and absf(bo[j + 1] - b) < 0.005:
+				j += 1
+			if b > 0.05:
+				var a := _p(k * seg, b)
+				var e := _p((j + 1) * seg, 0.0)
+				draw_rect(Rect2(a, e - a), Color(0.075, 0.085, 0.10))
+				draw_line(a, Vector2(e.x, a.y), Color(0.62, 0.66, 0.72), 1.0)
+			k = j + 1
 	# Drehachse
 	draw_dashed_line(_p(_z0, 0.0), _p(_z0 + (size.x - 12.0) / _s, 0.0), Color(0.5, 0.54, 0.6), 1.0, 6.0)
 	# Konturen
@@ -128,6 +150,11 @@ func _draw() -> void:
 	# Schneide
 	if show_tool and lathe:
 		var t := lathe.tool()
+		if t.has("bar"):
+			var bar: Rect2 = t["bar"]
+			var b0 := _p(lathe.tool_z + bar.position.x, lathe.tool_x + bar.end.y)
+			var b1 := _p(lathe.tool_z + bar.end.x, lathe.tool_x + bar.position.y)
+			draw_rect(Rect2(b0, b1 - b0), Color(0.42, 0.44, 0.5))
 		var poly: PackedVector2Array = t["poly"]
 		var tp := PackedVector2Array()
 		for v in poly:

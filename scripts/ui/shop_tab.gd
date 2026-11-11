@@ -10,6 +10,7 @@ const MACHINE_TEXT := {
 	"saw": "Sägt Stangen auf Länge, einmal gratis. Ganze Stangen passen in keine Maschine: Hier den Abschnitt absägen.",
 	"cnc_lathe": "Bedienpult mit Zyklen und NC-Programmen. Bringt Drehaufträge.",
 	"mill": "Handräder, Drehknöpfe für Drehzahl und Vorschub. Bringt Fräsaufträge.",
+	"cnc_mill": "Bearbeitungszentrum mit Kabine, 24-fach-Werkzeugwechsler und Klartext-Programmen. Bringt Fräsaufträge.",
 	"drill": "Kreuztisch und Pinole, nimmt Spiralbohrer auf. Bringt Bohraufträge.",
 	"round_grinder": "Schleift Rundflächen an Drehteilen, Aufträge verlangen sie dann. Scheiben einzeln kaufen.",
 	"flat_grinder": "Schleift ebene Flächen an Frästeilen, Aufträge verlangen sie dann. Scheiben einzeln kaufen.",

@@ -7,6 +7,7 @@ extends RefCounted
 ## Knoten: tree, branch, title, desc, cost, req (Voraussetzungen), at (Spalte, Zeile im Baum).
 ## start = von Anfang an da. auto = kommt mit der Voraussetzung, kostet nichts.
 ## soon = die Maschine gibt es noch nicht, darum noch nicht freischaltbar.
+## fresh = neu seit den alten Spielständen, wird beim Laden eines alten Spielstands nicht geschenkt.
 
 const XP_FIRST := 200             # Erfahrung für den ersten Skillpunkt
 const XP_STEP := 100              # jeder weitere kostet so viel mehr
@@ -28,8 +29,8 @@ const NODES := {
 		"desc": "Die CNC-Drehmaschine kann am PC gekauft werden: Bedienpult mit Zyklen und NC-Programmen."},
 	"mill_conv": {"tree": "general", "branch": "Maschinen", "title": "Fräsmaschine\nkonventionell", "cost": 1, "req": ["lathe_conv"], "at": Vector2i(1, 1),
 		"desc": "Die Fräsmaschine kann am PC gekauft werden, Fräsaufträge werden möglich. Dazu kommt der Baum für Fräswerkzeuge."},
-	"mill_cnc": {"tree": "general", "branch": "Maschinen", "title": "Fräsmaschine\nCNC", "cost": 4, "req": ["mill_conv", "lathe_cnc"], "at": Vector2i(2, 1), "soon": true,
-		"desc": "Programmgesteuertes Fräsen. Diese Maschine gibt es noch nicht im Spiel."},
+	"mill_cnc": {"tree": "general", "branch": "Maschinen", "title": "Fräsmaschine\nCNC", "cost": 4, "req": ["mill_conv", "lathe_cnc"], "at": Vector2i(2, 1), "fresh": true,
+		"desc": "Die CNC-Fräsmaschine kann am PC gekauft werden: Bearbeitungszentrum mit Werkzeugwechsler und Klartext-Programmen, macht Fräsaufträge."},
 	"drill": {"tree": "general", "branch": "Maschinen", "title": "Standbohr-\nmaschine", "cost": 1, "req": ["lathe_conv"], "at": Vector2i(1, 2),
 		"desc": "Die Standbohrmaschine kann am PC gekauft werden. Bohraufträge werden möglich, dazu kommt der Baum für Bohrer."},
 	"round_grinder": {"tree": "general", "branch": "Maschinen", "title": "Rundschleif-\nmaschine", "cost": 2, "req": ["lathe_conv"], "at": Vector2i(1, 3),
@@ -124,7 +125,7 @@ const NODES := {
 
 ## Was man erst kaufen darf, wenn der Skill freigeschaltet ist.
 const EQUIPMENT := {
-	"lathe": "lathe_conv", "cnc_lathe": "lathe_cnc", "mill": "mill_conv", "drill": "drill", "round_grinder": "round_grinder", "flat_grinder": "flat_grinder",
+	"lathe": "lathe_conv", "cnc_lathe": "lathe_cnc", "mill": "mill_conv", "cnc_mill": "mill_cnc", "drill": "drill", "round_grinder": "round_grinder", "flat_grinder": "flat_grinder",
 	"edm": "edm", "bench_big": "bench_big",
 	"crate_m": "crate_m", "crate_l": "crate_l", "bin_l": "bin_l",
 }
@@ -213,7 +214,7 @@ func unlock(id: String, free_mode := false) -> String:
 func unlock_basics() -> void:
 	for id in NODES:
 		var n: Dictionary = NODES[id]
-		if n["tree"] == "general" and n["branch"] != "Upgrades" and not n.get("soon", false):
+		if n["tree"] == "general" and n["branch"] != "Upgrades" and not n.get("soon", false) and not n.get("fresh", false):
 			unlocked[id] = true
 
 
@@ -258,13 +259,15 @@ func tool_price_factor(machine: String, grade: String) -> float:
 
 ## Skill, der die Werkzeuge dieser Maschine zum Kauf freigibt.
 static func machine_skill(machine: String) -> String:
-	return {"lathe": "lathe_conv", "cnc_lathe": "lathe_cnc", "mill": "mill_conv", "drill": "drill",
+	return {"lathe": "lathe_conv", "cnc_lathe": "lathe_cnc", "mill": "mill_conv", "cnc_mill": "mill_cnc", "drill": "drill",
 		"flat_grinder": "flat_grinder", "round_grinder": "round_grinder", "ceramic": "wheel_diamond"}[machine]
 
 
-## Werkzeugbaum einer Maschine. Beide Drehmaschinen teilen sich einen.
+## Werkzeugbaum einer Maschine. Beide Drehmaschinen teilen sich einen, beide Fräsmaschinen auch.
 static func tool_family(machine: String) -> String:
-	return "lathe" if machine == "cnc_lathe" else machine
+	if machine == "cnc_lathe":
+		return "lathe"
+	return "mill" if machine == "cnc_mill" else machine
 
 
 func to_state() -> Dictionary:

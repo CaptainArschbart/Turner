@@ -54,6 +54,7 @@ var steer := 0.0
 var lift := 0.0
 var load_n := 0                         # Paletten auf der Gabel
 var load_rot := 0                       # ihre Drehung zur Gabel in 90°-Schritten
+var load_goods := ""                    # Lieferpalette auf der Gabel (delivery_key), "" = leere Palette(n); dann ist load_n 1
 var shift := 0.0                        # Seitenschieber in Fahrzeug-z (+ = rechts, Blick nach vorn)
 var tilt := 0.0                         # Neigung des Hubgerüsts: + = nach hinten
 var load_bin := -1                      # Spänebehälter auf der Gabel (Nummer in layout.bins), -1 = keiner
@@ -366,6 +367,7 @@ func drive(delta: float, throttle: float, steer_in: float, lift_in: float, shift
 	shift = clampf(shift + shift_in * SHIFT_SPEED * delta, -MAX_SHIFT, MAX_SHIFT)
 	tilt = clampf(tilt + tilt_in * TILT_SPEED * delta, -TILT_FWD, TILT_BACK)
 	pose(parts, lift, load_n, load_rot, steer, shift, tilt)
+	_sync_goods()
 	# Spänebehälter: ganz nach vorn geneigt über einem Container wird er ausgekippt
 	if load_bin >= 0 and world:
 		if tilt <= -TILT_FWD + 0.0005 and not _tipped:
@@ -376,6 +378,18 @@ func drive(delta: float, throttle: float, steer_in: float, lift_in: float, shift
 			_tipped = false
 		dump_t = maxf(dump_t - delta, 0.0)
 		world.forklift_carry_bin(load_bin, (parts["load"] as Node3D).global_transform, load_rot, dump_angle())
+
+
+## Ware einer Lieferpalette auf der Gabelpalette zeigen (pose baut die Palette neu, wenn sich Zahl oder Drehung ändern).
+func _sync_goods() -> void:
+	if load_goods == "" or world == null or not parts.has("load"):
+		return
+	var holder: Node3D = parts["load"]
+	if holder.get_child_count() == 0:
+		return
+	var stack := holder.get_child(0)
+	if stack.get_node_or_null("Goods") == null:
+		world.attach_goods(stack, load_goods)
 
 
 ## Wie weit der Behälter gerade nach vorn gekippt ist (rad): hoch und wieder zurück.
@@ -403,6 +417,7 @@ func _lift(delta: float, lift_in: float) -> void:
 			if got.has("n"):
 				load_n = int(got["n"])
 				load_rot = int(got["rot"])
+				load_goods = str(got.get("goods", ""))
 			elif got.has("bin"):
 				load_bin = int(got["bin"])
 				load_rot = int(got["rot"])
@@ -411,6 +426,7 @@ func _lift(delta: float, lift_in: float) -> void:
 		var err: String = world.forklift_drop(self)
 		if err == "":
 			load_n = 0
+			load_goods = ""
 			load_bin = -1
 			lift = floor_h
 		elif _blocked_msg <= 0.0:
@@ -428,4 +444,4 @@ func align_to(pallet_rot: int) -> Array:
 
 func get_state() -> Dictionary:
 	return {"pos": [global_position.x, global_position.z], "angle": phi, "lift": lift, "load": load_n, "load_rot": load_rot,
-		"shift": shift, "tilt": tilt}
+		"shift": shift, "tilt": tilt, "goods": load_goods}

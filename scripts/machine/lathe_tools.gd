@@ -56,6 +56,33 @@ static func all() -> Array:
 				"poly": _radius_poly(3.0), "nose": 3.0, "ref": "center",
 				"max_dz": 2.0, "max_dx": 2.0, "feed_dir": -1, "color": Color(0.85, 0.68, 0.25),
 			}),
+			_finalize_inner({
+				"id": "T8", "sl": 2, "ext": 0.0, "name": "Bohrstange innen 55°", "short": "Bohrst. innen",
+				"desc": "Bohrstange Ø12 mit DCMT 55°, r 0,4 - Innendrehen ab Bohrung Ø16, Ausspindeln zum Futter hin",
+				"poly": round_corner(flip(rhombus(87.0, 32.0, 6.0)), 3, 0.4), "nose": 0.4, "ref": "left",
+				"bar": Rect2(3.0, -14.5, 80.0, 12.0), "kind": "bore",
+				"max_dz": 1.5, "max_dx": 1.5, "feed_dir": -1, "color": Color(0.75, 0.75, 0.8),
+			}),
+			_finalize_inner({
+				"id": "T9", "sl": 7, "ext": 0.0, "name": "Spiralbohrer Ø20", "short": "Bohrer Ø20",
+				"desc": "HSS-Spiralbohrer Ø20, Spitzenwinkel 118° - Bohren in der Drehmitte (X 0), Bohrtiefe bis 80 mm",
+				"poly": drill_poly(20.0, 90.0), "nose": 0.0, "ref": "center", "kind": "drill", "dia": 20.0,
+				"max_dz": 0.0, "max_dx": 0.0, "feed_dir": -1, "color": Color(0.55, 0.57, 0.62),
+			}),
+			_finalize({
+				"id": "T10", "sl": 8, "ext": 0.0, "name": "Gewindemeißel außen 60°", "short": "Gewinde außen",
+				"desc": "Gewindedrehplatte 60° (metrisch), r 0,1 - Außengewinde, radiale Zustellung je Schnitt max. 0,5 mm",
+				"poly": round_corner(PackedVector2Array([Vector2(0, 0), Vector2(2.6, 4.5), Vector2(2.6, 9.0), Vector2(-2.6, 9.0), Vector2(-2.6, 4.5)]), 0, 0.1),
+				"nose": 0.1, "ref": "center", "kind": "thread_out",
+				"max_dz": 0.5, "max_dx": 0.5, "feed_dir": -1, "color": Color(0.85, 0.68, 0.25),
+			}),
+			_finalize_inner({
+				"id": "T11", "sl": 6, "ext": 0.0, "name": "Gewindemeißel innen 60°", "short": "Gewinde innen",
+				"desc": "Gewindebohrstange Ø12 mit 60°-Platte, r 0,1 - Innengewinde ab Kernloch Ø16, je Schnitt max. 0,5 mm",
+				"poly": round_corner(PackedVector2Array([Vector2(0, 0), Vector2(-1.73, -3.0), Vector2(1.73, -3.0)]), 0, 0.1),
+				"nose": 0.1, "ref": "center", "kind": "thread_in", "bar": Rect2(-2.0, -14.5, 80.0, 11.5),
+				"max_dz": 0.5, "max_dx": 0.5, "feed_dir": -1, "color": Color(0.75, 0.75, 0.8),
+			}),
 		]
 	return _tools
 
@@ -83,6 +110,36 @@ static func rhombus(main_deg: float, minor_deg: float, edge: float) -> PackedVec
 	var m := Vector2(cos(deg_to_rad(main_deg)), sin(deg_to_rad(main_deg))) * edge
 	var n := Vector2(cos(deg_to_rad(minor_deg)), sin(deg_to_rad(minor_deg))) * edge
 	return PackedVector2Array([Vector2.ZERO, n, n + m, m])
+
+
+## Art des Werkzeugs: "" Außendrehen, "bore" Innendrehen, "drill" Bohren in der Drehmitte,
+## "thread_out" / "thread_in" Gewindedrehen außen / innen.
+static func kind(t: Dictionary) -> String:
+	return str(t.get("kind", ""))
+
+
+## Arbeitet das Werkzeug in einer Bohrung (Schneide zeigt nach außen)?
+static func is_inner(t: Dictionary) -> bool:
+	return kind(t) in ["bore", "thread_in"]
+
+
+static func is_thread(t: Dictionary) -> bool:
+	return kind(t) in ["thread_out", "thread_in"]
+
+
+## Platte an der Schneide in X spiegeln (Spitze oben, für Innenwerkzeuge).
+static func flip(poly: PackedVector2Array) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for i in range(poly.size() - 1, -1, -1):
+		out.append(Vector2(poly[i].x, -poly[i].y))
+	return out
+
+
+## Spiralbohrer: Spitze im Ursprung, Schneiden unter 59° zur Achse, Körper bis length (in +dz).
+static func drill_poly(dia: float, length: float) -> PackedVector2Array:
+	var r := dia * 0.5
+	var h := r / tan(deg_to_rad(59.0))
+	return PackedVector2Array([Vector2.ZERO, Vector2(h, -r), Vector2(length, -r), Vector2(length, r), Vector2(h, r)])
 
 
 static func mirror(poly: PackedVector2Array) -> PackedVector2Array:
@@ -170,6 +227,118 @@ static func _finalize(t: Dictionary) -> Dictionary:
 		env[k] = best if best < INF else 1.0e6
 	t["env"] = env
 	return t
+
+
+## Innenwerkzeuge und Bohrer: Bezugspunkt ist die oberste Ecke (Schneide zeigt nach außen) bzw.
+## die Bohrerspitze. Dazu Hüllkurven unten (env) und oben (env_up) über Platte und Bohrstange
+## (bar, Rect2 in dz/dx relativ zur Schneide). cut_len: bis hierhin (dz) schneidet die Platte,
+## dahinter stößt nur noch die Stange an.
+static func _finalize_inner(t: Dictionary) -> Dictionary:
+	var poly: PackedVector2Array = t["poly"]
+	var ref := Vector2.ZERO
+	if str(t.get("kind", "")) != "drill":
+		var max_y := -INF
+		for p in poly:
+			max_y = maxf(max_y, p.y)
+		var nose: float = t["nose"]
+		ref = Vector2(INF if t["ref"] == "left" else 0.0, max_y)
+		for p in poly:
+			if t["ref"] == "left":
+				if p.y >= max_y - nose * 2.0 - 0.01:
+					ref.x = minf(ref.x, p.x)
+			elif p.y >= max_y - 0.0001:
+				ref.x = p.x
+	var shifted := PackedVector2Array()
+	for p in poly:
+		shifted.append(p - ref)
+	t["poly"] = shifted
+	var bar := Rect2()
+	if t.has("bar"):
+		bar = t["bar"]
+	var zmin := INF
+	var zmax := -INF
+	var bottom := INF
+	for p in shifted:
+		zmin = minf(zmin, p.x)
+		zmax = maxf(zmax, p.x)
+		bottom = minf(bottom, p.y)
+	var cut_len := zmax
+	if bar.size.x > 0.0:
+		zmin = minf(zmin, bar.position.x)
+		zmax = maxf(zmax, bar.end.x)
+		bottom = minf(bottom, bar.position.y)
+	t["zmin"] = zmin
+	t["zmax"] = zmax
+	t["top"] = 0.0
+	t["bottom"] = bottom
+	var n := int(ceil((zmax - zmin) / ENV_RES)) + 1
+	var lo := PackedFloat32Array()
+	var up := PackedFloat32Array()
+	lo.resize(n)
+	up.resize(n)
+	for k in n:
+		var z := zmin + k * ENV_RES
+		var a := _span_at(shifted, z)
+		if bar.size.x > 0.0 and z >= bar.position.x - 0.0001 and z <= bar.end.x + 0.0001:
+			if a.x == INF:
+				a = Vector2(bar.position.y, bar.end.y)
+			else:
+				if bar.end.y > a.y and z < cut_len:
+					cut_len = z
+				a = Vector2(minf(a.x, bar.position.y), maxf(a.y, bar.end.y))
+		lo[k] = a.x if a.x < INF else 1.0e6
+		up[k] = a.y if a.x < INF else -1.0e6
+	t["env"] = lo
+	t["env_up"] = up
+	t["cut_len"] = cut_len
+	return t
+
+
+## Unter- und Oberkante (x, y) des Polygons an der Stelle z, (INF, INF) wenn es dort nicht liegt.
+static func _span_at(poly: PackedVector2Array, z: float) -> Vector2:
+	var lo := INF
+	var hi := -INF
+	for e in poly.size():
+		var a := poly[e]
+		var b := poly[(e + 1) % poly.size()]
+		if z >= minf(a.x, b.x) - 0.0001 and z <= maxf(a.x, b.x) + 0.0001:
+			if absf(b.x - a.x) < 0.000001:
+				lo = minf(lo, minf(a.y, b.y))
+				hi = maxf(hi, maxf(a.y, b.y))
+			else:
+				var y := lerpf(a.y, b.y, (z - a.x) / (b.x - a.x))
+				lo = minf(lo, y)
+				hi = maxf(hi, y)
+	return Vector2(lo, hi) if lo < INF else Vector2(INF, INF)
+
+
+## Größte Höhe der Oberkante im Bereich [lo, hi] (Innenwerkzeuge, Bohrer). -INF wenn außerhalb.
+static func env_max(t: Dictionary, lo: float, hi: float) -> float:
+	var zmin: float = t["zmin"]
+	var zmax: float = t["zmax"]
+	if hi < zmin or lo > zmax or not t.has("env_up"):
+		return -INF
+	var env: PackedFloat32Array = t["env_up"]
+	var k0 := clampi(int(floor((maxf(lo, zmin) - zmin) / ENV_RES)), 0, env.size() - 1)
+	var k1 := clampi(int(ceil((minf(hi, zmax) - zmin) / ENV_RES)), 0, env.size() - 1)
+	var m := -INF
+	for k in range(k0, k1 + 1):
+		m = maxf(m, env[k])
+	return m
+
+
+## Innenwerkzeug als Außenwerkzeug im gespiegelten Raum (x' = R - x): Unterkante = -Oberkante.
+## Damit rechnen die Abspanzyklen Innenkonturen wie Außenkonturen.
+static func mirrored(t: Dictionary) -> Dictionary:
+	var m := t.duplicate()
+	var up: PackedFloat32Array = t["env_up"]
+	var e := PackedFloat32Array()
+	e.resize(up.size())
+	for k in up.size():
+		e[k] = -up[k] if up[k] > -1.0e5 else 1.0e6
+	m["env"] = e
+	m["kind"] = ""
+	return m
 
 
 ## Kleinste Hüllkurvenhöhe im Bereich [lo, hi] (relativ zum Bezugspunkt). INF wenn außerhalb.

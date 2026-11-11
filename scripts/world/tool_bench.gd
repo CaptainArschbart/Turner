@@ -13,8 +13,9 @@ const HOLDER_W := 0.13            # Breite einer Halterung
 const HOLDER_ROWS := [0.79, 0.57, 0.35]   # Höhe der Halterungsreihen
 const HOLDER_H := 0.21            # so hoch darf ein Werkzeug darin sein
 const MAT_H := 0.012              # Schaumstoffeinlage auf der Platte
-const TOP_ROWS := 3               # Reihen der Ablage auf der Platte
-const TOP_H := 0.07               # so hoch darf ein Werkzeug auf der Platte liegen
+const TOP_ROWS := 2               # Reihen der Ablage auf der Platte
+const TOP_W := 0.115              # Breite einer Mulde auf der Platte
+const TOP_H := 0.2                # so hoch darf ein Werkzeug auf der Platte liegen (Meißel in Originalgröße)
 
 ## Maschine mit tool_stock, has_tool(id), tool_name(id), make_tool_model(id), MACHINE_ID
 var machine: Node
@@ -111,30 +112,30 @@ func _build_holders() -> void:
 			n += 1
 
 
-## Schaumstoffeinlage auf der Platte, je Werkzeug eine Mulde. Rasterweite wie die Halterungen unten.
+## Schaumstoffeinlage auf der Platte, je Werkzeug eine Mulde, groß genug für die Meißel in Originalgröße.
 func _build_top_slots() -> void:
 	var foam := Build.mat(Color(0.13, 0.15, 0.17), 0.95)
 	var pocket := Build.mat(Color(0.32, 0.36, 0.4), 0.9)
-	var cols := int((width - 0.16) / HOLDER_W)
-	var x0 := -HOLDER_W * cols * 0.5
+	var cols := int((width - 0.16) / TOP_W)
+	var x0 := -TOP_W * cols * 0.5
 	var z_back := -depth * 0.5 + 0.06          # vor der Rückwand bleibt etwas Platz
 	var z_front := depth * 0.5 - 0.03
 	_cell_d = (z_front - z_back) / TOP_ROWS
-	Build.box(self, Vector3(HOLDER_W * cols + 0.03, MAT_H, z_front - z_back + 0.02), Vector3(0, TOP_Y + MAT_H * 0.5, (z_back + z_front) * 0.5), foam)
+	Build.box(self, Vector3(TOP_W * cols + 0.03, MAT_H, z_front - z_back + 0.02), Vector3(0, TOP_Y + MAT_H * 0.5, (z_back + z_front) * 0.5), foam)
 	var n := 0
 	for r in TOP_ROWS:
 		var z := z_back + _cell_d * (r + 0.5)
 		for c in cols:
-			var x := x0 + HOLDER_W * (c + 0.5)
-			Build.box(self, Vector3(HOLDER_W - 0.025, 0.002, _cell_d - 0.03), Vector3(x, TOP_Y + MAT_H + 0.001, z), pocket)
+			var x := x0 + TOP_W * (c + 0.5)
+			Build.box(self, Vector3(TOP_W - 0.015, 0.002, _cell_d - 0.03), Vector3(x, TOP_Y + MAT_H + 0.001, z), pocket)
 			var h := HolderSlot.new()
 			h.bench = self
 			h.index = n
 			h.at = Vector3(x, TOP_Y + MAT_H, z)
 			add_child(h)
 			holders.append(h)
-			# Flacher Fühler über der Mulde, damit der Blick den Platz trifft
-			var hit := Build.collider(self, Vector3(HOLDER_W - 0.005, 0.04, _cell_d - 0.005), Vector3(x, TOP_Y + MAT_H + 0.02, z))
+			# Fühler über der Mulde, damit der Blick den Platz (und den unteren Teil des Meißels) trifft
+			var hit := Build.collider(self, Vector3(TOP_W - 0.005, 0.1, _cell_d - 0.005), Vector3(x, TOP_Y + MAT_H + 0.05, z))
 			hit.set_meta("interact", h)
 			n += 1
 
@@ -151,10 +152,13 @@ func _show_holder(h: HolderSlot, id: String) -> void:
 	transform = Transform3D.IDENTITY
 	var m: Node3D = machine.make_bench_model(id) if machine.has_method("make_bench_model") else machine.make_tool_model(id)
 	add_child(m)
+	if on_top:
+		m.rotation.y = PI         # Schneide zum Spieler, nicht zur Rückwand
 	var box := Build.bounds(m)
 	var max_h := TOP_H if on_top else HOLDER_H
-	var max_d := _cell_d - 0.04 if on_top else 0.16
-	var fit := minf(minf((HOLDER_W - 0.02) / maxf(box.size.x, 0.001), max_h / maxf(box.size.y, 0.001)), max_d / maxf(box.size.z, 0.001))
+	var max_w := TOP_W - 0.01 if on_top else HOLDER_W - 0.02
+	var max_d := _cell_d - 0.02 if on_top else 0.16
+	var fit := minf(minf(max_w / maxf(box.size.x, 0.001), max_h / maxf(box.size.y, 0.001)), max_d / maxf(box.size.z, 0.001))
 	if fit < 1.0:
 		m.scale = Vector3.ONE * fit
 		box = Build.bounds(m)
@@ -185,6 +189,14 @@ func refresh() -> void:
 
 ## Alles, was nicht an der Maschine oder in der Hand ist, kommt in die Halterungen.
 func _stow(store: ToolStore) -> void:
+	# Plätze, die es auf dieser Bank nicht (mehr) gibt (ältere Spielstände), auf freie Plätze umlegen
+	for i in store.placed.keys():
+		if int(i) >= holders.size():
+			var free := free_holder()
+			if free < 0:
+				break
+			store.placed[free] = store.placed[i]
+			store.placed.erase(i)
 	for id in store.items.keys():
 		if not _out(str(id)):
 			var free := free_holder()

@@ -34,6 +34,8 @@ const WHEEL_PARTS := ["Cylinder007", "Cylinder008", "Cylinder009", "Cylinder010"
 
 var load_n := 0                          # Paletten auf der Gabel
 var cross := false                       # Last liegt quer (lange Seite quer zur Gabel)
+var goods := ""                          # Lieferpalette (delivery_key) auf der Gabel, "" = leere Palette
+var goods_attach: Callable               # Spielwelt: (Knoten, delivery_key) hängt die Ladung auf die Palette
 var lift_t := 0.0                        # 0 = Gabel unten, 1 = oben
 var phi := 0.0                           # Drehung um Y (rad), nicht aus der Basis gelesen: dort nur +-90 Grad
 var steer := 0.0                         # Winkel der Deichsel zum Chassis (rad)
@@ -100,9 +102,10 @@ func _shape(size: Vector3, pos: Vector3) -> CollisionShape3D:
 
 
 ## Last auf der Gabel setzen (Anzahl, quer?). Die Gabel hebt dann in LIFT_TIME an, ohne Last senkt sie sich.
-func set_load(n: int, is_cross := false, lifted := false) -> void:
+func set_load(n: int, is_cross := false, lifted := false, goods_key := "") -> void:
 	load_n = n
 	cross = is_cross and n > 0
+	goods = goods_key if n > 0 else ""
 	if lifted:
 		lift_t = 1.0 if n > 0 else 0.0
 	elif n == 0:
@@ -125,6 +128,8 @@ func _show_load() -> void:
 	_load.rotation.y = PI / 2.0 if cross else 0.0
 	model.add_child(_load)
 	Shelf.add_pallets(_load, load_n)
+	if goods != "" and goods_attach.is_valid():
+		goods_attach.call(_load, goods)
 	# Eigene Kollisionsbox für den Stapel (Modellkoordinaten, x = entlang der Gabel)
 	var pf: Vector2 = Shelf.SIZES["pallet"]["foot"]
 	var h := float(Shelf.SIZES["pallet"]["height"]) * load_n

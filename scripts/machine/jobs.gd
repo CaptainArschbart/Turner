@@ -162,6 +162,10 @@ static func target_lines(job: Dictionary) -> Array:
 				out.append("Fase %.1f x 45° an Z %d (Ø%d)" % [float(f["size"]), int(f["z"]), int(f["d"])])
 			"point":
 				out.append("Nutgrund Ø%.1f bei Z %d" % [float(f["d"]), int(f["z"])])
+			"bore":
+				out.append("Bohrung Ø%.1f +/-%.2f  (Z %d-%d)" % [float(f["d"]), float(f.get("tol", 0.3)), int(f["z0"]), int(f["z1"])])
+			"thread":
+				out.append("Gewinde M%s x %s %s  (Z %d-%d)" % [NcCam.fmt(float(f["d"])), NcCam.fmt(float(f["p"])), "innen" if bool(f.get("inner", false)) else "außen", int(f["z0"]), int(f["z1"])])
 	if job.has("rz"):
 		out.append("Oberfläche Rz <= %.1f µm" % float(job["rz"]))
 	return out
@@ -182,6 +186,10 @@ static func describe(job: Dictionary, grind := false) -> String:
 				t += "\n  Fase %.1f x 45° an Z %d (Ø%d)" % [float(f["size"]), int(f["z"]), int(f["d"])]
 			"point":
 				t += "\n  Nutgrund Z %.0f :  Ø%.1f" % [float(f["z"]), float(f["d"])]
+			"bore":
+				t += "\n  Bohrung Z %3d - %3d :  Ø%.1f  +/-%.2f" % [int(f["z0"]), int(f["z1"]), float(f["d"]), float(f.get("tol", 0.3))]
+			"thread":
+				t += "\n  Gewinde Z %3d - %3d :  M%s x %s %s" % [int(f["z0"]), int(f["z1"]), NcCam.fmt(float(f["d"])), NcCam.fmt(float(f["p"])), "innen" if bool(f.get("inner", false)) else "außen"]
 	if job.has("rz"):
 		t += "\n  Oberfläche: Rz <= %.1f µm" % float(job["rz"])
 	if grind and job.has("grind"):

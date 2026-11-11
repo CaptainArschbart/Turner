@@ -53,8 +53,9 @@ const FORMS := {
 	],
 	"stock": [
 		["contour", "", "Kontur", "", "contour"],
+		["side", "", "Lage", "", NcCam.SIDES],
 		["mode", "", "Bearbeitung", "", NcCam.MODES],
-		["dir", "", "Richtung", "", ["längs", "plan"]],
+		["dir", "", "Richtung", "", ["längs", "plan"], "outer"],
 		["t", "T", "Werkzeug", "", "tool"],
 		["f", "F", "Vorschub", "mm/U", "num"],
 		["v", "V", "Schnittgeschw.", "m/min", "num"],
@@ -78,9 +79,30 @@ const FORMS := {
 		["ux", "UX", "Aufmaß X", "Ø mm", "num", "rough"],
 		["uz", "UZ", "Aufmaß Z", "mm", "num", "rough"],
 	],
+	"thread": [
+		["side", "", "Lage", "", NcCam.SIDES],
+		["t", "T", "Werkzeug", "", "tool"],
+		["p", "P", "Steigung", "mm", "num"],
+		["x0", "X0", "Nenndurchmesser", "Ø mm", "num"],
+		["z0", "Z0", "Startpunkt Z", "mm", "num"],
+		["z1", "Z1", "Endpunkt Z", "mm", "num"],
+		["h", "H1", "Gewindetiefe", "mm", "num"],
+		["n", "NN", "Anzahl Schnitte", "", "num"],
+		["v", "V", "Schnittgeschw.", "m/min", "num"],
+	],
+	"drill": [
+		["t", "T", "Werkzeug", "", "tool"],
+		["f", "F", "Vorschub", "mm/U", "num"],
+		["v", "V", "Schnittgeschw.", "m/min", "num"],
+		["z0", "Z0", "Startpunkt Z", "mm", "num"],
+		["z1", "Z1", "Bohrtiefe Z", "mm", "num"],
+		["tip", "", "Tiefe bezogen auf", "", NcCam.TIPS],
+		["q", "D", "Zustelltiefe", "mm", "num"],
+		["chip", "", "Späne", "", NcCam.CHIPS],
+	],
 }
 const FORM_TITLES := {"head": "Programmkopf", "cut": "Abspanen (Rechteck)", "stock": "Konturabspanen",
-	"undercut": "Freistich"}
+	"undercut": "Freistich", "thread": "Gewinde (Längsgewinde)", "drill": "Bohren mittig"}
 
 var lathe: Lathe
 var page := "jog"
@@ -111,6 +133,7 @@ var open_prog := ""
 var _ed_title: Label
 var _ed_list: ItemList
 var _ed_plot: NcPlot
+var _ed_more := false            # zweite Softkey-Ebene im Arbeitsplan: Bohren, Gewinde, innen
 var _form_title: Label
 var _form_grid: GridContainer
 var _form_help: Control
@@ -480,6 +503,7 @@ func _refresh() -> void:
 			vdefs = _keys_pm()
 		"edit":
 			vdefs = _keys_edit()
+			hdefs[5] = ["Bohren\nGewinde", func(): _ed_more = not _ed_more, _ed_more]
 			hdefs[6] = ["Simulation", func(): show_page("sim")]
 			hdefs[7] = ["Anwählen", func(): _select_prog(open_prog)]
 		"form":
@@ -948,11 +972,15 @@ func _ed_plot_update() -> void:
 			hi_name = str(b["contour"])
 		elif str(b["type"]) == "undercut":
 			_ed_plot.hi_poly = NcCam.contour_points(NcCam.undercut_contour(b))
+		elif str(b["type"]) in ["thread", "drill"]:
+			_ed_plot.hi_poly = NcCam.block_poly(b)
 	var blocks: Array = p.get("blocks", [])
 	for j in blocks.size():
 		var b: Dictionary = blocks[j]
 		if str(b["type"]) == "undercut" and j != i:
 			polys.append(NcCam.contour_points(NcCam.undercut_contour(b)))
+		if str(b["type"]) in ["thread", "drill"] and j != i:
+			polys.append(NcCam.block_poly(b))
 		if str(b["type"]) == "contour":
 			if str(b["name"]) == hi_name:
 				_ed_plot.hi_poly = NcCam.contour_points(b)
@@ -963,6 +991,15 @@ func _ed_plot_update() -> void:
 
 
 func _keys_edit() -> Array:
+	if _ed_more:
+		return [
+			["Bohren\nmittig", func(): _ed_new("drill")],
+			["Gewinde\naußen", func(): _ed_new("thread", 0)],
+			["Gewinde\ninnen", func(): _ed_new("thread", 1)],
+			["Kontur\nabsp. innen", func(): _ed_new("stock", 1)],
+			null, null, null,
+			["Zurück", func(): _ed_more = false],
+		]
 	return [
 		["Ändern", func(): _ed_change()],
 		["Abspanen\n(Rechteck)", func(): _ed_new("cut")],
@@ -988,7 +1025,7 @@ func _ed_change() -> void:
 		_open_form(b.duplicate(true), i, -1)
 
 
-func _ed_new(type: String) -> void:
+func _ed_new(type: String, side := 0) -> void:
 	var p := prog_by_name(open_prog)
 	if p.is_empty():
 		return
@@ -997,6 +1034,21 @@ func _ed_new(type: String) -> void:
 	if type == "stock" and str(b["contour"]) == "":
 		lathe._warn("Erst eine Kontur anlegen (Softkey Kontur neu).")
 		return
+	if side == 1 and b.has("side"):
+		b["side"] = 1
+		if type == "thread":
+			# M24 x 1,5 innen: Kernloch Ø22,4 vorher ausdrehen
+			b["t"] = "T11"
+			b["x0"] = 24.0
+			b["h"] = NcCam.iso_depth(float(b["p"]), true)
+			b["v"] = 80.0
+		else:
+			b["t"] = "T8"
+			b["f"] = 0.12
+			b["v"] = 150.0
+			b["d"] = 1.0
+			b["ux"] = 0.2
+			b["uz"] = 0.1
 	if type == "contour":
 		_open_contour(b, -1, ins)
 	else:
@@ -1075,7 +1127,8 @@ func _fill_form() -> void:
 		var key: String = f[0]
 		var tag: String = f[5] if f.size() > 5 else ""
 		var form := int(_form_blk.get("form", 0))
-		var off: bool = (tag == "rough" and finish) or (tag == "din76" and form != 0) or (tag == "forme" and form != 1)
+		var off: bool = (tag == "rough" and finish) or (tag == "din76" and form != 0) or (tag == "forme" and form != 1) \
+			or (tag == "outer" and int(_form_blk.get("side", 0)) == 1)
 		var l := _label(("%s  %s" % [f[1], f[2]]).strip_edges(), 12, C_MUT if off else C_TXT)
 		l.custom_minimum_size.x = 140
 		l.clip_text = true
@@ -1085,6 +1138,7 @@ func _fill_form() -> void:
 			var opts: Array = kind
 			var b := _button(str(opts[int(_form_blk[key])]), func():
 				_form_blk[key] = (int(_form_blk[key]) + 1) % opts.size()
+				_form_changed(key)
 				_fill_form())
 			b.custom_minimum_size = Vector2(84, 24)
 			_form_grid.add_child(b)
@@ -1141,9 +1195,30 @@ func _form_pick(key: String, v: String) -> void:
 func _form_set(key: String, le: LineEdit, t: String) -> void:
 	if _form_blk.is_empty() or not _form_blk.has(key):
 		return
-	_form_blk[key] = _num(t, float(_form_blk[key]))
+	var old := float(_form_blk[key])
+	_form_blk[key] = _num(t, old)
+	if key == "n":
+		_form_blk[key] = float(clampi(int(_form_blk[key]), 1, 60))
 	le.text = NcCam.fmt(float(_form_blk[key]))
+	if absf(float(_form_blk[key]) - old) > 0.00001:
+		_form_changed(key)
 	_form_help.queue_redraw()
+
+
+## Abhängige Werte nachziehen: Gewinde - Tiefe nach ISO zur Steigung, Werkzeug zur Lage;
+## Konturabspanen innen - Bohrstange, nur längs.
+func _form_changed(key: String) -> void:
+	var type := str(_form_blk.get("type", ""))
+	var inner := int(_form_blk.get("side", 0)) == 1
+	if type == "thread" and key in ["p", "side"]:
+		_form_blk["h"] = NcCam.iso_depth(float(_form_blk["p"]), inner)
+		if key == "side":
+			_form_blk["t"] = "T11" if inner else "T10"
+		_fill_form()
+	elif type == "stock" and key == "side":
+		_form_blk["t"] = "T8" if inner else "T1"
+		if inner:
+			_form_blk["dir"] = 0
 
 
 func _form_accept() -> void:
@@ -1213,6 +1288,105 @@ func _draw_help_undercut(c: Control, f: Font, ax: float, x0: float, x1: float, i
 	c.draw_string(f, Vector2(8, 46), "Z0 = Schulter, Gewinde rechts davon", HORIZONTAL_ALIGNMENT_LEFT, c.size.x - 12, 11, C_MUT)
 
 
+## Hilfebild Gewinde: außen ein Zapfen mit Gängen, innen eine Bohrung im Halbschnitt; Z0 rechts
+## (Anlauf), Z1 links, Nenn-Ø X0, Tiefe H1 und die Zustellungen.
+func _draw_help_thread(c: Control, f: Font, ax: float, x0: float, x1: float, ink: Color, blue: Color, green: Color) -> void:
+	var inner := int(_form_blk.get("side", 0)) == 1
+	var z1 := x0 + (x1 - x0) * 0.22
+	var z0 := x1 - 40.0
+	var r_nom := ax - 80.0
+	var hh := 14.0
+	var body := Color(0.36, 0.39, 0.44)
+	if inner:
+		c.draw_rect(Rect2(x0, ax - 130.0, x1 - 30.0 - x0, 130.0), body)
+		c.draw_rect(Rect2(z1 - 30.0, r_nom + hh, x1 - 30.0 - z1 + 30.0, ax - r_nom - hh), C_FIELD)
+	else:
+		c.draw_rect(Rect2(x0, ax - 120.0, z1 - x0, 120.0), body)
+		c.draw_rect(Rect2(z1, r_nom, z0 - z1, ax - r_nom), body)
+	# Gänge (Zickzack)
+	var pts := PackedVector2Array()
+	var zz := z0
+	var crest := r_nom + hh if inner else r_nom
+	var root := r_nom if inner else r_nom + hh
+	pts.append(Vector2(zz, crest))
+	while zz - 14.0 >= z1:
+		pts.append(Vector2(zz - 7.0, root))
+		zz -= 14.0
+		pts.append(Vector2(zz, crest))
+	c.draw_polyline(pts, blue, 2.0)
+	# Zustellungen
+	for k in 3:
+		var y := (crest + (root - crest) * (k + 1) / 3.0) + (-2.0 if not inner else 2.0)
+		c.draw_line(Vector2(z0 + 26.0, y), Vector2(z1, y), green, 1.2)
+	c.draw_dashed_line(Vector2(z0, crest - 30.0), Vector2(z0, ax), ink, 1.0, 3.0)
+	c.draw_dashed_line(Vector2(z1, crest - 30.0), Vector2(z1, ax), ink, 1.0, 3.0)
+	c.draw_string(f, Vector2(z0 - 6, ax + 16), "Z0", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
+	c.draw_string(f, Vector2(z1 - 6, ax + 16), "Z1", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
+	c.draw_string(f, Vector2(z1 + 10, r_nom - 6), "Ø X0", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
+	c.draw_string(f, Vector2(z0 + 8, root + 4), "H1", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
+	c.draw_string(f, Vector2(z1 + 30, crest - 18), "P", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, ink)
+	var txt := "Gewinde %s M%s x %s" % [NcCam.SIDES[int(_form_blk["side"])], NcCam.fmt(_form_blk["x0"]), NcCam.fmt(_form_blk["p"])]
+	c.draw_string(f, Vector2(8, 16), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ink)
+	var expl := "ISO-Tiefe %s mm, %s" % [NcCam.fmt(NcCam.iso_depth(float(_form_blk["p"]), inner)),
+		"Kernloch Ø%s vorher ausdrehen" % NcCam.fmt(float(_form_blk["x0"]) - 2.0 * float(_form_blk["h"])) if inner else "Vorschub = Steigung"]
+	c.draw_string(f, Vector2(8, 32), expl, HORIZONTAL_ALIGNMENT_LEFT, c.size.x - 12, 11, C_MUT)
+	c.draw_string(f, Vector2(8, 46), "NN Schnitte, Zustellung abnehmend", HORIZONTAL_ALIGNMENT_LEFT, c.size.x - 12, 11, C_MUT)
+
+
+## Hilfebild Bohren: Bohrung in der Drehmitte mit Spitze, Zustellungen D, Tiefe Z1.
+func _draw_help_drill(c: Control, f: Font, ax: float, x0: float, x1: float, ink: Color, blue: Color, green: Color) -> void:
+	var face := x1 - 40.0
+	var depth_z := x0 + (x1 - x0) * 0.3
+	var r := 26.0
+	c.draw_rect(Rect2(x0, ax - 120.0, face - x0, 120.0), Color(0.36, 0.39, 0.44))
+	var hole := PackedVector2Array([Vector2(face, ax - r), Vector2(depth_z + 16.0, ax - r), Vector2(depth_z, ax), Vector2(face, ax)])
+	c.draw_colored_polygon(hole, C_FIELD)
+	c.draw_polyline(hole, blue, 2.0)
+	var tip_at := int(_form_blk.get("tip", 0)) == 1
+	var zz := face
+	var k := 0
+	while zz > depth_z + 20.0 and k < 4:
+		zz -= 34.0
+		c.draw_line(Vector2(maxf(zz, depth_z + 16.0), ax - 6.0 - k * 4.0), Vector2(face + 14.0, ax - 6.0 - k * 4.0), green, 1.2)
+		k += 1
+	c.draw_string(f, Vector2(face - 6, ax + 16), "Z0", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
+	var zl := depth_z + 16.0 if tip_at else depth_z
+	c.draw_dashed_line(Vector2(zl, ax - r - 20.0), Vector2(zl, ax), ink, 1.0, 3.0)
+	c.draw_string(f, Vector2(zl - 6, ax + 16), "Z1", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
+	c.draw_string(f, Vector2(face - 70, ax - r - 6), "D", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink)
+	var t := LatheTools.get_tool(maxi(LatheTools.index_of(str(_form_blk["t"])), 0))
+	c.draw_string(f, Vector2(8, 16), "Bohren mittig  Ø%s" % NcCam.fmt(float(t.get("dia", 0.0))), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ink)
+	var expl := "Spanbruch: 0,5 mm zurück je Zustellung" if int(_form_blk.get("chip", 0)) == 0 else "Entspänen: je Zustellung ganz heraus"
+	c.draw_string(f, Vector2(8, 32), expl, HORIZONTAL_ALIGNMENT_LEFT, c.size.x - 12, 11, C_MUT)
+	c.draw_string(f, Vector2(8, 46), "Z1 an der %s, X 0 (Drehmitte)" % ("Schaftkante" if tip_at else "Bohrerspitze"), HORIZONTAL_ALIGNMENT_LEFT, c.size.x - 12, 11, C_MUT)
+
+
+## Hilfebild Konturabspanen innen: Halbschnitt mit Bohrung, Innenkontur und Schnitten zur Wand.
+func _draw_help_inner(c: Control, f: Font, ax: float, x0: float, x1: float, ink: Color, blue: Color, green: Color) -> void:
+	var face := x1 - 30.0
+	var step_z := x0 + (x1 - x0) * 0.55
+	var r_big := ax - 70.0
+	var r_small := ax - 40.0
+	var r_drill := ax - 22.0
+	c.draw_rect(Rect2(x0, ax - 120.0, face - x0, 120.0), Color(0.36, 0.39, 0.44))
+	c.draw_rect(Rect2(x0 + 30.0, r_drill, face - x0 - 30.0, ax - r_drill), C_FIELD)
+	var cont := PackedVector2Array([Vector2(face, r_big), Vector2(step_z, r_big), Vector2(step_z, r_small), Vector2(x0 + 50.0, r_small), Vector2(x0 + 50.0, r_drill)])
+	c.draw_polyline(cont, blue, 2.0)
+	if int(_form_blk.get("mode", 0)) != 1:
+		var yy := r_drill - 8.0
+		while yy > r_big + 3.0:
+			var zl := step_z + 4.0 if yy < r_small else x0 + 54.0
+			c.draw_line(Vector2(face + 10.0, yy), Vector2(zl, yy), green, 1.5)
+			yy -= 9.0
+	else:
+		c.draw_polyline(PackedVector2Array([Vector2(face + 10.0, r_big + 4.0), Vector2(step_z + 4.0, r_big + 4.0),
+			Vector2(step_z + 4.0, r_small + 4.0), Vector2(x0 + 54.0, r_small + 4.0)]), green, 1.5)
+	c.draw_string(f, Vector2(step_z + 10, r_big + 16), "Kontur", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, blue)
+	c.draw_string(f, Vector2(8, 16), "Kontur abspanen innen - %s" % NcCam.MODES[int(_form_blk["mode"])], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ink)
+	c.draw_string(f, Vector2(8, 32), "Bohrstange T8, Schnitte längs zum Futter", HORIZONTAL_ALIGNMENT_LEFT, c.size.x - 12, 11, C_MUT)
+	c.draw_string(f, Vector2(8, 46), "erst bohren (mind. Ø16), D radial nach außen", HORIZONTAL_ALIGNMENT_LEFT, c.size.x - 12, 11, C_MUT)
+
+
 ## Hilfebild der Zyklusmaske: Schema mit Rohteil, Fertigteil, Schnittaufteilung und Maßen.
 func _draw_help() -> void:
 	var c := _form_help
@@ -1240,6 +1414,15 @@ func _draw_help() -> void:
 		return
 	if type == "undercut":
 		_draw_help_undercut(c, f, ax, x0, x1, ink, blue, green)
+		return
+	if type == "thread":
+		_draw_help_thread(c, f, ax, x0, x1, ink, blue, green)
+		return
+	if type == "drill":
+		_draw_help_drill(c, f, ax, x0, x1, ink, blue, green)
+		return
+	if type == "stock" and int(_form_blk.get("side", 0)) == 1:
+		_draw_help_inner(c, f, ax, x0, x1, ink, blue, green)
 		return
 	var face := int(_form_blk.get("dir", 0)) == 1
 	var finish := int(_form_blk.get("mode", 0)) == 1
@@ -1330,23 +1513,35 @@ func _ct_point(i: int) -> Vector2:
 	return Vector2(float(e["z"]), float(e["x"]))
 
 
+## Listenzeile eines Konturelements (i = Index in els).
+func _ct_item(i: int) -> String:
+	var e: Dictionary = _ct["els"][i]
+	var p := _ct_point(i)
+	var kind := "Gerade schräg"
+	var extra := ""
+	if int(e.get("arc", 0)) != 0:
+		kind = "Bogen im UZS" if int(e["arc"]) == 1 else "Bogen gg. UZS"
+		if int(e.get("cm", 0)) == 1:
+			extra = "  I%s K%s" % [NcCam.fmt(e.get("ci", 0.0)), NcCam.fmt(e.get("ck", 0.0))]
+		else:
+			extra = "  R%s" % NcCam.fmt(e.get("r", 0.0))
+	elif absf(float(e["x"]) - p.y) < 0.0005:
+		kind = "Gerade Z"
+	elif absf(float(e["z"]) - p.x) < 0.0005:
+		kind = "Gerade X"
+	if int(e.get("arc", 0)) == 0:
+		if int(e["tr"]) == 1:
+			extra = "  FS%s" % NcCam.fmt(e["tv"])
+		elif int(e["tr"]) == 2:
+			extra = "  R%s" % NcCam.fmt(e["tv"])
+	return "%-14s X%s  Z%s%s" % [kind, NcCam.fmt(e["x"]), NcCam.fmt(e["z"]), extra]
+
+
 func _fill_ct() -> void:
 	_ct_list.clear()
 	_ct_list.add_item("Start   X%s  Z%s" % [NcCam.fmt(_ct["x0"]), NcCam.fmt(_ct["z0"])])
 	for i in _ct["els"].size():
-		var e: Dictionary = _ct["els"][i]
-		var p := _ct_point(i)
-		var kind := "Gerade schräg"
-		if absf(float(e["x"]) - p.y) < 0.0005:
-			kind = "Gerade Z"
-		elif absf(float(e["z"]) - p.x) < 0.0005:
-			kind = "Gerade X"
-		var tr := ""
-		if int(e["tr"]) == 1:
-			tr = "  FS%s" % NcCam.fmt(e["tv"])
-		elif int(e["tr"]) == 2:
-			tr = "  R%s" % NcCam.fmt(e["tv"])
-		_ct_list.add_item("%-14s X%s  Z%s%s" % [kind, NcCam.fmt(e["x"]), NcCam.fmt(e["z"]), tr])
+		_ct_list.add_item(_ct_item(i))
 	_ct_sel = clampi(_ct_sel, 0, _ct_list.item_count - 1)
 	_ct_list.select(_ct_sel)
 	_ct_list.ensure_current_is_visible()
@@ -1363,9 +1558,46 @@ func _fill_ct_form() -> void:
 		_ct_field("X  Start Ø", "x0")
 		_ct_field("Z  Start", "z0")
 		return
+	var e: Dictionary = _ct["els"][_ct_sel - 1]
+	# Art: Gerade, Bogen im / gegen den Uhrzeigersinn
+	_ct_grid.add_child(_label("Element"))
+	var ba := _button(NcCam.ARCS[int(e.get("arc", 0))], func():
+		e["arc"] = (int(e.get("arc", 0)) + 1) % 3
+		if int(e["arc"]) != 0:
+			e["tr"] = 0
+			if float(e.get("r", 0.0)) <= 0.0:
+				var s := _ct_point(_ct_sel - 1)
+				e["r"] = snappedf(maxf(Vector2(float(e["z"]) - s.x, (float(e["x"]) - s.y) * 0.5).length() * 0.75, 1.0), 0.5)
+		_fill_ct())
+	ba.custom_minimum_size = Vector2(110, 24)
+	_ct_grid.add_child(ba)
 	_ct_field("X  Ø", "x")
 	_ct_field("Z", "z")
-	var e: Dictionary = _ct["els"][_ct_sel - 1]
+	if int(e.get("arc", 0)) != 0:
+		_ct_grid.add_child(_label("Angabe"))
+		var bm := _button("Radius" if int(e.get("cm", 0)) == 0 else "Mittelpunkt", func():
+			e["cm"] = 1 - int(e.get("cm", 0))
+			if int(e["cm"]) == 1 and not e.has("ci"):
+				# Mittelpunkt aus dem bisherigen Bogen vorbelegen
+				var a := NcCam.arc_of(e, Vector2(_ct_point(_ct_sel - 1).x, _ct_point(_ct_sel - 1).y * 0.5))
+				var cen: Vector2 = a["c"]
+				e["ck"] = snappedf(cen.x, 0.001)
+				e["ci"] = snappedf(cen.y * 2.0, 0.001)
+			_fill_ct())
+		bm.custom_minimum_size = Vector2(110, 24)
+		_ct_grid.add_child(bm)
+		if int(e.get("cm", 0)) == 0:
+			_ct_field("R  Radius", "r")
+		else:
+			_ct_field("I  Mitte Ø", "ci")
+			_ct_field("K  Mitte Z", "ck")
+		var err := NcCam.contour_error({"x0": _ct_point(_ct_sel - 1).y, "z0": _ct_point(_ct_sel - 1).x, "els": [e]})
+		var hint2 := _label(err if err != "" else "Drehsinn wie in der Grafik\n(Z nach rechts, X nach oben)", 10, C_ERR if err != "" else C_MUT)
+		hint2.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hint2.custom_minimum_size.x = 110
+		_ct_grid.add_child(Control.new())
+		_ct_grid.add_child(hint2)
+		return
 	_ct_grid.add_child(_label("Übergang"))
 	var b := _button(NcCam.TRANS[int(e["tr"])], func():
 		e["tr"] = (int(e["tr"]) + 1) % 3
@@ -1385,7 +1617,7 @@ func _ct_field(title: String, key: String, text := false) -> void:
 	_ct_grid.add_child(_label(title))
 	var tgt: Dictionary = _ct if _ct_sel == 0 else _ct["els"][_ct_sel - 1]
 	var le := LineEdit.new()
-	le.text = str(tgt[key]) if text else NcCam.fmt(float(tgt[key]))
+	le.text = str(tgt.get(key, "")) if text else NcCam.fmt(float(tgt.get(key, 0.0)))
 	le.custom_minimum_size = Vector2(110, 24)
 	le.select_all_on_focus = true
 	var apply := func(t: String):
@@ -1395,7 +1627,7 @@ func _ct_field(title: String, key: String, text := false) -> void:
 				tgt[key] = n
 			le.text = str(tgt[key])
 		else:
-			tgt[key] = _num(t, float(tgt[key]))
+			tgt[key] = _num(t, float(tgt.get(key, 0.0)))
 			le.text = NcCam.fmt(float(tgt[key]))
 		_ct_refresh_list()
 	le.text_submitted.connect(func(t): apply.call(t); le.release_focus())
@@ -1409,19 +1641,7 @@ func _ct_refresh_list() -> void:
 	_ct_list.clear()
 	_ct_list.add_item("Start   X%s  Z%s" % [NcCam.fmt(_ct["x0"]), NcCam.fmt(_ct["z0"])])
 	for i in _ct["els"].size():
-		var e: Dictionary = _ct["els"][i]
-		var p := _ct_point(i)
-		var kind := "Gerade schräg"
-		if absf(float(e["x"]) - p.y) < 0.0005:
-			kind = "Gerade Z"
-		elif absf(float(e["z"]) - p.x) < 0.0005:
-			kind = "Gerade X"
-		var tr := ""
-		if int(e["tr"]) == 1:
-			tr = "  FS%s" % NcCam.fmt(e["tv"])
-		elif int(e["tr"]) == 2:
-			tr = "  R%s" % NcCam.fmt(e["tv"])
-		_ct_list.add_item("%-14s X%s  Z%s%s" % [kind, NcCam.fmt(e["x"]), NcCam.fmt(e["z"]), tr])
+		_ct_list.add_item(_ct_item(i))
 	_ct_list.select(keep)
 	_ct_plot_update()
 
@@ -1447,17 +1667,21 @@ func _keys_contour() -> Array:
 		["Gerade X\n(senkrecht)", func(): _ct_add(Vector2(0.0, 10.0))],
 		["Gerade\nschräg", func(): _ct_add(Vector2(-10.0, 10.0))],
 		["Element\nlöschen", func(): _ct_delete()],
-		null, null,
+		["Bogen\nim UZS", func(): _ct_add(Vector2(-5.0, 10.0), 1)],
+		["Bogen\ngegen UZS", func(): _ct_add(Vector2(-5.0, 10.0), 2)],
 		["Über-\nnehmen", func(): _ct_accept()],
 		["Abbrechen", func(): show_page("edit")],
 	]
 
 
-func _ct_add(d: Vector2) -> void:
+func _ct_add(d: Vector2, arc := 0) -> void:
 	if get_viewport():
 		get_viewport().gui_release_focus()
 	var p := _ct_point(_ct_sel)
 	var e := {"x": maxf(p.y + d.y, 0.0), "z": p.x + d.x, "tr": 0, "tv": 0.0}
+	if arc != 0:
+		e["arc"] = arc
+		e["r"] = 5.0
 	_ct["els"].insert(_ct_sel, e)
 	_ct_sel += 1
 	_fill_ct()
@@ -1481,6 +1705,10 @@ func _ct_accept() -> void:
 		return
 	if _ct["els"].is_empty():
 		lathe._warn("Kontur braucht mindestens ein Element.")
+		return
+	var cerr := NcCam.contour_error(_ct)
+	if cerr != "":
+		lathe._warn("Kontur %s: %s" % [_ct["name"], cerr])
 		return
 	for b in p["blocks"]:
 		if str(b["type"]) == "contour" and str(b["name"]) == str(_ct["name"]) and (_ct_idx < 0 or p["blocks"][_ct_idx] != b):
@@ -1523,6 +1751,7 @@ func _run_sim() -> void:
 		return
 	var r := NcCam.simulate(p, lathe)
 	_sim_plot.prof = r["prof"]
+	_sim_plot.bore = r["bore"]
 	_sim_plot.polys = r["polys"]
 	_sim_plot.moves = r["moves"]
 	_sim_plot.start_pos = Vector2(lathe.tool_z, lathe.tool_x)
@@ -1598,6 +1827,7 @@ func _fill_tools() -> void:
 	lines.append("")
 	lines.append("Zyklen arbeiten mit Rechtsmeißeln (zum Futter / zur Mitte).")
 	lines.append("Schruppen: T1 (D bis 4 mm). Schlichten: T3 (r 0,4).")
+	lines.append("Bohren: T9 auf X 0. Innen: T8 ab Ø16. Gewinde: T10 außen, T11 innen.")
 	_tl_info.text = "\n".join(lines)
 
 

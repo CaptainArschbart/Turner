@@ -20,7 +20,7 @@ const MACHINES := [
 		"title": "Fräsmaschinen",
 		"desc": "Das Werkzeug rotiert und trägt Material ab. Für Flächen, Nuten und Taschen.",
 		"subs": [
-			{"title": "CNC", "desc": "Programmgesteuert, mehrere Achsen fahren gleichzeitig."},
+			{"title": "CNC", "desc": "Programmgesteuert, drei Achsen fahren gleichzeitig. Bearbeitungszentrum mit 24 Werkzeugplätzen im Magazin und Klartext-Steuerung.", "owned": "CNC-Fräsmaschine", "model": "mill_cnc"},
 			{"title": "Konventionell", "desc": "Von Hand über Handräder und Stufenhebel bedient. Arbeitsfläche 410 x 210 mm.", "owned": MILL_NAME, "model": "mill_machine"},
 		],
 	},
