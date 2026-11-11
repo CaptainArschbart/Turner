@@ -5,12 +5,14 @@ extends Node3D
 const WIDTH := 1.1
 const HEIGHT := 2.2
 const OPEN_ANGLE := -1.7
-const SPEED := 3.0
+const STIFF := 60.0                        # 1/s²: Zug zur Endlage
+const DAMP := 13.0                         # 1/s: Dämpfung, leicht unterkritisch (kurzes Nachfedern)
 
 var opened := false
 var title := "Bürotür"                     # Name im Interaktionshinweis
 var tint := Color(0.86, 0.87, 0.84)        # Farbe des Türblatts, vor dem Einhängen setzen
 var _leaf: Node3D
+var _vel := 0.0                            # Winkelgeschwindigkeit des Türblatts (rad/s)
 
 
 func _ready() -> void:
@@ -47,5 +49,24 @@ func click(_p: Node) -> void:
 	opened = not opened
 
 
+## Das Blatt schwingt: Es nimmt Fahrt auf, läuft in die Endlage und federt dort kurz nach. Zu fällt es in
+## den Rahmen (Anschlag), weiter als offen geht es nicht.
 func _process(delta: float) -> void:
-	_leaf.rotation.y = move_toward(_leaf.rotation.y, OPEN_ANGLE if opened else 0.0, SPEED * delta)
+	var goal := OPEN_ANGLE if opened else 0.0
+	var a := _leaf.rotation.y
+	if absf(a - goal) < 0.0005 and absf(_vel) < 0.002:
+		_leaf.rotation.y = goal
+		_vel = 0.0
+		return
+	var steps := maxi(1, ceili(delta / 0.008))
+	var dt := delta / steps
+	for i in steps:
+		_vel += ((goal - a) * STIFF - _vel * DAMP) * dt
+		a += _vel * dt
+		if a > 0.0:
+			a = 0.0                        # Rahmen
+			_vel = 0.0
+		elif a < OPEN_ANGLE - 0.06:
+			a = OPEN_ANGLE - 0.06          # Türstopper
+			_vel = -_vel * 0.3
+	_leaf.rotation.y = a

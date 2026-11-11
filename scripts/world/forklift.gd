@@ -65,6 +65,9 @@ var world: Node
 var driver: Node = null
 var parts := {}                          # build_model: carriage, inner, rear, load
 var _blocked_msg := 0.0
+var _speed_prev := 0.0
+var _lean := Vector2.ZERO               # Nicken (x) und Wanken (y) des Aufbaus in rad, nur Darstellung
+var _lean_v := Vector2.ZERO
 
 
 func _init() -> void:
@@ -100,6 +103,7 @@ static func build_model(parent: Node3D) -> Dictionary:
 	var pivot := Node3D.new()
 	pivot.rotation.y = -PI / 2.0           # Modell-vorn (-Z) zeigt nach +X
 	parent.add_child(pivot)
+	out["body"] = pivot
 	var m := scene.instantiate() as Node3D
 	m.scale = Vector3.ONE * S
 	m.position = Vector3(0, -GROUND_U * S, -CENTER_U * S)
@@ -368,6 +372,7 @@ func drive(delta: float, throttle: float, steer_in: float, lift_in: float, shift
 	tilt = clampf(tilt + tilt_in * TILT_SPEED * delta, -TILT_FWD, TILT_BACK)
 	pose(parts, lift, load_n, load_rot, steer, shift, tilt)
 	_sync_goods()
+	_step_lean(delta)
 	# Spänebehälter: ganz nach vorn geneigt über einem Container wird er ausgekippt
 	if load_bin >= 0 and world:
 		if tilt <= -TILT_FWD + 0.0005 and not _tipped:
@@ -390,6 +395,25 @@ func _sync_goods() -> void:
 	var stack := holder.get_child(0)
 	if stack.get_node_or_null("Goods") == null:
 		world.attach_goods(stack, load_goods)
+
+
+## Der Aufbau federt: Beim Anfahren hebt sich die Front, beim Bremsen taucht sie ein, in der Kurve neigt er
+## sich nach außen. Gedämpfte Feder auf die Beschleunigung, nur Darstellung (die Kollision bleibt gerade).
+func _step_lean(delta: float) -> void:
+	if not parts.has("body"):
+		return
+	var acc := clampf((speed - _speed_prev) / maxf(delta, 0.001), -BRAKE, BRAKE)
+	_speed_prev = speed
+	var side := speed * speed * tan(steer) / WHEELBASE
+	var goal := Vector2(clampf(acc * 0.007, -0.03, 0.03), clampf(side * 0.012, -0.03, 0.03))
+	var steps := maxi(1, ceili(delta / 0.01))
+	var dt := delta / steps
+	for i in steps:
+		_lean_v += ((goal - _lean) * 70.0 - _lean_v * 7.0) * dt
+		_lean += _lean_v * dt
+	var body := parts["body"] as Node3D
+	body.rotation.x = _lean.x
+	body.rotation.z = _lean.y
 
 
 ## Wie weit der Behälter gerade nach vorn gekippt ist (rad): hoch und wieder zurück.

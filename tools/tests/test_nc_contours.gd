@@ -154,7 +154,9 @@ func _initialize() -> void:
 		ok(fm.size() > 0 and a > 69.0 and b < 78.0, "Satz %d bleibt am Freistich (Z %.2f..%.2f)" % [bi + 1, a - 100.0, b - 100.0])
 
 	# --- 2b) Kontur mitten am Teil OHNE Hinterschnitte: trotzdem in Lagen zu D (nicht in einem Zug)
-	var km := {"type": "contour", "name": "MITTE", "x0": 30.0, "z0": -40.0, "els": [
+	# Die Tasche ist länger als die Platte breit ist (rund 30 mm): Erst dahinter erreicht die Schneide die
+	# volle Tiefe, davor steht die Platte noch über dem Rohteil rechts der Kontur.
+	var km := {"type": "contour", "name": "MITTE", "x0": 30.0, "z0": -20.0, "els": [
 		el(30.0, -70.0), el(42.0, -70.0)]}
 	l.new_workpiece(40.0, 100.0)
 	var pm := NcCam.new_program("MITTE_HS0")
@@ -167,16 +169,18 @@ func _initialize() -> void:
 			cuts += 1
 	var pr_m: PackedFloat32Array = smm["prof"]
 	ok(smm["errs"].is_empty() and cuts >= 2, "Kontur mitten am Teil ohne HS: mehrere Lagen (%d Züge)" % cuts)
-	ok(absf(pr_m[int(45.0 / NcCam.SEG)] - 15.2) < 0.05 and absf(pr_m[int(80.0 / NcCam.SEG)] - 20.0) < 0.01,
-		"Kontur mitten am Teil: Ø30,4 im Bereich, rechts Rohteil (%.2f / %.2f)" % [pr_m[int(45.0 / NcCam.SEG)] * 2.0, pr_m[int(80.0 / NcCam.SEG)] * 2.0])
+	ok(absf(pr_m[int(38.0 / NcCam.SEG)] - 15.2) < 0.05 and absf(pr_m[int(95.0 / NcCam.SEG)] - 20.0) < 0.01,
+		"Kontur mitten am Teil: Ø30,4 im Bereich, rechts Rohteil (%.2f / %.2f)" % [pr_m[int(38.0 / NcCam.SEG)] * 2.0, pr_m[int(95.0 / NcCam.SEG)] * 2.0])
 	start(l, pm)
-	ok(absf(l.radius_at(45.0) - 15.2) < 0.05 and absf(l.radius_at(80.0) - 20.0) < 0.01, "Kontur mitten am Teil an der Maschine (Ø%.2f)" % (l.radius_at(45.0) * 2.0))
+	ok(absf(l.radius_at(38.0) - 15.2) < 0.05 and absf(l.radius_at(95.0) - 20.0) < 0.01, "Kontur mitten am Teil an der Maschine (Ø%.2f)" % (l.radius_at(38.0) * 2.0))
 
 	# --- 3) Einstich zwischen zwei Bunden: Schruppen mit Hinterschnitt räumt den Einstich (soweit
 	#        die Platte hineinpasst), ohne Hinterschnitt bleibt er voll stehen.
+	#        Der Einstich ist 40 mm breit, die Platte sticht rechts ein und ist rund 30 mm breit: Auf Maß
+	#        liegt der Grund links davon, gemessen wird bei Z-55.
 	var kn := {"type": "contour", "name": "HALS", "x0": 0.0, "z0": 0.0, "els": [
-		el(30.0, 0.0), el(30.0, -20.0), el(20.0, -20.0), el(20.0, -45.0), el(30.0, -45.0),
-		el(30.0, -60.0), el(42.0, -60.0)]}
+		el(30.0, 0.0), el(30.0, -20.0), el(20.0, -20.0), el(20.0, -60.0), el(30.0, -60.0),
+		el(30.0, -75.0), el(42.0, -75.0)]}
 	l.new_workpiece(40.0, 100.0)
 	for hs in [1, 0]:
 		var pn := NcCam.new_program("HALS_HS%d" % hs)
@@ -185,19 +189,32 @@ func _initialize() -> void:
 		var sn: Dictionary = NcCam.simulate(pn, l)
 		ok(sn["errs"].is_empty(), "Hals HS%d: Simulation ohne Fehler %s" % [hs, sn["errs"]])
 		var pr: PackedFloat32Array = sn["prof"]
-		var r_neck := pr[int(60.0 / NcCam.SEG)]
+		var r_neck := pr[int(45.0 / NcCam.SEG)]
 		if hs == 1:
-			ok(absf(r_neck - 10.2) < 0.05, "Hals mit Hinterschnitt geräumt (Ø%.2f bei Z-40)" % (r_neck * 2.0))
+			ok(absf(r_neck - 10.2) < 0.05, "Hals mit Hinterschnitt geräumt (Ø%.2f bei Z-55)" % (r_neck * 2.0))
 		else:
-			ok(r_neck > 14.9, "Hals ohne Hinterschnitt bleibt stehen (Ø%.2f bei Z-40)" % (r_neck * 2.0))
+			ok(r_neck > 14.9, "Hals ohne Hinterschnitt bleibt stehen (Ø%.2f bei Z-55)" % (r_neck * 2.0))
 		ok(absf(pr[int(90.0 / NcCam.SEG)] - 15.2) < 0.05, "Hals HS%d: Bund rechts Ø30,4 (%.2f)" % [hs, pr[int(90.0 / NcCam.SEG)] * 2.0])
 	var ph := NcCam.new_program("HALS_MASCHINE")
 	ph["blocks"].append(kn)
 	ph["blocks"].append(rough("HALS", "T1", 2.0))
 	start(l, ph)
-	ok(absf(l.radius_at(60.0) - 10.2) < 0.05, "Hals an der Maschine geräumt (Ø%.2f)" % (l.radius_at(60.0) * 2.0))
+	ok(absf(l.radius_at(45.0) - 10.2) < 0.05, "Hals an der Maschine geräumt (Ø%.2f)" % (l.radius_at(45.0) * 2.0))
 	ok(absf(l.radius_at(90.0) - 15.2) < 0.05, "Bund rechts mit Aufmaß (Ø%.2f)" % (l.radius_at(90.0) * 2.0))
 	ok(absf(l.radius_at(20.0) - 20.0) < 0.01, "links der Kontur Rohteil (Ø%.2f)" % (l.radius_at(20.0) * 2.0))
+	# Enger Einstich (25 mm): Die Schruppplatte ist breiter und kommt nicht bis auf den Grund
+	var kq := {"type": "contour", "name": "ENG", "x0": 0.0, "z0": 0.0, "els": [
+		el(30.0, 0.0), el(30.0, -20.0), el(20.0, -20.0), el(20.0, -45.0), el(30.0, -45.0),
+		el(30.0, -60.0), el(42.0, -60.0)]}
+	l.new_workpiece(40.0, 100.0)
+	var pq := NcCam.new_program("HALS_ENG")
+	pq["blocks"].append(kq)
+	pq["blocks"].append(rough("ENG", "T1", 2.0, 1))
+	var sq: Dictionary = NcCam.simulate(pq, l)
+	var wide: float = float(l.tool_by_id("T1")["zmax"]) - float(l.tool_by_id("T1")["zmin"])
+	var r_eng: float = (sq["prof"] as PackedFloat32Array)[int(60.0 / NcCam.SEG)]
+	ok(sq["errs"].is_empty() and wide > 25.0 and r_eng > 11.0 and r_eng < 15.0,
+		"Enger Hals: Die %.1f mm breite Platte räumt nur, so weit sie hineinpasst (Ø%.2f)" % [wide, r_eng * 2.0])
 
 	# --- 4) Zum Futter hin fallender Kegel (Hinterschnitt für einen Rechtsmeißel) mit Radius:
 	#        T3 schruppt konturparallel hinein und schlichtet, nichts wird verletzt.

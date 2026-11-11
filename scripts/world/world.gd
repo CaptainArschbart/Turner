@@ -125,6 +125,8 @@ var containers: Array = []        # ChipTray je Spänecontainer im Hof
 
 const CONTAINER_KG := 120.0
 const CONTAINER_SORTS := ["stahl", "aluminium", "messing"]
+## Teil, das nach der Rückfrage beim nächsten Klick auf einen Container entsorgt wird
+var _dispose_armed := ""
 
 
 func _ready() -> void:
@@ -3424,6 +3426,21 @@ func crane_bin_height(i: int) -> float:
 	return ChipBin.height(str(layout.bins[i]["size"])) if i >= 0 and i < layout.bins.size() else 0.0
 
 
+## Anschlagpunkte an den vier Kranösen des Behälters i, von der Mitte seiner Unterkante aus und so gedreht,
+## wie er steht.
+func crane_bin_lugs(i: int) -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	if i < 0 or i >= layout.bins.size():
+		return out
+	var b: Dictionary = layout.bins[i]
+	var turn := Basis(Vector3.UP, int(b["rot"]) * PI / 2.0)
+	if i < bin_nodes.size() and is_instance_valid(bin_nodes[i]):
+		turn = bin_nodes[i].global_transform.basis.orthonormalized()
+	for p in ChipBin.lugs(str(b["size"])):
+		out.append(turn * p)
+	return out
+
+
 func crane_hook(i: int) -> void:
 	layout.bins[i]["hooked"] = true
 	_sync_machine_bins()
@@ -3610,6 +3627,14 @@ func container_prompt(i: int) -> String:
 		return "[Linksklick] Eimer leeren (Eimer %s)    |    %s" % [Bucket.describe(player.bucket_chips()), what]
 	if player.carrying_bin():
 		return "[Linksklick] Behälter hineinleeren    |    %s" % what
+	if _carrying_scrap():
+		var it: Dictionary = player.carry
+		var sort := _scrap_sort(it)
+		if sort != c.only:
+			return "%s gehört in den Container %s    |    %s" % [str(it.get("title", "Teil")), ChipTray.SORT_TITLES[sort], what]
+		if _dispose_armed == _scrap_id(it):
+			return "[Linksklick] Wirklich entsorgen? Der Auftrag bleibt offen    |    %s" % what
+		return "[Linksklick] %s entsorgen (%.1f kg)    |    %s" % [str(it.get("title", "Teil")), _scrap_kg(it), what]
 	return what + ("    |    Voll: am PC abholen lassen" if c.is_full() else "")
 
 
@@ -3617,6 +3642,9 @@ func container_prompt(i: int) -> String:
 func container_click(i: int) -> void:
 	if player.carrying_bin():
 		_container_from_bin(i)
+		return
+	if _carrying_scrap():
+		_container_from_part(i)
 		return
 	if not player.carrying_bucket():
 		return
@@ -3635,6 +3663,78 @@ func container_click(i: int) -> void:
 	site.show_containers(containers)
 	player._focus = null
 	hud.show_message("%.1f kg in den Container gekippt, jetzt %d von %d kg." % [moved, int(c.kg), int(c.capacity)], Color(0.7, 0.95, 1.0))
+	office_pc.overlay.waste_tab.refresh()
+
+
+## Trägt die Figur ein bearbeitetes Teil (ausgespannt oder vorbearbeitet), das in den Container darf?
+func _carrying_scrap() -> bool:
+	return player.carrying_part() or player.carrying_semi()
+
+
+## Werkstoffgruppe des Teils, wie bei den Spänen.
+func _scrap_group(it: Dictionary) -> String:
+	var mat := str(it.get("material", it.get("part", {}).get("material", "")))
+	return str(Materials.group_of(mat)["id"])
+
+
+func _scrap_sort(it: Dictionary) -> String:
+	return str(ChipTray.SORTS.get(_scrap_group(it), "stahl"))
+
+
+## Gewicht des Teils aus den Rohteilmaßen (nach oben abgeschätzt, die Späne fehlen schon).
+func _scrap_kg(it: Dictionary) -> float:
+	var mat := str(it.get("material", ""))
+	var l := float(it.get("l", 0.0))
+	var round_part := str(it.get("shape", "")) == "round" or str(it.get("type", "")) == "round"
+	var kg := 0.0
+	if round_part:
+		var d := float(it.get("d", 0.0))
+		if d <= 0.0:
+			d = float(it.get("w", 0.0))
+		kg = Materials.weight_kg(mat, Materials.KIND_ROUND, d, 0.0, 0.0, l)
+	else:
+		kg = Materials.weight_kg(mat, Materials.KIND_SQUARE, 0.0, float(it.get("w", 0.0)), float(it.get("h", 0.0)), l)
+	return maxf(kg, 0.05)
+
+
+## Kennung des getragenen Teils für die Rückfrage vor dem Entsorgen.
+func _scrap_id(it: Dictionary) -> String:
+	return "%s|%s|%s" % [str(it.get("kind", "")), str(it.get("key", "")), str(it.get("title", ""))]
+
+
+## Gehört das getragene Teil noch zu einem offenen Auftrag? Dann erst nach einer Rückfrage wegwerfen.
+func _scrap_has_job(it: Dictionary) -> bool:
+	if player.carrying_semi():
+		return grind_jobs.has(str(it.get("key", ""))) or accepted.has(str(it.get("key", "")))
+	return _qm_open(it)
+
+
+## Bearbeitetes Teil in den passenden Recyclingcontainer werfen. Bei einem offenen Auftrag fragt der erste
+## Klick nach, der zweite wirft es weg.
+func _container_from_part(i: int) -> void:
+	var c: ChipTray = containers[i]
+	var it: Dictionary = player.carry
+	var sort := _scrap_sort(it)
+	if sort != c.only:
+		hud.show_message("Das Teil ist aus %s, es gehört in den Container %s." % [ChipTray.SORT_TITLES[sort], ChipTray.SORT_TITLES[sort]], Color(1, 0.75, 0.2))
+		return
+	var kg := _scrap_kg(it)
+	if c.capacity - c.kg < kg:
+		hud.show_message("Der Container ist zu voll für das Teil: am PC im Programm Entsorgung abholen lassen.", Color(1, 0.75, 0.2))
+		return
+	var id := _scrap_id(it)
+	if _scrap_has_job(it) and _dispose_armed != id:
+		_dispose_armed = id
+		player._focus = null
+		hud.show_message("%s gehört zu einem offenen Auftrag. Nochmal klicken, um es trotzdem zu entsorgen." % str(it.get("title", "Teil")), Color(1, 0.75, 0.2))
+		return
+	_dispose_armed = ""
+	c.add(_scrap_group(it), kg)
+	player.clear_carry()
+	site.show_containers(containers)
+	player._focus = null
+	hud.show_message("%s entsorgt: %.1f kg in den Container %s, jetzt %d von %d kg." % [str(it.get("title", "Teil")), kg,
+		ChipTray.SORT_TITLES[sort], int(c.kg), int(c.capacity)], Color(0.7, 0.95, 1.0))
 	office_pc.overlay.waste_tab.refresh()
 
 
@@ -3917,6 +4017,31 @@ func _put_machine(id: String) -> void:
 	n.scale = Vector3.ONE * (Layout.MACHINE_SCALE if Layout.SCALED.has(id) else 1.0)
 	n.position = Vector3(at["pos"].x, 0, at["pos"].y)
 	n.rotation.y = int(at["rot"]) * PI / 2.0
+	_solidify(n)
+
+
+## Teile einer Maschine, die sich drehen oder laufend neu entstehen: ohne genaue Kollision
+const SOLID_SKIP := ["spindle_pivot", "spindle", "_block", "_tool_node", "_chip_heap", "_chips", "_stock_node", "chips"]
+
+## Genaue Kollision für lose Gegenstände an Maschine n (einmal, wenn sie steht): Sie fallen aufs Bett, den
+## Tisch oder in die Spänewanne statt auf die Hülle der Maschine.
+func _solidify(n: Node3D) -> void:
+	if n.has_meta("solid_done"):
+		return
+	var skip: Array = []
+	for key in SOLID_SKIP:
+		skip.append(n.get(key))
+	var nodes = n.get("tool_nodes")
+	if nodes is Array:
+		skip.append_array(nodes)
+	var mdl = n.get("model")
+	if mdl is Object and mdl.get("_post_root") is Node:
+		skip.append(mdl.get("_post_root"))              # Werkzeugkopf: dreht, Halter kommen und gehen
+	for s in skip:
+		if s is Node:
+			(s as Node).set_meta(Solid.SKIP_META, true)
+	Solid.add(n)
+	n.set_meta("solid_done", true)
 
 
 ## Werkbank aufstellen oder umstellen. moving = Maschine der umgestellten Werkbank, sonst leer.

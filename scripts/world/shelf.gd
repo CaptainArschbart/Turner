@@ -71,6 +71,12 @@ static func jack_rect(load_n: int, cross: bool) -> Rect2:
 
 
 func _ready() -> void:
+	_build()
+	# Lose Gegenstände liegen auf den Böden, den Paletten und dem Material, nicht auf der Hülle
+	Solid.add(self)
+
+
+func _build() -> void:
 	var s: Dictionary = SIZES[size_id]
 	var h := float(s["height"])
 	var n := maxi(stack, 1) if size_id == "pallet" else 1

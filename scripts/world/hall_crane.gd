@@ -7,6 +7,10 @@ extends Node3D
 ## Blickrichtung, und mit Bild auf / Bild ab den Haken. Die Joysticks der Fernbedienung bewegen sich mit. Abgelegt wird sie in der Halterung oder auf einer
 ## Werkbank, von dort nimmt man sie auch wieder.
 ## Am Haken hängt ein Spänebehälter, z. B. die Spänekiste unter dem Förderer der E50.
+## Das Aussehen kommt aus models/hallenkran.glb (erzeugt mit tools/blender/hallenkran.py): Einträger-Brückenkran
+## mit Kastenträger, Kopfträgern auf der Kranbahn, Einschienenkatze mit Seilzug, Unterflasche und Kettengehänge.
+## Seile und Schleppleitung spannt das Spiel selbst, weil sie sich mit Haken und Katze bewegen.
+## Beim Anfahren und Bremsen pendelt die Last am Seil nach (_step_sway), das ist nur Darstellung.
 
 const X_RANGE := Vector2(-11.0, 11.0)     # Fahrweg der Brücke (Hallenwände bei +-12 m)
 const Z_RANGE := Vector2(-6.6, 6.6)       # Fahrweg der Katze zwischen den Kranbahnen
@@ -27,9 +31,18 @@ const HOLDER_PATH := "res://models/kran_halterung.glb"
 const HOLDER_SCALE := 0.04               # 10 Modelleinheiten Breite -> 40 cm
 const HOLDER_MODEL_DEPTH := 6.16         # Brett von der Wand nach vorn in Modelleinheiten
 const HOLDER_WALL_X := -3.16             # Wandseite des Modells
+const MODEL_PATH := "res://models/hallenkran.glb"
+const ROPE_R := 0.006                    # Hubseil, 12 mm
+const CABLE_LOOPS := 10                  # Schlaufen der Schleppleitung zwischen Brückenende und Katze
+const CABLE_LEN := 1.6                   # Leitungslänge je Schlaufe (m)
+const CABLE_SIZE := Vector2(0.03, 0.007) # Flachleitung: Breite, Dicke
+const CABLE_STEPS := 20                  # Stützpunkte je Schlaufe
+const SWAY_GAIN := 0.3                   # wie stark die Last dem Anfahren und Bremsen nachschwingt (1 = echtes Pendel)
+const SWAY_DAMP := 0.2                   # Dämpfung des Pendelns (Anteil der kritischen Dämpfung)
+const SWAY_MAX := 0.1                    # größter Ausschlag als Anteil der Seillänge
 
 ## Spielwelt: crane_find_bin(hook) -> Nummer, crane_hook(i), crane_carry(i, pos), crane_set_down(i, at) -> Fehler,
-## crane_bin_height(i), hud
+## crane_bin_height(i), crane_bin_lugs(i) -> Anschlagpunkte, hud
 var world: Node
 var bridge_x := -6.0
 var trolley_z := -1.5
@@ -37,10 +50,26 @@ var hook_y := 2.9
 var hooked := -1                          # Nummer des Spänebehälters am Haken, -1 = keiner
 var held_by: Node = null                  # Spielfigur mit der Fernbedienung in der Hand
 var _v := Vector3.ZERO                    # Fahrgeschwindigkeit: x Brücke, y Haken, z Katze
+var _v_prev := Vector3.ZERO
+var _sway := Vector2.ZERO                 # Auslenkung der Last am Seil (x, z) in m, nur Darstellung
+var _sway_v := Vector2.ZERO
 
 var _bridge: Node3D
 var _trolley: Node3D
-var _rope: MeshInstance3D
+var _ropes: Array[MeshInstance3D] = []
+var _rope_top: Array[Vector3] = []        # Seilabgang an der Katze: x und z von der Katze aus, y über dem Boden
+var _rope_end: Array[Vector3] = []        # Seilende an der Unterflasche, von der Hakenunterkante aus
+var _carriers: Array[Node3D] = []         # Leitungswagen der Schleppleitung auf der Kabelschiene
+var _loops: Array[MeshInstance3D] = []    # Schlaufen dazwischen, alle gleich weit
+var _loop_mesh: ArrayMesh
+var _cable_from := Vector3.ZERO           # festes Ende der Leitung an der Brücke
+var _cable_to := Vector3.ZERO             # Mitnehmer an der Katze (von der Katze aus)
+var _cable_rail := Vector3.ZERO           # Lage der Kabelschiene (x, y)
+var _cable_step := INF                    # Abstand der Wagen, für den die Schlaufe zuletzt gebaut wurde
+var _sling: MultiMeshInstance3D           # Kettenstränge vom Aufhängeglied zu den Kranösen des Behälters
+var _chain_start := Vector3.ZERO          # unten im Aufhängeglied, von der Hakenunterkante aus
+var _chain_pitch := 0.026                 # Teilung der Kette: Abstand zweier Glieder
+var _links: Array[Transform3D] = []       # Lage der Kettenglieder, von der Hakenunterkante aus
 var _hook: Node3D
 var _chains: Node3D
 var _holder: Node3D
@@ -57,9 +86,106 @@ func _ready() -> void:
 	var anth := Build.mat(Color(0.2, 0.22, 0.25), 0.5)
 	var steel := Build.mat(Color(0.3, 0.3, 0.3), 0.4, 1.0)
 	var black := Build.mat(Color(0.08, 0.08, 0.09), 0.6)
-	# Brücke: Kastenträger quer über die Halle, Kopfträger mit Laufrädern auf den Kranbahnen
+	_lamp_on = Build.emissive(Color(0.2, 1.0, 0.3), 3.0)
+	_lamp_off = Build.mat(Color(0.1, 0.25, 0.12), 0.5)
 	_bridge = Node3D.new()
 	add_child(_bridge)
+	_trolley = Node3D.new()
+	_bridge.add_child(_trolley)
+	_hook = Node3D.new()
+	add_child(_hook)
+	# Ketten zum Behälter, nur sichtbar, wenn etwas am Haken hängt
+	_chains = Node3D.new()
+	_hook.add_child(_chains)
+	_chains.visible = false
+	if not _build_model(steel):
+		_build_simple(yellow, anth, steel, black)
+	_build_holder(yellow, anth, black)
+	_sync()
+
+
+## Kran aus models/hallenkran.glb. Kranbahn, Brücke, Katze, Meldeleuchte, Unterflasche und Kettengehänge sind
+## eigene Objekte mit dem Ursprung im Hallen-Nullpunkt (Unterflasche und Gehänge: an der Hakenunterkante),
+## sie kommen unter die Knoten, die das Spiel verschiebt. Leere Objekte im Modell markieren, wo die Seile und
+## die Schleppleitung ansetzen. Liefert false, wenn das Modell fehlt oder unvollständig ist.
+func _build_model(steel: Material) -> bool:
+	if not ResourceLoader.exists(MODEL_PATH):
+		return false
+	var scene := load(MODEL_PATH) as PackedScene
+	if scene == null:
+		return false
+	var m: Node3D = scene.instantiate()
+	var homes := {"Kranbahn": self, "Bruecke": _bridge, "Katze": _trolley, "Lampe": _trolley,
+		"Unterflasche": _hook, "Gehaenge": _chains}
+	var parts := {}
+	for n in homes:
+		parts[n] = m.find_child(n, true, false) as Node3D
+	var wagon := m.find_child("Kabelwagen", true, false) as Node3D
+	var link := m.find_child("Kettenglied", true, false) as MeshInstance3D
+	if parts.values().has(null) or wagon == null or link == null or not parts["Lampe"] is MeshInstance3D:
+		m.free()
+		return false
+	for n in homes:
+		_adopt(parts[n], homes[n])
+	_lamp = parts["Lampe"] as MeshInstance3D
+	# Hubseil: ein Strang von der Trommel zur Seilrolle der Unterflasche, einer zurück zum Festpunkt
+	for pair in [["Seil_Trommel", "Seil_A"], ["Seil_Festpunkt", "Seil_B"]]:
+		_rope_top.append(_mark(parts["Katze"], pair[0]))
+		_rope_end.append(_mark(parts["Unterflasche"], pair[1]))
+		_ropes.append(Build.cyl(self, ROPE_R, 1.0, Vector3.ZERO, steel, Build.AXIS_Y, false, 8))
+	# Schleppleitung: Leitungswagen auf der Kabelschiene, dazwischen hängt die Flachleitung in Schlaufen
+	_cable_rail = _mark(parts["Bruecke"], "Kabelschiene")
+	_cable_from = _mark(parts["Bruecke"], "Kabel_Fest")
+	_cable_to = _mark(parts["Katze"], "Kabel_Katze")
+	_adopt(wagon, _bridge)
+	_carriers.append(wagon)
+	for i in CABLE_LOOPS - 2:
+		var c := wagon.duplicate() as Node3D
+		_bridge.add_child(c)
+		_carriers.append(c)
+	# Kettengehänge: Das Aufhängeglied hängt im Haken, die Stränge entstehen beim Einhängen (_fit_sling)
+	_chain_start = _mark(parts["Gehaenge"], "Kette_Start")
+	_chain_pitch = maxf(_mark(link, "Kette_Teilung").y, 0.01)
+	_sling = MultiMeshInstance3D.new()
+	_sling.multimesh = MultiMesh.new()
+	_sling.multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	_sling.multimesh.mesh = link.mesh
+	_chains.add_child(_sling)
+	m.free()
+	_loop_mesh = ArrayMesh.new()
+	var cable := Build.mat(Color(0.05, 0.05, 0.05), 0.8)
+	cable.cull_mode = BaseMaterial3D.CULL_DISABLED
+	for i in CABLE_LOOPS:
+		var mi := MeshInstance3D.new()
+		mi.mesh = _loop_mesh
+		mi.material_override = cable
+		_bridge.add_child(mi)
+		_loops.append(mi)
+	return true
+
+
+## Knoten n aus dem geladenen Modell unter den Knoten to hängen (Lage im Modell bleibt).
+static func _adopt(n: Node, to: Node) -> void:
+	n.get_parent().remove_child(n)
+	_disown(n)
+	to.add_child(n)
+
+
+static func _disown(n: Node) -> void:
+	n.owner = null
+	for c in n.get_children():
+		_disown(c)
+
+
+## Lage eines leeren Markierungsobjekts im Modellteil part.
+static func _mark(part: Node3D, marker: String) -> Vector3:
+	var n := part.find_child(marker, true, false) as Node3D
+	return part.transform * n.position if n else Vector3.ZERO
+
+
+## Ersatz ohne Modell: Brücke, Katze und Haken aus Quadern.
+func _build_simple(yellow: Material, anth: Material, steel: Material, black: Material) -> void:
+	# Brücke: Kastenträger quer über die Halle, Kopfträger mit Laufrädern auf den Kranbahnen
 	Build.box(_bridge, Vector3(0.5, 0.6, 15.0), Vector3(0, BRIDGE_Y, 0), yellow)
 	for z in [-7.4, 7.4]:
 		Build.box(_bridge, Vector3(1.6, 0.35, 0.4), Vector3(0, 5.65, z), yellow)
@@ -68,28 +194,18 @@ func _ready() -> void:
 	Build.label(_bridge, "5 t", Vector3(0.26, BRIDGE_Y, 2.0), 0.01, Color(0.1, 0.1, 0.1), 64, PI / 2)
 	Build.label(_bridge, "5 t", Vector3(-0.26, BRIDGE_Y, -2.0), 0.01, Color(0.1, 0.1, 0.1), 64, -PI / 2)
 	# Katze mit Hubwerk unter der Brücke
-	_trolley = Node3D.new()
-	_bridge.add_child(_trolley)
 	Build.box(_trolley, Vector3(0.9, 0.45, 0.7), Vector3(0, TROLLEY_Y, 0), anth)
 	Build.cyl(_trolley, 0.2, 0.6, Vector3(0, TROLLEY_Y - 0.05, 0.0), steel, Build.AXIS_X)
-	_lamp_on = Build.emissive(Color(0.2, 1.0, 0.3), 3.0)
-	_lamp_off = Build.mat(Color(0.1, 0.25, 0.12), 0.5)
 	_lamp = Build.box(_trolley, Vector3(0.08, 0.06, 0.08), Vector3(0.46, TROLLEY_Y - 0.1, 0), _lamp_off)
-	_rope = Build.cyl(self, 0.012, 1.0, Vector3.ZERO, steel)
-	_hook = Node3D.new()
-	add_child(_hook)
+	_ropes.append(Build.cyl(self, 0.012, 1.0, Vector3.ZERO, steel))
+	_rope_top.append(Vector3(0, TROLLEY_Y - 0.25, 0))
+	_rope_end.append(Vector3(0, 0.3, 0))
 	Build.box(_hook, Vector3(0.16, 0.2, 0.08), Vector3(0, 0.22, 0), yellow)
 	Build.cyl(_hook, 0.05, 0.03, Vector3(0, 0.07, 0), steel, Build.AXIS_Z)
 	Build.box(_hook, Vector3(0.025, 0.1, 0.025), Vector3(0.04, 0.03, 0), steel)
-	# Ketten zum Behälter, nur sichtbar, wenn etwas am Haken hängt
-	_chains = Node3D.new()
-	_hook.add_child(_chains)
-	_chains.visible = false
 	for s in [-1.0, 1.0]:
 		var c := Build.box(_chains, Vector3(0.025, SLING, 0.025), Vector3(s * 0.25, -SLING * 0.5, 0), steel)
 		c.rotation.z = s * 0.42
-	_build_holder(yellow, anth, black)
-	_sync()
 
 
 ## Wandkonsole aus models/kran_halterung.glb: Ablagebrett mit zwei Dreiecksstützen, darauf liegt die
@@ -287,7 +403,33 @@ func hook_click() -> void:
 	hooked = i
 	_chains.visible = true
 	world.crane_hook(i)
+	_fit_sling()
 	world.hud.show_message("Behälter eingehängt. Mit [%s] anheben." % _key("crane_up"), Color(0.7, 0.95, 1.0))
+
+
+## Kettenstränge vom Aufhängeglied zu den Kranösen des eingehängten Behälters legen: Glied an Glied,
+## abwechselnd um 90 Grad gedreht. Der Behälter hängt starr unter dem Haken, das passt bis zum Aushängen.
+func _fit_sling() -> void:
+	if _sling == null or hooked < 0:
+		return
+	var down := Vector3(0, -(SLING + float(world.crane_bin_height(hooked))), 0)
+	_links.clear()
+	for lug in world.crane_bin_lugs(hooked):
+		var d: Vector3 = down + lug - _chain_start
+		var count := maxi(1, roundi(d.length() / _chain_pitch))
+		var step := d / count
+		var along := d.normalized()
+		var side := along.cross(Vector3.UP)
+		side = side.normalized() if side.length() > 0.001 else Vector3.RIGHT
+		var flat := side.cross(along)
+		var grow := along * (step.length() / _chain_pitch)
+		for i in count:
+			var b := Basis(side, grow, flat) if i % 2 == 0 else Basis(flat, grow, -side)
+			_links.append(Transform3D(b, _chain_start + step * (i + 0.5)))
+	var mm := _sling.multimesh
+	mm.instance_count = _links.size()
+	for i in _links.size():
+		mm.set_instance_transform(i, _links[i])
 
 
 ## Last vom Haken lösen, ohne sie abzusetzen (Umbau, Laden): Sie bleibt auf ihrem Stellplatz.
@@ -340,7 +482,42 @@ func _physics_process(delta: float) -> void:
 	bridge_x = nx
 	trolley_z = nz
 	hook_y = ny
+	_step_sway(delta)
 	_sync()
+
+
+## Seillänge von der Katze bis zur Unterflasche.
+func _rope_len() -> float:
+	var top := _rope_top[0].y if not _rope_top.is_empty() else TROLLEY_Y
+	return maxf(top - hook_y, 0.5)
+
+
+## Die Last pendelt am Seil nach, wenn Brücke oder Katze anfahren und bremsen: ein gedämpftes Pendel, dessen
+## Takt mit der Seillänge langsamer wird. Abgeschwächt (SWAY_GAIN), damit sich der Haken noch setzen lässt.
+## Es ist nur Darstellung: Ein- und ausgehängt wird weiter senkrecht unter der Katze (hook_pos).
+func _step_sway(delta: float) -> void:
+	var acc := Vector2(_v.x - _v_prev.x, _v.z - _v_prev.z) / maxf(delta, 0.001)
+	_v_prev = _v
+	# Am Fahrwegende steht die Brücke schlagartig: kein Schlag, der die Last meterweit wirft
+	acc = acc.limit_length(ACCEL * 2.0)
+	if hooked >= 0 and _bin_bottom() < 0.03:
+		# Die Last steht auf dem Boden
+		_sway = _sway.lerp(Vector2.ZERO, minf(delta * 12.0, 1.0))
+		_sway_v = Vector2.ZERO
+		return
+	var length := _rope_len()
+	var w := sqrt(9.81 / length)
+	var steps := maxi(1, ceili(delta / 0.01))
+	var dt := delta / steps
+	for i in steps:
+		_sway_v += (-_sway * w * w - acc * SWAY_GAIN - _sway_v * (2.0 * SWAY_DAMP * w)) * dt
+		_sway += _sway_v * dt
+	if _sway.length() > length * SWAY_MAX:
+		_sway = _sway.limit_length(length * SWAY_MAX)
+		_sway_v *= 0.5
+	if _sway.length() < 0.0005 and _sway_v.length() < 0.0005:
+		_sway = Vector2.ZERO
+		_sway_v = Vector2.ZERO
 
 
 func _in_range(p: Node3D) -> bool:
@@ -351,14 +528,101 @@ func _in_range(p: Node3D) -> bool:
 func _sync() -> void:
 	_bridge.position.x = bridge_x
 	_trolley.position.z = trolley_z
-	var top := Vector3(bridge_x, TROLLEY_Y - 0.25, trolley_z)
-	var hp := hook_pos()
-	_line(_rope, top, hp + Vector3(0, 0.3, 0))
+	# Haken und Last hängen um die Pendelauslenkung versetzt, die Seile laufen schräg dorthin
+	var length := _rope_len()
+	var swing := Vector3(_sway.x, length - sqrt(maxf(length * length - _sway.length_squared(), 0.0)), _sway.y)
+	var hp := hook_pos() + swing
+	for i in _ropes.size():
+		var top := _rope_top[i]
+		_line(_ropes[i], Vector3(bridge_x + top.x, top.y, trolley_z + top.z), hp + _rope_end[i])
 	_hook.position = hp
+	_sync_cable()
 	_lamp.material_override = _lamp_on if held_by != null else _lamp_off
 	if hooked >= 0:
-		world.crane_carry(hooked, Vector3(bridge_x, _bin_bottom(), trolley_z))
+		world.crane_carry(hooked, Vector3(bridge_x, _bin_bottom(), trolley_z) + swing)
 	_remote.visible = held_by == null and remote_bench == ""
+
+
+## Schleppleitung: Die Leitungswagen verteilen sich gleichmäßig zwischen dem festen Ende an der Brücke und
+## dem Mitnehmer der Katze. Fährt die Katze heran, rücken sie zusammen und die Schlaufen hängen tiefer.
+func _sync_cable() -> void:
+	if _loops.is_empty():
+		return
+	var z0 := _cable_from.z
+	var step := (trolley_z + _cable_to.z - z0) / CABLE_LOOPS
+	if absf(step - _cable_step) > 0.0002:
+		_cable_step = step
+		_build_loop(absf(step))
+	for i in _carriers.size():
+		_carriers[i].position = Vector3(_cable_rail.x, _cable_rail.y, z0 + step * (i + 1))
+	for i in _loops.size():
+		_loops[i].position = Vector3(_cable_from.x, _cable_from.y, z0 + step * (i + 0.5))
+
+
+## Netz einer Schlaufe: Flachleitung der Länge CABLE_LEN, die zwischen zwei Wagen im Abstand span durchhängt
+## (Kettenlinie). Ursprung in der Mitte zwischen den Aufhängepunkten, die Leitung läuft entlang z.
+func _build_loop(span: float) -> void:
+	var half := CABLE_LEN * 0.5
+	var w := clampf(span, 0.02, CABLE_LEN * 0.98) * 0.5
+	# Formwert a der Kettenlinie aus w = a * asinh(half / a), durch Halbieren
+	var lo := 0.0005
+	var hi := 100.0
+	for i in 40:
+		var mid := sqrt(lo * hi)
+		if mid * asinh(half / mid) < w:
+			lo = mid
+		else:
+			hi = mid
+	var a := sqrt(lo * hi)
+	var base := sqrt(a * a + half * half)
+	var hw := CABLE_SIZE.x * 0.5
+	var ht := CABLE_SIZE.y * 0.5
+	var pts: Array[Vector3] = []
+	var nrm: Array[Vector3] = []
+	for k in CABLE_STEPS + 1:
+		# Bogenlänge von der tiefsten Stelle aus, unten dichter gesetzt als an den geraden Enden
+		var u := 2.0 * k / CABLE_STEPS - 1.0
+		var arc := half * signf(u) * pow(absf(u), 1.6)
+		var r := sqrt(a * a + arc * arc)
+		pts.append(Vector3(0, r - base, a * asinh(arc / a)))
+		nrm.append(Vector3(0, a / r, -arc / r))
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var side := Vector3(hw, 0, 0)
+	for strip in 4:
+		var first := verts.size()
+		for k in pts.size():
+			var up := nrm[k] * ht
+			var n := nrm[k]
+			match strip:
+				0:
+					verts.append(pts[k] + up + side)
+					verts.append(pts[k] + up - side)
+				1:
+					verts.append(pts[k] - up - side)
+					verts.append(pts[k] - up + side)
+					n = -nrm[k]
+				2:
+					verts.append(pts[k] - up + side)
+					verts.append(pts[k] + up + side)
+					n = Vector3.RIGHT
+				_:
+					verts.append(pts[k] + up - side)
+					verts.append(pts[k] - up - side)
+					n = Vector3.LEFT
+			normals.append(n)
+			normals.append(n)
+		for k in pts.size() - 1:
+			var i := first + k * 2
+			idx.append_array(PackedInt32Array([i, i + 2, i + 1, i + 1, i + 2, i + 3]))
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_INDEX] = idx
+	_loop_mesh.clear_surfaces()
+	_loop_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
 
 ## Dünnen Zylinder (Länge 1 entlang Y) zwischen a und b spannen.
