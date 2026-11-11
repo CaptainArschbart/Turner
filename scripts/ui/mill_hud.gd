@@ -23,6 +23,8 @@ var _target_panel: PanelContainer
 var _targets: Label
 var _operating := false
 var _levers := false
+var _cnc := false          # CNC-Fräse: eigene Tastenhilfe, in der Pultansicht nur der Bildschirm
+var _pult := false
 
 
 ## Draufsicht auf das Rohteil: Sollmaße des Auftrags und Werkzeugposition.
@@ -96,6 +98,7 @@ void fragment() {
 
 
 func _ready() -> void:
+	_cnc = mill != null and mill.has_method("in_panel_view")
 	layer = 6
 	visible = false
 	_root = Control.new()
@@ -194,10 +197,14 @@ func _ready() -> void:
 	controls.add_child(_button("Spindel", func(): mill.toggle_spindle()))
 	controls.add_child(_button("Not-Halt", func(): mill.toggle_estop()))
 	controls.add_child(_button("Kühlung", func(): mill.toggle_coolant()))
-	_axis_btn = _button("Achse", func(): mill.cycle_hw_axis())
-	controls.add_child(_axis_btn)
-	controls.add_child(_button("Vorschub +", func(): mill.feed_selected(1)))
-	controls.add_child(_button("Vorschub -", func(): mill.feed_selected(-1)))
+	if _cnc:
+		controls.add_child(_button("Tür", func(): mill.toggle_door()))
+		controls.add_child(_button("Pultansicht", func(): mill.toggle_panel_view()))
+	if not _cnc:
+		_axis_btn = _button("Achse", func(): mill.cycle_hw_axis())
+		controls.add_child(_axis_btn)
+		controls.add_child(_button("Vorschub +", func(): mill.feed_selected(1)))
+		controls.add_child(_button("Vorschub -", func(): mill.feed_selected(-1)))
 	controls.add_child(_button("Rohteil", func(): mill.request_new_part()))
 	controls.add_child(_button("Abgeben", func(): mill.request_submit()))
 	_overlay.add_extra("Bedienknöpfe", controls)
@@ -287,6 +294,9 @@ func _notification(what: int) -> void:
 
 func _refresh_pages() -> void:
 	var b := func(a: String) -> String: return Settings.binding_text(a)
+	if _cnc:
+		_cnc_pages(b)
+		return
 	_overlay.set_pages([
 		{"title": "Verfahren", "rows": [
 			[b.call("lathe_z_minus"), "Tisch X-"],
@@ -340,9 +350,15 @@ func _process(_delta: float) -> void:
 		_lever_info.text = "Drehzahl %d /min (Stufe %s)    |    Vorschub %d mm/min (Stufe %s)\nGriff mit linker Maustaste ziehen, auf die Skala klicken oder Taste I/II drücken (nur bei stehender Spindel)    |    %s  Verlassen" % [
 			int(mill.rpm_set), ["I", "II"][mill.dial_stage(0)], int(mill.feed_set), ["I", "II"][mill.dial_stage(1)], Settings.binding_text("interact")]
 		return
-	_axis_btn.text = "Achse: %s" % ["X", "Y", "Z"][mill.hw_axis]
+	if _cnc:
+		_pult_sync()
+		if _pult:
+			return
+	if _axis_btn:
+		_axis_btn.text = "Achse: %s" % ["X", "Y", "Z"][mill.hw_axis]
 	var mark := func(axis: int) -> String: return "»" if mill.hw_axis == axis else " "
-	_dro.text = "%sX %9.3f mm\n%sY %9.3f mm\n%sZ %9.3f mm" % [mark.call(0), mill.tool_x, mark.call(1), mill.tool_y, mark.call(2), mill.tool_z]
+	var dp: Vector3 = mill.pos() if _cnc else Vector3(mill.tool_x, mill.tool_y, mill.tool_z)
+	_dro.text = "%sX %9.3f mm\n%sY %9.3f mm\n%sZ %9.3f mm" % [mark.call(0), dp.x, mark.call(1), dp.y, mark.call(2), dp.z]
 	_alert.visible = mill.estop
 	var t := mill.tool()
 	var vc := mill.cutting_speed()
@@ -377,3 +393,68 @@ func _vc_hint(vc: float) -> String:
 	if vc > float(cd["vmax"]):
 		return "(zu hoch)"
 	return "(gut)"
+
+
+## CNC-Fräse: Tasten der Arbeitsansicht und, getrennt, der Pultansicht (dort ist der Bildschirm die Bedienung).
+func _cnc_pages(b: Callable) -> void:
+	if _pult:
+		_overlay.set_pages([{"title": "Pult", "rows": [
+			["Maus", "Softkeys, Betriebsarten, Regler und Eingabefelder anklicken"],
+			["Tastatur", "in ein Eingabefeld schreiben, Enter = ENT, Esc gibt das Feld frei"],
+			[b.call("lathe_z_minus") + " / " + b.call("lathe_z_plus"), "Tippen X- / X+ (nur ohne Eingabefeld)"],
+			[b.call("cam_panel"), "Zurück zur Arbeitsansicht"],
+			[b.call("door_toggle"), "Kabinentür auf / zu"],
+			[b.call("emergency_stop"), "Not-Halt / quittieren"],
+			[b.call("interact"), "Maschine verlassen"],
+		]}])
+		return
+	_overlay.set_pages([
+		{"title": "Verfahren", "rows": [
+			[b.call("lathe_z_minus"), "Tisch X-"],
+			[b.call("lathe_z_plus"), "Tisch X+"],
+			[b.call("lathe_x_out"), "Kreuzschlitten Y-"],
+			[b.call("lathe_x_in"), "Kreuzschlitten Y+"],
+			[b.call("mill_z_down"), "%s senken (Z-)" % mill.head_title()],
+			[b.call("mill_z_up"), "%s heben (Z+)" % mill.head_title()],
+			[b.call("lathe_rapid"), "10-fach verfahren (halten)"],
+			["Mausrad", "Handrad drehen"],
+			[b.call("hw_axis"), "Handrad-Achse X / Y / Z"],
+			[b.call("hw_step"), "Handrad-Schritt 0,001 / 0,01 / 0,1 mm"],
+		]},
+		{"title": "Maschine", "rows": [
+			[b.call("cam_panel"), "Pultansicht mit der Steuerung (Bildschirm anklicken)"],
+			[b.call("door_toggle"), "Kabinentür auf / zu, auch Linksklick auf den Griff"],
+			[b.call("spindle_toggle"), "Spindel Start / Stopp"],
+			[b.call("coolant"), "Kühlung an / aus"],
+			[b.call("emergency_stop"), "Not-Halt / quittieren"],
+			["Linksklick", "Werkzeug von der Werkbank in die Spindel setzen (Tür offen)"],
+		]},
+		{"title": "Ansicht", "rows": [
+			["Rechte Maus", "Kamera drehen"],
+			["Rechte Maus + Rad", "Zoomen"],
+			["Mittlere Maus", "Kamera verschieben"],
+			[b.call("cam_top"), "Draufsicht"],
+			[b.call("cam_front"), "Vorderansicht"],
+			[b.call("cam_reset"), "Standardansicht"],
+		]},
+		{"title": "Sonstiges", "rows": [
+			[b.call("new_workpiece"), "Rohteil anfordern: Hinweis, im Testmodus gratis"],
+			[b.call("submit_part"), "Teil prüfen und abgeben"],
+			[b.call("show_drawing"), "Werkstückzeichnung ein / aus"],
+			[b.call("smoke"), "Zigarette anzünden / ausmachen"],
+			[b.call("interact"), "Maschine verlassen"],
+			["Alt links", "Alle Werte und Auftrag anzeigen (halten)"],
+		]},
+	])
+
+
+## Pultansicht: Positionsanzeige, Draufsicht und Auftrag ausblenden, sie verdecken den Bildschirm.
+func _pult_sync() -> void:
+	var now: bool = _operating and mill.in_panel_view()
+	for n in _op_nodes:
+		n.visible = _operating and not now
+	_chip.visible = _operating and not _overlay.visible
+	if now != _pult:
+		_pult = now
+		_overlay.set_open(false)
+		_refresh_pages()

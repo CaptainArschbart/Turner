@@ -76,7 +76,8 @@ func nc_start(p: Dictionary) -> bool:
 			continue
 		_ops.append({"op": "blk", "i": bi})
 		_ops.append({"op": "tool", "id": str(b["t"])})
-		_ops.append({"op": "spin", "v": float(b["v"]), "smax": float(hd["smax"]), "f": float(b["f"])})
+		_ops.append({"op": "spin", "v": float(b["v"]), "smax": float(hd["smax"]), "f": NcCam.block_feed(b),
+			"n": NcCam.block_rpm(b, float(hd["smax"]))})
 		_ops.append({"op": "kss", "on": int(hd["kss"]) == 1})
 		_ops.append({"op": "plan", "i": bi})
 	if _ops.is_empty():
@@ -186,9 +187,14 @@ func step(delta: float) -> void:
 			"spin":
 				_feed = float(op["f"])
 				lathe.set_feed(_feed)
-				lathe.set_vc(float(op["v"]))
 				lathe.set_rpm_limit(float(op["smax"]))
-				lathe.css = true
+				if float(op.get("n", 0.0)) > 0.0:
+					# Gewinde und Bohren: feste Drehzahl
+					lathe.css = false
+					lathe.set_rpm(float(op["n"]))
+				else:
+					lathe.set_vc(float(op["v"]))
+					lathe.css = true
 				lathe.spindle_on = true
 				_ops.pop_front()
 			"kss":
@@ -201,7 +207,7 @@ func step(delta: float) -> void:
 				_ops.pop_front()
 				var b: Dictionary = prog["blocks"][int(op["i"])]
 				var t := lathe.tool()
-				var r := NcCam.plan(b, prog, t, {"prof": lathe.profile, "pos": Vector2(lathe.tool_z, lathe.tool_x), "zlim": lathe.z_min(), "zoff": lathe.wcs_z})
+				var r := NcCam.plan(b, prog, t, {"prof": lathe.profile, "bore": lathe.bore, "pos": Vector2(lathe.tool_z, lathe.tool_x), "zlim": lathe.z_min(), "zoff": lathe.wcs_z})
 				if r.has("err"):
 					_fail("Satz %d: %s" % [int(op["i"]) + 1, r["err"]])
 					return
@@ -211,10 +217,11 @@ func step(delta: float) -> void:
 				var mv_ops: Array = []
 				var fin := bool(r.get("finish", false))
 				var fin_from := int(r.get("fin_from", -1))   # Komplett: ab hier Schlichtzüge
+				var sync := bool(r.get("sync", false))       # Gewinde: Vorschub an die Spindel gekoppelt
 				for k in moves.size():
 					var m: Array = moves[k]
 					mv_ops.append({"op": "mv", "z": m[0], "x": m[1], "r": m[2], "p": true,
-						"fin": fin or (fin_from >= 0 and k >= fin_from)})
+						"fin": fin or (fin_from >= 0 and k >= fin_from), "sync": sync and not bool(m[2])})
 				_ops = mv_ops + _ops
 			"mv":
 				t_left = _do_move(op, t_left)
@@ -259,9 +266,11 @@ func _do_move(op: Dictionary, t_left: float) -> float:
 			lathe.spindle_on = true       # nach NC-Stopp / Tür: Spindel wieder hochlaufen lassen
 		if lathe.spindle_speed < lathe.rpm() * 0.9:
 			return 0.0
-		spd = _feed * lathe.spindle_speed / 60.0 * override
+		# Gewindezug: Override wirkt nicht, sonst stimmt die Steigung nicht
+		spd = _feed * lathe.spindle_speed / 60.0 * (1.0 if bool(op.get("sync", false)) else override)
 		spd_cmd = spd
-		spd *= lathe.kss_speed()      # KSS OPTIMAL: Satz läuft schneller durch, Vorschub je Umdrehung bleibt
+		if not bool(op.get("sync", false)):
+			spd *= lathe.kss_speed()      # KSS OPTIMAL: Satz läuft schneller durch, Vorschub je Umdrehung bleibt
 	if spd <= 0.0:
 		return 0.0
 	var pos := Vector2(lathe.tool_z, lathe.tool_x)

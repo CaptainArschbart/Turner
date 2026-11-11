@@ -344,10 +344,14 @@ func _initialize() -> void:
 	ok(l2.hw_axis == 1, "Handrad-Achse Z")
 	panel._hw_axis_btns[0].pressed.emit()
 	ok(l2.hw_axis == 0, "Handrad-Achse X")
-	# Tippen im Vorschub, Shift 10-fach
+	# Tippen im Vorschub, Shift Eilgang in mm/min
 	l2.spindle_speed = 1000.0
 	ok(is_equal_approx(l2.jog_speed(), l2.feed() * 1000.0 / 60.0), "WASD fährt im eingestellten Vorschub (%.2f mm/s)" % l2.jog_speed())
-	ok(is_equal_approx(l2.jog_speed(true), l2.jog_speed() * 10.0), "Shift: 10-facher Vorschub")
+	ok(is_equal_approx(l2.jog_speed(true), l2.JOG_RAPID / 60.0), "Shift: Eilgang %d mm/min" % int(l2.JOG_RAPID))
+	l2.spindle_speed = 40.0
+	ok(is_equal_approx(l2.jog_speed(true), l2.JOG_RAPID / 60.0), "Eilgang hängt nicht von der Drehzahl ab")
+	ok(l2.feed_text(0.15) == "0,15 mm/U", "Ohne Shift zeigt die Anzeige mm/U")
+	l2.spindle_speed = 1000.0
 	# Auto-Vorschub läuft nach dem Verlassen weiter
 	l2.tool_z = 300.0
 	l2.tool_x = 80.0

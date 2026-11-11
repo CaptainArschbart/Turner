@@ -45,7 +45,8 @@ var size_id := "shelf_wide"
 var stack := 1                    # Paletten: so viele liegen hier übereinander
 var chips: ChipTray               # Eimer: Späne darin (gehört dem Eintrag in layout.shelves)
 var cargo := 0                    # Hubwagen: so viele Paletten liegen auf der Gabel
-var cargo_cross := false          # Hubwagen: Last liegt quer (lange Seite quer zur Gabel)
+var cargo_goods := ""             # Hubwagen: Lieferpalette (delivery_key) liegt auf der Gabel
+var cargo_cross := false         # Hubwagen: Last liegt quer (lange Seite quer zur Gabel)
 var lift := 0.0                   # Gabelstapler: Gabelhöhe
 var load_rot := 0                 # Gabelstapler: Drehung der Last zur Gabel in 90°-Schritten
 var fork_shift := 0.0             # Gabelstapler: Seitenschieber
@@ -89,6 +90,8 @@ func _build() -> void:
 			holder.rotation.y = PI / 2.0 if cargo_cross else 0.0
 			add_child(holder)
 			add_pallets(holder, cargo)
+			if cargo_goods != "" and world:
+				world.attach_goods(holder, cargo_goods)
 			load_h = JACK_LIFT + float(SIZES["pallet"]["height"]) * cargo
 		# Gleiche Fläche wie der Stellplan (Layout.shelf_rect), mit Last also breiter
 		var jr := jack_rect(cargo, cargo_cross)
@@ -117,11 +120,16 @@ func _build() -> void:
 ## damit die Zinken des Hubwagens von allen vier Seiten einfahren. Gestapelt: Nur die unterste Palette hat
 ## Öffnungen, darüber genügt ein Quader. Der Sichtstrahl trifft Deckplatte und Klötze (Meta "interact") selbst.
 func _pallet_colliders(n: int) -> void:
-	var h := float(SIZES["pallet"]["height"])
-	var f: Vector2 = SIZES["pallet"]["foot"]
 	var body := StaticBody3D.new()
 	add_child(body)
 	body.set_meta("interact", self)
+	pallet_shape(body, n)
+
+
+## Kollisionsformen einer Palette (Stapel von n) in body, Mitte über dem Ursprung. Auch für Lieferpaletten.
+static func pallet_shape(body: StaticBody3D, n: int) -> void:
+	var h := float(SIZES["pallet"]["height"])
+	var f: Vector2 = SIZES["pallet"]["foot"]
 	_box(body, Vector3(f.x, h - PALLET_BLOCK_H, f.y), Vector3(0, PALLET_BLOCK_H + (h - PALLET_BLOCK_H) * 0.5, 0))
 	for bx in PALLET_BLOCKS_X:
 		for bz in PALLET_BLOCKS_Z:

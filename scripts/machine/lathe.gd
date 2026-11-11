@@ -27,7 +27,7 @@ const Z_MAX := 900.0          # Drehlänge; Bett und Reitstock sind darauf abges
 const X_MAX := 170.0          # max. Radius Werkzeug-Bezugspunkt (mm)
 const X_MIN := -95.0          # über die Drehmitte hinaus (Anzeige X -190)
 const CLAMP_LEN := 30.0       # eingespannte Länge in den Backen (mm)
-const JOG_FAST := 10.0         # Shift: Verfahren mit 10-fachem Vorschub
+const JOG_RAPID := 4000.0      # Shift: Eilgang im Zeitvorschub (mm/min), unabhängig von Drehzahl und mm/U
 const RPM_STEPS := [40, 63, 100, 160, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3000]
 const FEED_STEPS := [0.03, 0.05, 0.08, 0.1, 0.12, 0.15, 0.2, 0.25, 0.3, 0.4]
 const RPM_MIN := 40.0
@@ -72,6 +72,16 @@ var clamp_depth := 0.0            # so viele mm des Teils stecken im Futter, Z =
 var flipped := false              # andersherum eingespannt, Aufträge prüfen immer in der Ausgangslage
 var machined := PackedByteArray()
 var rz := PackedFloat32Array()   # Rautiefe je Segment in µm
+# Innenprofil und Gewinde je Segment. Material liegt radial zwischen bore und profile; ein Segment
+# ohne Material hat profile = bore = 0. Gewinde: Tiefe (mm) und Steigung (mm) außen bzw. innen;
+# die Tiefe zählt vom Außen-Ø (profile) nach innen bzw. vom Kern-Ø (bore) nach außen.
+var bore := PackedFloat32Array()
+var rz_in := PackedFloat32Array()
+var thr := PackedFloat32Array()
+var thr_p := PackedFloat32Array()
+var thr_in := PackedFloat32Array()
+var thr_in_p := PackedFloat32Array()
+var _drill_run := 0.0            # mm am Stück gebohrt (ohne Entspänen)
 var tool_z := 200.0
 var tool_x := 45.0
 var tool_idx := 0
@@ -851,7 +861,42 @@ func part_state() -> Dictionary:
 	var mach: Array = []
 	for m in machined:
 		mach.append(m)
-	return {"stock_d": stock_d, "stock_len": stock_len, "material": material, "ceramic": ceramic_part, "profile": Array(profile), "machined": mach, "rz": Array(rz), "flipped": flipped}
+	var d := {"stock_d": stock_d, "stock_len": stock_len, "material": material, "ceramic": ceramic_part, "profile": Array(profile), "machined": mach, "rz": Array(rz), "flipped": flipped}
+	_store_inner(d)
+	return d
+
+
+## Innenprofil und Gewinde nur speichern, wenn es sie gibt (ältere Stände und Kundenteile haben keine).
+func _store_inner(d: Dictionary) -> void:
+	if has_inner():
+		d["bore"] = Array(bore)
+		d["rz_in"] = Array(rz_in)
+	if has_threads():
+		d["thr"] = Array(thr)
+		d["thr_p"] = Array(thr_p)
+		d["thr_in"] = Array(thr_in)
+		d["thr_in_p"] = Array(thr_in_p)
+
+
+## Innenprofil und Gewinde aus einem gespeicherten Stand; old_seg = Segmentlänge dort.
+func _load_inner(d: Dictionary, old_seg := SEG) -> void:
+	var arrs := {"bore": bore, "rz_in": rz_in, "thr": thr, "thr_p": thr_p, "thr_in": thr_in, "thr_in_p": thr_in_p}
+	for key in arrs:
+		var src = d.get(key, null)
+		var dst: PackedFloat32Array = arrs[key]
+		if not src is Array or (src as Array).is_empty():
+			continue
+		for i in dst.size():
+			var j := clampi(int(floor((i + 0.5) * SEG / old_seg)), 0, src.size() - 1)
+			dst[i] = float(src[j])
+		arrs[key] = dst
+	# PackedArrays sind Werttypen: zurückschreiben
+	bore = arrs["bore"]
+	rz_in = arrs["rz_in"]
+	thr = arrs["thr"]
+	thr_p = arrs["thr_p"]
+	thr_in = arrs["thr_in"]
+	thr_in_p = arrs["thr_in_p"]
 
 
 ## Teil aus part_state einspannen.
@@ -868,6 +913,7 @@ func load_part(d: Dictionary) -> void:
 			profile[i] = float(p[i])
 			machined[i] = int(m[i])
 			rz[i] = float(r[i])
+		_load_inner(d)
 		# Lage merken: Aufträge prüfen immer in der Ausgangslage
 		flipped = bool(d.get("flipped", false))
 	_dirty = true
@@ -909,21 +955,29 @@ func _show_clamp() -> void:
 func _reverse_part() -> void:
 	var n := profile.size()
 	var first := n - 1
-	while first > 0 and profile[first] <= 0.05:
+	while first > 0 and not has_mat(first):
 		first -= 1
-	var p := PackedFloat32Array()
-	p.resize(n)
 	var m := PackedByteArray()
 	m.resize(n)
-	var r := PackedFloat32Array()
-	r.resize(n)
 	for i in first + 1:
-		p[i] = profile[first - i]
 		m[i] = machined[first - i]
-		r[i] = rz[first - i]
-	profile = p
 	machined = m
-	rz = r
+	profile = _reversed(profile, first)
+	rz = _reversed(rz, first)
+	bore = _reversed(bore, first)
+	rz_in = _reversed(rz_in, first)
+	thr = _reversed(thr, first)
+	thr_p = _reversed(thr_p, first)
+	thr_in = _reversed(thr_in, first)
+	thr_in_p = _reversed(thr_in_p, first)
+
+
+func _reversed(a: PackedFloat32Array, first: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	out.resize(a.size())
+	for i in mini(first + 1, a.size()):
+		out[i] = a[first - i]
+	return out
 
 
 # ======================================================================= Aufbau
@@ -1987,8 +2041,12 @@ func _build_tool_visual(t: Dictionary, insert_only := false) -> Node3D:
 	n.visible = false
 	var poly: PackedVector2Array = t["poly"]
 	var plate := LatheTools.scalable(str(t["id"]))
+	var kind := LatheTools.kind(t)
 	var thick := 0.00476 * float(t.get("scale", 1.0)) if plate else 0.0045 * TOOL_K
-	if plate or not insert_only:
+	if kind == "drill":
+		if not insert_only:
+			_build_drill_visual(n, t)
+	elif plate or not insert_only:
 		var insert := MeshInstance3D.new()
 		insert.name = "Platte"
 		insert.mesh = LatheTools.extrude(poly, AXIS_H - thick, AXIS_H, 0.07 if plate else 0.0)
@@ -2000,6 +2058,21 @@ func _build_tool_visual(t: Dictionary, insert_only := false) -> Node3D:
 		var r := 0.0003 * LatheTools.inradius(poly)
 		Build.cyl(n, r, 0.0004, Vector3(c.x, AXIS_H - 0.0001, c.y), Build.mat(Color(0.06, 0.06, 0.07), 0.7), Build.AXIS_Y, false, 16)
 		Build.cyl(n, r * 0.62, 0.0004, Vector3(c.x, AXIS_H, c.y), Build.mat(Color(0.5, 0.52, 0.55), 0.35, 0.9), Build.AXIS_Y, false, 6)
+	if t.has("bar") and not insert_only:
+		# Bohrstange: Rundstab unter der Platte bis zum Halter (echtes Maß, sie muss in die Bohrung passen)
+		var bar: Rect2 = t["bar"]
+		var rad := bar.size.y * 0.5
+		var cyl := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = rad * 0.001
+		cm.bottom_radius = rad * 0.001
+		cm.height = bar.size.x * 0.001
+		cm.radial_segments = 20
+		cyl.mesh = cm
+		cyl.material_override = Build.mat(Color(0.2, 0.21, 0.24), 0.5, 0.8)
+		cyl.rotation.z = PI / 2
+		cyl.position = Vector3((bar.position.x + bar.size.x * 0.5) * 0.001, AXIS_H - 0.0015, (bar.position.y + rad) * 0.001)
+		n.add_child(cyl)
 	if insert_only:
 		return n
 	# Klemmhalter-Schaft bis in den Schnellwechselhalter
@@ -2009,7 +2082,7 @@ func _build_tool_visual(t: Dictionary, insert_only := false) -> Node3D:
 	var ext: float = float(t["ext"]) * TOOL_K
 	var w := clampf(zmax - zmin, 3.0 * TOOL_K, 12.0 * TOOL_K)
 	var zc := (zmin + zmax) * 0.5
-	var start := top * 0.55
+	var start := top * 0.55 if not t.has("bar") else (t["bar"] as Rect2).end.y - 1.0
 	var holder := Build.mat(Color(0.32, 0.34, 0.38), 0.4, 0.8)
 	var hn: Node3D = null
 	if model:
@@ -2035,9 +2108,39 @@ func _build_tool_visual(t: Dictionary, insert_only := false) -> Node3D:
 		var length := (model.shank_end_mm if model else 175.0) + ext - start
 		Build.box(n, Vector3(w * 0.001, 0.012 * TOOL_K, length * 0.001), Vector3(zc * 0.001, AXIS_H - thick - 0.006 * TOOL_K, (start + length * 0.5) * 0.001), holder)
 	# Spannpratze über der Platte
-	if t["id"] != "T6":
+	if t["id"] != "T6" and kind in ["", "thread_out"]:
 		Build.box(n, Vector3(w * 0.0008, 0.004 * TOOL_K, 0.006 * TOOL_K), Vector3(zc * 0.001, AXIS_H + 0.002 * TOOL_K, (top * 0.7) * 0.001), holder)
 	return n
+
+
+## Spiralbohrer: Kegelspitze und Schaft entlang der Drehachse (Spitze im Ursprung, Schaft in +Z).
+func _build_drill_visual(n: Node3D, t: Dictionary) -> void:
+	var r := float(t["dia"]) * 0.5 * 0.001
+	var h := r / tan(deg_to_rad(59.0))
+	var length := float(t["zmax"]) * 0.001
+	var m := Build.mat(t["color"], 0.35, 0.9)
+	var tip := MeshInstance3D.new()
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.0
+	cone.bottom_radius = r
+	cone.height = h
+	cone.radial_segments = 20
+	tip.mesh = cone
+	tip.material_override = m
+	tip.rotation.z = PI / 2          # Spitze zeigt zum Futter (-X)
+	tip.position = Vector3(h * 0.5, AXIS_H, 0.0)
+	n.add_child(tip)
+	var body := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = r
+	cm.bottom_radius = r
+	cm.height = length - h
+	cm.radial_segments = 20
+	body.mesh = cm
+	body.material_override = m
+	body.rotation.z = PI / 2
+	body.position = Vector3((h + length) * 0.5, AXIS_H, 0.0)
+	n.add_child(body)
 
 
 ## Vereinfachtes Firmenzeichen: Quadratrahmen mit Schrägbalken (size = Kantenlänge, m).
@@ -2468,6 +2571,8 @@ func _shank_span(t: Dictionary) -> Vector2:
 	var w := model.shank_box.size.x if model and model.shank_box.size.x > 1.0 else 20.0 * TOOL_K
 	var zmin: float = float(t["zmin"])
 	var zmax: float = float(t["zmax"])
+	if LatheTools.kind(t) in ["bore", "thread_in", "drill"]:
+		return Vector2(zmax - w, zmax)    # Bohrstange / Bohrer: Halter am hinteren Ende
 	w = maxf(w, zmax - zmin)
 	match str(t["ref"]):
 		"right":
@@ -2673,6 +2778,42 @@ func hand_click(p: Node) -> void:
 		p.set_held(self, old)
 
 
+## Was ein Klick auf diesen Halterplatz im Werkzeughalter-Fenster tut ("" = nichts möglich).
+func slot_action_label(slot: int, held: Dictionary) -> String:
+	var here := str(holder[slot])
+	if held.is_empty():
+		if here == "" or (slot == active_slot and tool_stock == null):
+			return ""
+		return "In die Hand"
+	if held["machine"] != MACHINE_ID:
+		return ""
+	return "Einspannen" if here == "" else "Tauschen"
+
+
+## Werkzeug aus der Hand in diesen Platz einspannen, mit freier Hand herausnehmen, sonst tauschen.
+func slot_action(slot: int, p: Node) -> bool:
+	slot = posmod(slot, SLOTS)
+	var held: Dictionary = p.held
+	var here := str(holder[slot])
+	if held.is_empty():
+		if here == "":
+			return false
+		if mount_tool(slot, ""):
+			p.set_held(self, here)
+			return true
+		return false
+	if held["machine"] != MACHINE_ID:
+		_warn("%s passt nicht in den Halter." % held["name"])
+		return false
+	if mount_tool(slot, str(held["id"])):
+		if here == "":
+			p.clear_held()
+		else:
+			p.set_held(self, here)
+		return true
+	return false
+
+
 # ======================================================================= Werkstück
 
 ## Werkstoff des eingespannten Rohteils: bestimmt Farbe, Späne und Schnittdaten.
@@ -2702,6 +2843,7 @@ func clear_workpiece() -> void:
 	profile.fill(0.0)
 	machined.fill(0)
 	rz.fill(0.0)
+	_zero_inner()
 	auto_feed = false
 	auto_feed_x = false
 	if workpiece_mi:
@@ -2728,6 +2870,7 @@ func new_workpiece(d: float, length: float) -> void:
 	rz = PackedFloat32Array()
 	rz.resize(n)
 	rz.fill(0.0)
+	_zero_inner()
 	auto_feed = false
 	auto_feed_x = false
 	tool_x = maxf(tool_x, d * 0.5 + 10.0)
@@ -2757,42 +2900,84 @@ func _seg_color(i: int) -> Color:
 	return _cut_col.lerp(_rough_col, q)
 
 
-## Rotationskörper aus den Segmenten i0..i1 (optional mit eingespanntem Bereich).
+func _seg_color_in(i: int) -> Color:
+	var q := clampf(snappedf(rz_in[i], 1.0) / 25.0, 0.0, 1.0)
+	return _cut_col.lerp(_rough_col, q)
+
+
+## Punkt der Umrisslinie für _make_mesh: [Lage (z, r), Farbe, Gewindetiefe (> 0 außen, < 0 innen), Steigung].
+func _mp(out: Array, p: Vector2, c: Color, depth := 0.0, pitch := 0.0) -> void:
+	var n := out.size()
+	# kollineare Punkte gleicher Farbe zusammenfassen (nicht im Gewinde)
+	if depth == 0.0 and n >= 2 and float(out[n - 1][2]) == 0.0 and float(out[n - 2][2]) == 0.0 \
+			and out[n - 1][1] == c and out[n - 2][1] == c:
+		var d1: Vector2 = out[n - 1][0] - out[n - 2][0]
+		var d2: Vector2 = p - out[n - 1][0]
+		if absf(d1.cross(d2)) < 0.00005 and d1.dot(d2) > 0.0:
+			out[n - 1][0] = p
+			return
+	out.append([p, c, depth, pitch])
+
+
+## Rotationskörper aus den Segmenten i0..i1 (optional mit eingespanntem Bereich). Die Umrisslinie
+## läuft außen von links nach rechts, die rechte Stirnfläche hinab und - wenn das Teil dort eine
+## Bohrung hat - in der Bohrung zurück bis zu ihrem Grund (bzw. bis links durch, Rohr).
+## Gewindegänge (außen wie innen) werden als Schraubenlinie in die Ringe eingerechnet.
 func _make_mesh(i0: int, i1: int, with_clamp: bool) -> ArrayMesh:
-	var pts := PackedVector2Array()
-	var cols := PackedColorArray()
-	if with_clamp:
-		var r0 := stock_d * 0.5
-		pts.append(Vector2(-CLAMP_LEN, 0.0)); cols.append(_raw_col)
-		pts.append(Vector2(-CLAMP_LEN, r0)); cols.append(_raw_col)
-		pts.append(Vector2(0.0, r0)); cols.append(_raw_col)
-	else:
-		pts.append(Vector2(i0 * SEG, 0.0)); cols.append(_cut_col)
-		pts.append(Vector2(i0 * SEG, profile[i0])); cols.append(_cut_col)
+	_sync_inner()
 	var last := -1
 	for i in range(i0, i1 + 1):
-		var r := profile[i]
-		if r <= 0.02:
+		if not has_mat(i):
 			break
-		var p := Vector2((i + 0.5) * SEG, r)
-		var c := _seg_color(i)
-		# kollineare Punkte zusammenfassen
-		var n := pts.size()
-		if n >= 2 and cols[n - 1] == c and cols[n - 2] == c:
-			var d1 := pts[n - 1] - pts[n - 2]
-			var d2 := p - pts[n - 1]
-			if absf(d1.cross(d2)) < 0.00005 and d1.dot(d2) > 0.0:
-				pts[n - 1] = p
-				last = i
-				continue
-		pts.append(p)
-		cols.append(c)
 		last = i
+	# von rechts offene Bohrung: b_lo = ihr linkes Ende
+	var b_lo := -1
+	if last >= 0 and bore[last] > 0.05:
+		b_lo = last
+		while b_lo - 1 >= i0 and bore[b_lo - 1] > 0.05 and has_mat(b_lo - 1):
+			b_lo -= 1
+	var tube := b_lo >= 0 and b_lo == i0
+	var out: Array = []
+	if with_clamp:
+		var r0 := stock_d * 0.5
+		var b0 := bore[0] if tube else 0.0
+		_mp(out, Vector2(-CLAMP_LEN, b0), _raw_col)
+		_mp(out, Vector2(-CLAMP_LEN, r0), _raw_col)
+		_mp(out, Vector2(0.0, r0), _raw_col)
+	else:
+		_mp(out, Vector2(i0 * SEG, bore[i0] if tube else 0.0), _cut_col)
+		_mp(out, Vector2(i0 * SEG, profile[i0]), _cut_col)
+	for i in range(i0, last + 1):
+		var c := _seg_color(i)
+		if thr[i] > 0.02 and thr_p[i] > 0.05:
+			var nsub := maxi(1, int(ceil(SEG / (thr_p[i] / 8.0))))
+			for k in nsub:
+				_mp(out, Vector2((i + (k + 0.5) / nsub) * SEG, profile[i]), c, thr[i], thr_p[i])
+			continue
+		_mp(out, Vector2((i + 0.5) * SEG, profile[i]), c)
 	if last >= 0:
 		var ze := (last + 1) * SEG
 		var end_col := _raw_col if (ze >= stock_len - 0.01 and machined[last] == 0) else _cut_col
-		pts.append(Vector2(ze, profile[last])); cols.append(cols[cols.size() - 1])
-		pts.append(Vector2(ze, 0.0)); cols.append(end_col)
+		_mp(out, Vector2(ze, profile[last]), out[out.size() - 1][1])
+		if b_lo < 0:
+			_mp(out, Vector2(ze, 0.0), end_col)
+		else:
+			_mp(out, Vector2(ze, bore[last]), end_col)
+			var c := _cut_col
+			for i in range(last, b_lo - 1, -1):
+				c = _seg_color_in(i)
+				if thr_in[i] > 0.02 and thr_in_p[i] > 0.05:
+					var nsub := maxi(1, int(ceil(SEG / (thr_in_p[i] / 8.0))))
+					for k in nsub:
+						_mp(out, Vector2((i + 1 - (k + 0.5) / nsub) * SEG, bore[i]), c, -thr_in[i], thr_in_p[i])
+					continue
+				_mp(out, Vector2((i + 0.5) * SEG, bore[i]), c)
+			_mp(out, Vector2(b_lo * SEG, bore[b_lo]), c)
+			if tube:
+				if with_clamp:
+					_mp(out, Vector2(-CLAMP_LEN, bore[0]), _raw_col)
+			else:
+				_mp(out, Vector2(b_lo * SEG, 0.0), c)      # Bohrungsgrund
 
 	var s := 0.001
 	var verts := PackedVector3Array()
@@ -2800,11 +2985,12 @@ func _make_mesh(i0: int, i1: int, with_clamp: bool) -> ArrayMesh:
 	var vcols := PackedColorArray()
 	var idx := PackedInt32Array()
 	var band_n: Array[Vector2] = []
-	for k in range(pts.size() - 1):
-		var d := pts[k + 1] - pts[k]
+	for k in range(out.size() - 1):
+		var d: Vector2 = out[k + 1][0] - out[k][0]
 		band_n.append(Vector2(-d.y, d.x).normalized() if d.length() > 0.000001 else Vector2(0, 1))
+	var thr_ring := {}
 	var prev_ring := -1
-	for k in range(pts.size() - 1):
+	for k in range(out.size() - 1):
 		var na := band_n[k]
 		var nb := band_n[k]
 		var smooth_a := k > 0 and band_n[k - 1].dot(band_n[k]) > 0.85
@@ -2813,13 +2999,27 @@ func _make_mesh(i0: int, i1: int, with_clamp: bool) -> ArrayMesh:
 			na = (band_n[k - 1] + band_n[k]).normalized()
 		if smooth_b:
 			nb = (band_n[k + 1] + band_n[k]).normalized()
-		var ra := prev_ring if (smooth_a and prev_ring >= 0) else _ring(verts, norms, vcols, pts[k], na, cols[k + 1], s)
-		var rb := _ring(verts, norms, vcols, pts[k + 1], nb, cols[k + 1], s)
+		var col: Color = out[k + 1][1]
+		var ra := -1
+		var rb := -1
+		if float(out[k][2]) != 0.0:
+			if not thr_ring.has(k):
+				thr_ring[k] = _ring_thread(verts, norms, vcols, out[k][0], float(out[k][2]), float(out[k][3]), out[k][1], s)
+			ra = thr_ring[k]
+		else:
+			ra = prev_ring if (smooth_a and prev_ring >= 0) else _ring(verts, norms, vcols, out[k][0], na, col, s)
+		if float(out[k + 1][2]) != 0.0:
+			if not thr_ring.has(k + 1):
+				thr_ring[k + 1] = _ring_thread(verts, norms, vcols, out[k + 1][0], float(out[k + 1][2]), float(out[k + 1][3]), col, s)
+			rb = thr_ring[k + 1]
+			prev_ring = -1
+		else:
+			rb = _ring(verts, norms, vcols, out[k + 1][0], nb, col, s)
+			prev_ring = rb if smooth_b else -1
 		for q in RING:
 			var q2 := (q + 1) % RING
 			idx.append(ra + q); idx.append(rb + q); idx.append(rb + q2)
 			idx.append(ra + q); idx.append(rb + q2); idx.append(ra + q2)
-		prev_ring = rb if smooth_b else -1
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
@@ -2842,9 +3042,34 @@ func _ring(verts: PackedVector3Array, norms: PackedVector3Array, vcols: PackedCo
 	return base
 
 
+## Ring im Gewinde: Radius je Winkel als Schraubenlinie (Rechtsgewinde). depth > 0: Außengewinde,
+## Gang von p.y nach innen; depth < 0: Innengewinde, Gang vom Kern-Ø p.y nach außen.
+func _ring_thread(verts: PackedVector3Array, norms: PackedVector3Array, vcols: PackedColorArray,
+		p: Vector2, depth: float, pitch: float, c: Color, s: float) -> int:
+	var base := verts.size()
+	var d := absf(depth)
+	for q in RING:
+		var u := fposmod(p.x / pitch - float(q) / RING, 1.0)
+		# Dreieck mit kleinen Abflachungen an Spitze und Grund (0 = Spitze bzw. Kern, 1 = Grund)
+		var tri := clampf((1.0 - absf(2.0 * u - 1.0)) * 1.12 - 0.06, 0.0, 1.0)
+		var slope := 2.24 * d / pitch * (1.0 if u < 0.5 else -1.0)
+		var r: float
+		var n2: Vector2
+		if depth > 0.0:
+			r = p.y - d * tri
+			n2 = Vector2(slope, 1.0).normalized()
+		else:
+			r = p.y + d * tri
+			n2 = Vector2(slope, -1.0).normalized()
+		verts.append(Vector3(p.x * s, _cos[q] * r * s, _sin[q] * r * s))
+		norms.append(Vector3(n2.x, _cos[q] * n2.y, _sin[q] * n2.y))
+		vcols.append(c)
+	return base
+
+
 func part_length() -> float:
 	for i in range(profile.size() - 1, -1, -1):
-		if profile[i] > 0.05:
+		if has_mat(i):
 			return (i + 1) * SEG
 	return 0.0
 
@@ -2853,7 +3078,7 @@ func is_untouched() -> bool:
 	for m in machined:
 		if m:
 			return false
-	return true
+	return not has_inner()
 
 
 func radius_at(z: float) -> float:
@@ -2861,6 +3086,66 @@ func radius_at(z: float) -> float:
 	if i < 0 or i >= profile.size():
 		return 0.0
 	return profile[i]
+
+
+## Bohrungsradius bei z (0 = voll).
+func bore_at(z: float) -> float:
+	var i := int(floor(z / SEG))
+	if i < 0 or i >= bore.size():
+		return 0.0
+	return bore[i]
+
+
+## Steht in Segment i Material?
+func has_mat(i: int) -> bool:
+	if i < 0 or i >= profile.size():
+		return false
+	return profile[i] > 0.05 and (i >= bore.size() or profile[i] > bore[i] + 0.02)
+
+
+func has_inner() -> bool:
+	for b in bore:
+		if b > 0.05:
+			return true
+	return false
+
+
+func has_threads() -> bool:
+	for i in thr.size():
+		if thr[i] > 0.0 or thr_in[i] > 0.0:
+			return true
+	return false
+
+
+## Innenprofil und Gewinde leer anlegen (so lang wie das Außenprofil).
+func _zero_inner() -> void:
+	var n := profile.size()
+	bore = _zeros(n)
+	rz_in = _zeros(n)
+	thr = _zeros(n)
+	thr_p = _zeros(n)
+	thr_in = _zeros(n)
+	thr_in_p = _zeros(n)
+
+
+func _sync_inner() -> void:
+	if bore.size() != profile.size() or thr_in_p.size() != profile.size():
+		_zero_inner()
+
+
+static func _zeros(n: int) -> PackedFloat32Array:
+	var a := PackedFloat32Array()
+	a.resize(n)
+	a.fill(0.0)
+	return a
+
+
+## Segment i ist ganz zerspant (Wand durchgestochen bzw. abgedreht).
+func _clear_seg(i: int) -> void:
+	profile[i] = 0.0
+	bore[i] = 0.0
+	thr[i] = 0.0
+	thr_in[i] = 0.0
 
 
 # ======================================================================= Zerspanung
@@ -2873,10 +3158,13 @@ func _seg_range(z: float) -> Vector2i:
 
 
 ## Größte radiale Eingriffstiefe der Platte an Position (z, x). 0 = kein Kontakt.
+## Material liegt radial zwischen Bohrung und Außenprofil.
 func _engagement(z: float, x: float) -> float:
 	if not has_cutter():
 		return 0.0
 	var t := tool()
+	if LatheTools.kind(t) != "":
+		return float(_contact(t, z, x)["depth"])
 	var rg := _seg_range(z)
 	var m := 0.0
 	for i in range(rg.x, rg.y + 1):
@@ -2888,16 +3176,19 @@ func _engagement(z: float, x: float) -> float:
 			continue
 		if x + float(t["top"]) <= 0.0:
 			continue   # Platte ganz hinter der Drehmitte (siehe _back_contact)
-		m = maxf(m, r - maxf(x + e, 0.0))
+		var b := bore[i] if i < bore.size() else 0.0
+		m = maxf(m, r - maxf(x + e, maxf(b, 0.0)))
 	return m
 
 
 ## Hinter der Drehmitte (X < 0) läuft das Werkstück von unten gegen die Platte: jede Berührung
-## dort ist ein Plattenbruch. Material belegt radial [-r, r], die Platte [x + Hüllkurve, x + Höhe].
+## dort ist ein Plattenbruch. Material belegt radial [-r, -Bohrung], die Platte [x + Hüllkurve, x + Höhe].
 func _back_contact(z: float, x: float) -> bool:
 	if x >= 0.0:
 		return false
 	var t := tool()
+	if LatheTools.kind(t) != "":
+		return false   # Bohrer und Innenwerkzeuge: siehe _contact
 	var rg := _seg_range(z)
 	var hi := x + float(t["top"])
 	for i in range(rg.x, rg.y + 1):
@@ -2907,9 +3198,68 @@ func _back_contact(z: float, x: float) -> bool:
 		var e := LatheTools.env_min(t, i * SEG - z, (i + 1) * SEG - z)
 		if e == INF:
 			continue
-		if x + e < -0.05 and r > -hi:
+		var b := bore[i] if i < bore.size() else 0.0
+		if x + e < -b - 0.05 and r > -hi:
 			return true
 	return false
+
+
+## Bohrer, Innen- und Gewindewerkzeuge an (z, x): {"depth": Eingriff, der Material abnimmt (mm),
+## "crash": Text, wenn etwas anderes als die Schneide das Material berührt, "segs": [[i, Grenze]]}.
+## Bohrung: Platte von unten an [bore, profile]; Gewinde: Gangtiefe statt Profiländerung.
+func _contact(t: Dictionary, z: float, x: float) -> Dictionary:
+	var k := LatheTools.kind(t)
+	var rg := _seg_range(z)
+	var depth := 0.0
+	var segs: Array = []
+	var cut_len := float(t.get("cut_len", INF))
+	for i in range(rg.x, rg.y + 1):
+		if not has_mat(i):
+			continue
+		var r := profile[i]
+		var b := bore[i]
+		var lo := i * SEG - z
+		var hi := (i + 1) * SEG - z
+		match k:
+			"drill":
+				var w := LatheTools.env_max(t, lo, hi)
+				if w == -INF:
+					continue
+				if x + w <= b + 0.0001 and x - w >= -b - 0.0001:
+					continue   # passt in die vorhandene Bohrung
+				if absf(x) > 0.15:
+					return {"depth": 0.0, "crash": "Bohrer außermittig im Material (X muss 0 sein)", "segs": []}
+				depth = maxf(depth, minf(w, r) - b)
+				segs.append([i, w])
+			"bore", "thread_in":
+				var up := LatheTools.env_max(t, lo, hi)
+				var dn := LatheTools.env_min(t, lo, hi)
+				if up == -INF or dn == INF:
+					continue
+				var top := x + up
+				var bot := x + dn
+				var far := bot < -b - 0.0001 and x + up > -r     # Stange an der Gegenseite der Bohrung
+				if far:
+					return {"depth": 0.0, "crash": "%s stößt an die Bohrungswand (gegenüber)" % t["short"], "segs": []}
+				if top <= b + 0.0001 or bot >= r:
+					continue
+				if bot >= b - 0.0001 or lo > cut_len:
+					return {"depth": 0.0, "crash": "%s stößt an das Werkstück" % t["short"], "segs": []}
+				if k == "bore":
+					depth = maxf(depth, minf(top, r) - b)
+					segs.append([i, top])
+				elif absf((i + 0.5) * SEG - z) <= 2.0:
+					var dd := top - b
+					depth = maxf(depth, dd - thr_in[i])
+					segs.append([i, dd])
+			"thread_out":
+				var e := LatheTools.env_min(t, lo, hi)
+				if e == INF or x + e >= r:
+					continue
+				var dd := r - (x + e)
+				depth = maxf(depth, dd - thr[i])
+				segs.append([i, dd])
+	return {"depth": maxf(depth, 0.0), "crash": "", "segs": segs}
 
 
 func move_tool(dz: float, dx: float, rapid := false, speed := -1.0) -> void:
@@ -2945,6 +3295,12 @@ func _step_tool(sz: float, sx: float, rapid: bool, speed: float) -> bool:
 		else:
 			_crash("Kollision: %s! NOT-HALT ausgelöst." % clash)
 		return false
+	if LatheTools.kind(t) != "":
+		if not _step_special(t, nz, nx, sz, sx, rapid, speed):
+			return false
+		tool_z = nz
+		tool_x = nx
+		return true
 	var depth := _engagement(nz, nx)
 	if depth > 0.0001:
 		if spindle_speed < 30.0:
@@ -3048,16 +3404,20 @@ func _rz_for(t: Dictionary, f: float, ap: float, vc: float, kss: bool, manual: b
 	return surface_rz(t, f, ap, vc, kss, manual, mat)
 
 
+## Vorschub je Umdrehung aus der Verfahrgeschwindigkeit; Handrad: aus dem Kurbeltempo.
+func _feed_per_rev(speed: float) -> float:
+	if speed > 0.0:
+		return speed / maxf(spindle_speed / 60.0, 0.1)
+	if _hw_speed > 0.0:
+		return _hw_speed / maxf(spindle_speed / 60.0, 0.1)
+	return 0.05
+
+
 func _cut(z: float, x: float, speed: float, depth := 0.0, axial := true) -> void:
 	var t := tool()
 	var rg := _seg_range(z)
-	# Vorschub pro Umdrehung aus der Verfahrgeschwindigkeit; Handrad: aus dem Kurbeltempo
 	var manual := speed <= 0.0
-	var f := 0.05
-	if speed > 0.0:
-		f = speed / maxf(spindle_speed / 60.0, 0.1)
-	elif _hw_speed > 0.0:
-		f = _hw_speed / maxf(spindle_speed / 60.0, 0.1)
+	var f := _feed_per_rev(speed)
 	var vc := PI * maxf(x * 2.0, 0.0) * spindle_speed / 1000.0
 	var mp := Materials.turn_params(material, _vc_top(x))
 	# Stumpfe Schneiden machen die Oberfläche schlechter
@@ -3065,6 +3425,7 @@ func _cut(z: float, x: float, speed: float, depth := 0.0, axial := true) -> void
 	var sr := _rz_for(t, f, depth if axial else 0.0, vc, coolant, manual, mp)
 	var rz_val: float = sr["rz"]
 	var removed := 0.0
+	var inner := bore.size() == profile.size()
 	for i in range(rg.x, rg.y + 1):
 		var r := profile[i]
 		if r <= 0.0:
@@ -3078,13 +3439,26 @@ func _cut(z: float, x: float, speed: float, depth := 0.0, axial := true) -> void
 		if lim < 0.3:
 			lim = 0.0   # Restzapfen in der Drehmitte bricht ab
 		if lim < r:
-			removed += r * r - lim * lim
-			profile[i] = lim
+			var b := bore[i] if inner else 0.0
+			if inner and b > 0.0 and lim <= b + 0.02:
+				removed += r * r - b * b
+				_clear_seg(i)       # Wand eines Rohrs ganz abgedreht
+			else:
+				removed += r * r - lim * lim
+				profile[i] = lim
+				if inner and thr[i] > 0.0:
+					thr[i] = maxf(thr[i] - (r - lim), 0.0)   # Gewinde mit abgedreht
 			machined[i] = 1
 			rz[i] = rz_val
 	if removed <= 0.0:
 		return
-	last_rz = rz_val
+	_after_cut(f, vc, mp, sr, removed, manual)
+	_check_parted(rg)
+
+
+## Gemeinsamer Abschluss eines Schnitts: Oberfläche, Hitze, Verschleiß, Späne.
+func _after_cut(f: float, vc: float, mp: Dictionary, sr: Dictionary, removed: float, manual: bool) -> void:
+	last_rz = float(sr["rz"])
 	last_rz_hint = str(sr["hint"])
 	_cut_t = 0.15
 	_heat_over = vc / maxf(float(mp["vhigh"]), 0.1)
@@ -3096,23 +3470,145 @@ func _cut(z: float, x: float, speed: float, depth := 0.0, axial := true) -> void
 		_warn("Kaltverfestigung! Vorschub zu klein für %s, die Schneide reibt." % grp["title"])
 	_cut_level = clampf(_cut_level + removed * 0.0015, 0.0, 1.0)
 	_dirty = true
-	# Abstechen: durchtrennte Verbindung -> Rest fällt in die Spänewanne
+
+
+## Abstechen: durchtrennte Verbindung -> Rest fällt in die Spänewanne.
+func _check_parted(rg: Vector2i) -> void:
 	for i in range(rg.x, rg.y + 1):
-		if profile[i] <= 0.05 and i + 1 < profile.size() and profile[i + 1] > 0.05:
+		if not has_mat(i) and has_mat(i + 1):
 			_drop_piece(i + 1)
 			break
+
+
+## Bewegung mit Bohrer, Innen- oder Gewindewerkzeug (siehe _contact). false = blockiert.
+func _step_special(t: Dictionary, nz: float, nx: float, sz: float, sx: float, rapid: bool, speed: float) -> bool:
+	_sync_inner()
+	var k := LatheTools.kind(t)
+	var c := _contact(t, nz, nx)
+	if str(c["crash"]) != "":
+		if spindle_speed < 30.0:
+			_warn("%s." % c["crash"])
+		else:
+			_crash("Kollision: %s! NOT-HALT ausgelöst." % c["crash"])
+		return false
+	if sz > 0.0005:
+		_drill_run = 0.0       # zurückziehen: Späne kommen frei
+	var depth := float(c["depth"])
+	if depth <= 0.0001:
+		return true
+	if spindle_speed < 30.0:
+		_warn("Spindel steht! Werkzeug berührt das Werkstück.")
+		return false
+	if rapid:
+		_crash("Kollision im Eilgang! NOT-HALT ausgelöst.")
+		return false
+	var ap_f := float(Materials.group_of(material)["ap"])
+	match k:
+		"drill":
+			if absf(sx) > 0.0005:
+				_crash("Bohrer seitlich belastet - abgebrochen. NOT-HALT!")
+				return false
+			if sz < 0.0:
+				_drill_run -= sz
+			if _drill_run > 5.0 * float(t["dia"]):
+				_warn("Späne stauen sich im Bohrloch - Bohrer zurückziehen (Entspänen).")
+				return false
+		"bore":
+			var side := absf(sz) > absf(sx)
+			var limit: float = float(t["max_dz"] if side else t["max_dx"]) * ap_f
+			if depth > limit + 0.05 and not (nc_finish and side):
+				_warn("Spanabnahme zu groß für %s (max. %.1f mm)." % [t["short"], limit])
+				return false
+		_:
+			var lim_t := float(t["max_dx"]) * ap_f
+			if depth > lim_t + 0.05:
+				_warn("Zustellung zu groß für %s (max. %.1f mm je Schnitt)." % [t["short"], lim_t])
+				return false
+	_cut_special(t, nz, nx, speed, depth, c["segs"])
+	return true
+
+
+## Schnitt mit Bohrer, Bohrstange oder Gewindemeißel: segs aus _contact ([Segment, Grenze]).
+## Bohren/Innendrehen weiten die Bohrung, Gewindemeißel vertiefen den Gang (Steigung = Vorschub).
+func _cut_special(t: Dictionary, z: float, x: float, speed: float, depth: float, segs: Array) -> void:
+	var k := LatheTools.kind(t)
+	var manual := speed <= 0.0
+	var f := _feed_per_rev(speed)
+	var rad := float(t["dia"]) * 0.5 if k == "drill" else absf(x)
+	var vc := PI * rad * 2.0 * spindle_speed / 1000.0
+	var mp := Materials.turn_params(material, _vc_top(rad))
+	mp["finish"] = float(mp["finish"]) * float(tool_mods["finish"]) * (1.0 + tool_wear() * 0.5)
+	var sr: Dictionary
+	if k == "drill":
+		sr = {"rz": clampf(14.0 + 40.0 * f, 8.0, 60.0) * float(mp["finish"]), "hint": ""}
+	elif LatheTools.is_thread(t):
+		sr = _rz_for(t, 0.08, depth, vc, coolant, manual, mp)    # Flanken: Spandicke klein
+	else:
+		sr = _rz_for(t, f, depth, vc, coolant, manual, mp)
+	var rz_val: float = sr["rz"]
+	var removed := 0.0
+	var lo := profile.size()
+	var hi := -1
+	for s in segs:
+		var i: int = s[0]
+		var v: float = s[1]
+		if not has_mat(i):
+			continue
+		lo = mini(lo, i)
+		hi = maxi(hi, i)
+		match k:
+			"drill", "bore":
+				var b := bore[i]
+				if v <= b:
+					continue
+				if v >= profile[i] - 0.02:
+					removed += profile[i] * profile[i] - b * b
+					_clear_seg(i)
+				else:
+					removed += v * v - b * b
+					bore[i] = v
+					thr_in[i] = maxf(thr_in[i] - (v - b), 0.0)
+					rz_in[i] = rz_val
+			"thread_out":
+				if v <= thr[i]:
+					continue
+				_thread_pitch_check(thr[i], thr_p[i], f)
+				removed += (v - thr[i]) * profile[i]
+				thr[i] = v
+				thr_p[i] = f
+				machined[i] = 1
+				rz[i] = rz_val
+			"thread_in":
+				if v <= thr_in[i]:
+					continue
+				_thread_pitch_check(thr_in[i], thr_in_p[i], f)
+				removed += (v - thr_in[i]) * bore[i]
+				thr_in[i] = v
+				thr_in_p[i] = f
+				rz_in[i] = rz_val
+	if removed <= 0.0:
+		return
+	_after_cut(f, vc, mp, sr, removed, manual)
+	if hi >= lo:
+		_check_parted(Vector2i(maxi(lo - 1, 0), hi))
+
+
+## Ein Gang mit anderer Steigung zerschneidet das vorhandene Gewinde.
+func _thread_pitch_check(d: float, p_old: float, p_new: float) -> void:
+	if d > 0.05 and absf(p_old - p_new) > 0.02 * maxf(p_new, 0.2) and _cut_t <= 0.0:
+		_warn("Gewinde verschnitten: Steigung %.2f statt %.2f mm." % [p_new, p_old])
 
 
 func _drop_piece(i0: int) -> void:
 	var i1 := i0
 	var rmax := 0.0
-	while i1 + 1 < profile.size() and profile[i1 + 1] > 0.05:
+	while has_mat(i1 + 1):
 		i1 += 1
 	for i in range(i0, i1 + 1):
 		rmax = maxf(rmax, profile[i])
 	var mesh := _make_mesh(i0, i1, false)
 	for i in range(i0, profile.size()):
-		profile[i] = 0.0
+		_clear_seg(i)
 	if rmax < 1.0:
 		return   # dünner Restring (z. B. beim Planen über die Mitte) - geht mit den Spänen weg
 	_info("Teil abgestochen.")
@@ -3340,10 +3836,24 @@ func auto_dir() -> Vector2i:
 
 
 ## Verfahrgeschwindigkeit im Tippbetrieb (mm/s): eingestellter Vorschub bei laufender bzw.
-## (Spindel steht) eingestellter Drehzahl; fast = Shift, 10-fach.
+## (Spindel steht) eingestellter Drehzahl; fast = Shift, Eilgang im Zeitvorschub (JOG_RAPID mm/min).
 func jog_speed(fast := false) -> float:
+	if fast:
+		return JOG_RAPID / 60.0
 	var n := spindle_speed if spindle_speed > 30.0 else rpm()
-	return feed() * n / 60.0 * (JOG_FAST if fast else 1.0)
+	return feed() * n / 60.0
+
+
+## Hält der Spieler an der Maschine gerade Shift für den Eilgang?
+func rapid_held() -> bool:
+	return operating and Input.is_action_pressed("lathe_rapid")
+
+
+## Vorschub für die Anzeige: mm/U, im Eilgang kurz der Zeitvorschub in mm/min.
+func feed_text(f: float) -> String:
+	if rapid_held():
+		return "%d mm/min (Eilgang)" % int(JOG_RAPID)
+	return "%s mm/U" % ("%.2f" % f).replace(".", ",")
 
 
 func set_handwheel_axis(axis: int) -> void:
@@ -3720,7 +4230,7 @@ func _physics_process(delta: float) -> void:
 	_step_guard(delta)
 	nc.step(delta)
 
-	# Tippbetrieb (WASD): im eingestellten Vorschub, Shift = 10-fach. Nicht im Automatikbetrieb
+	# Tippbetrieb (WASD): im eingestellten Vorschub, Shift = Eilgang in mm/min. Nicht im Automatikbetrieb
 	# und nicht, solange am Pult in ein Eingabefeld geschrieben wird.
 	if operating and not estop and not nc.busy() and not typing():
 		var ax := Vector2(Input.get_axis("lathe_z_minus", "lathe_z_plus"), Input.get_axis("lathe_x_in", "lathe_x_out"))
@@ -4142,6 +4652,14 @@ func interact(p: Node, panel := false) -> void:
 	operating_changed.emit(true)
 
 
+## E50: Ausstiegspunkt vor der Mitte der Schiebetür, wo sie gerade steht (fährt mit dem Schlitten mit).
+## So steht man bei langen Teilen nicht hinter der Tür vor dem Spindelkasten. Ohne Kabine: INF.
+func exit_position() -> Vector3:
+	if conventional or _door == null:
+		return Vector3.INF
+	return to_global(Vector3(DOOR_CX + _door.position.x, 0.0, 1.05))
+
+
 func stop_operating() -> void:
 	if not operating:
 		return
@@ -4154,6 +4672,9 @@ func stop_operating() -> void:
 		set_view("back")
 	# Auto-Vorschub läuft weiter (wie die Spindel)
 	if player:
+		var exit_pos := exit_position()
+		if exit_pos.is_finite():
+			player.global_position = exit_pos
 		player.stop_operating()
 	operating_changed.emit(false)
 
@@ -4306,6 +4827,7 @@ func evaluate(job: Dictionary) -> Dictionary:
 
 
 func _evaluate_now(job: Dictionary) -> Dictionary:
+	_sync_inner()
 	var lines: Array[String] = []
 	var ok := 0
 	var total := 0
@@ -4352,6 +4874,32 @@ func _evaluate_now(job: Dictionary) -> Dictionary:
 				pass_f = absf(meas - exp_d) <= tol_c
 				lines.append("%s  Fase %.1f x 45° an Z %d (Ø%d):  Ø %.2f bei Z %.2f  (Soll Ø%.2f +/-%.1f)" % [
 					_mark(pass_f), c, int(f["z"]), int(f["d"]), meas, zc, exp_d, tol_c])
+			"bore":
+				# Bohrung Ø d von z0 bis z1 (Maße ab Futterseite wie "dia")
+				var mg := float(f.get("margin", 1.0))
+				var ia := clampi(int(floor((float(f["z0"]) + mg) / SEG)), 0, bore.size() - 1)
+				var ib := clampi(int(ceil((float(f["z1"]) - mg) / SEG)) - 1, ia, bore.size() - 1)
+				var bmn := 1.0e9
+				var bmx := 0.0
+				for i in range(ia, ib + 1):
+					bmn = minf(bmn, bore[i] * 2.0)
+					bmx = maxf(bmx, bore[i] * 2.0)
+				var tol_b := float(f.get("tol", 0.3))
+				pass_f = absf(bmn - float(f["d"])) <= tol_b and absf(bmx - float(f["d"])) <= tol_b
+				lines.append("%s  Bohrung Z %d-%d:  Ø %.2f ... %.2f  (Soll Ø%.1f +/-%.2f)" % [
+					_mark(pass_f), int(f["z0"]), int(f["z1"]), bmn, bmx, float(f["d"]), tol_b])
+			"thread":
+				var th := thread_info(float(f["z0"]), float(f["z1"]), bool(f.get("inner", false)))
+				var p_want := float(f["p"])
+				var d_want := float(f["d"])
+				var h_want := p_want * (0.5413 if bool(f.get("inner", false)) else 0.6134)
+				var tol_t := float(f.get("tol", 0.3))
+				pass_f = float(th["cover"]) >= 0.9 and absf(float(th["p"]) - p_want) < 0.01 \
+					and float(th["depth"]) >= h_want * 0.85 and float(th["depth"]) <= h_want * 1.25 \
+					and absf(float(th["d"]) - d_want) <= tol_t
+				lines.append("%s  Gewinde %s M%s x %s Z %d-%d:  Ø %.2f, Steigung %.2f, Tiefe %.2f (Soll %.2f), %d %% geschnitten" % [
+					_mark(pass_f), "innen" if bool(f.get("inner", false)) else "außen", NcCam.fmt(d_want), NcCam.fmt(p_want),
+					int(f["z0"]), int(f["z1"]), float(th["d"]), float(th["p"]), float(th["depth"]), h_want, int(float(th["cover"]) * 100.0)])
 			"point":
 				var meas_p := radius_at(float(f["z"])) * 2.0
 				var tol_p := float(f.get("tol", 0.2))
@@ -4364,6 +4912,35 @@ func _evaluate_now(job: Dictionary) -> Dictionary:
 	return {"score": score, "ok": ok, "total": total, "lines": lines}
 
 
+## Gewinde zwischen z0 und z1 (ab Futterseite) messen: Nenn-Ø (außen: Außen-Ø, innen: Kern-Ø +
+## 2 x Tiefe), kleinste Gangtiefe und häufigste Steigung über den geschnittenen Teil, cover =
+## Anteil der Länge mit Gewinde.
+func thread_info(z0: float, z1: float, inner: bool) -> Dictionary:
+	_sync_inner()
+	var a := clampi(int(floor(minf(z0, z1) / SEG)) + 1, 0, profile.size() - 1)
+	var b := clampi(int(ceil(maxf(z0, z1) / SEG)) - 2, a, profile.size() - 1)
+	var n := 0
+	var dmin := INF
+	var dia := 0.0
+	var pitches := {}
+	for i in range(a, b + 1):
+		var d := thr_in[i] if inner else thr[i]
+		if d <= 0.02:
+			continue
+		n += 1
+		dmin = minf(dmin, d)
+		dia += (bore[i] + d) * 2.0 if inner else profile[i] * 2.0
+		var p := snappedf(thr_in_p[i] if inner else thr_p[i], 0.01)
+		pitches[p] = int(pitches.get(p, 0)) + 1
+	if n == 0:
+		return {"cover": 0.0, "depth": 0.0, "p": 0.0, "d": 0.0}
+	var best := 0.0
+	for p in pitches:
+		if best == 0.0 or int(pitches[p]) > int(pitches[best]):
+			best = p
+	return {"cover": float(n) / float(b - a + 1), "depth": dmin, "p": best, "d": dia / n}
+
+
 func _mark(ok: bool) -> String:
 	return "OK  " if ok else "FEHL"
 
@@ -4374,12 +4951,14 @@ func get_state() -> Dictionary:
 	var mach: Array = []
 	for m in machined:
 		mach.append(m)
-	return {"seg": SEG, "stock_d": stock_d, "stock_len": stock_len, "profile": Array(profile),
+	var d := {"seg": SEG, "stock_d": stock_d, "stock_len": stock_len, "profile": Array(profile),
 		"machined": mach, "rz": Array(rz), "tool_z": tool_z, "tool_x": tool_x, "tool": tool_idx,
 		"holder": holder.duplicate(), "active_slot": active_slot,
 		"rpm": rpm_set, "feed": feed_set, "css": css, "vc": vc_set, "rpm_limit": rpm_limit,
 		"material": material, "has_part": has_part, "semi_key": semi_key, "ceramic": ceramic_part, "tray": tray.to_state(), "conveyor": conveyor_on, "coolant": coolant, "kss": kss.to_state() if kss != null else {}, "door": door_latched, "guard_open": guard_open, "programs": programs.duplicate(true), "prog_sel": prog_sel, "clamp_depth": clamp_depth, "flipped": flipped,
 		"wcs_z": wcs_z}
+	_store_inner(d)
+	return d
 
 
 func set_state(d: Dictionary) -> void:
@@ -4399,6 +4978,7 @@ func set_state(d: Dictionary) -> void:
 				rz[i] = float(r[j])
 			elif machined[i]:
 				rz[i] = 10.0
+		_load_inner(d, old_seg)
 	if not bool(d.get("has_part", true)):
 		clear_workpiece()
 	tool_z = float(d.get("tool_z", tool_z))

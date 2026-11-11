@@ -42,7 +42,7 @@ func _initialize() -> void:
 	lb.refresh()
 
 	# Alles steckt in den Halterungen, was nicht an der Maschine ist
-	ok(mb.holders.size() == 36 and lb.holders.size() == 36, "36 Halterungen")
+	ok(mb.holders.size() == 36 and lb.holders.size() == 28, "36 Halterungen, 28 Mulden auf der Platte")
 	ok(mb.holder_of("F6") < 0, "F6 steckt in der Spindel und nicht in einer Halterung")
 	ok(mb.holder_of("F10") >= 0, "F10 steckt in einer Halterung")
 	ok(lb.holder_of("T1") < 0 and lb.holder_of("T3") < 0, "T1 und T3 stecken im Halter")
@@ -123,28 +123,39 @@ func _initialize() -> void:
 	var lathe_stand: Vector3 = l.to_global(Vector3(0.25, 0, 1.05)) + Vector3(0, 0.05, 0)
 	await aim(p, lathe_stand, l._post_center())
 	ok(p._focus == l.tool_mount, "Halterkopf lässt sich anvisieren")
-	ok(p._prompt.contains("Platz 2"), "Hinweis auf freien Platz: " + p._prompt)
+	ok(p._prompt.contains("Werkzeughalter"), "Hinweis auf das Werkzeughalter-Fenster: " + p._prompt)
+	var td = w.tool_slot_dialog
 	click(p)
+	ok(td != null and td.visible and td.machine == l, "Klick öffnet das Werkzeughalter-Fenster")
+	ok(td._rows.get_child_count() == l.SLOTS, "Alle Plätze im Fenster, auch die hinteren")
+	ok(l.slot_action_label(1, p.held) == "Einspannen" and l.slot_action_label(0, p.held) == "Tauschen", "Einspannen in freien Platz, Tausch bei belegtem")
+	td.do_slot(1)
 	ok(l.holder[1] == "T5" and p.held.is_empty(), "T5 in Platz 2 eingespannt")
 	ok(l.active_slot == 0, "Einspannen schwenkt nicht ein")
+	td.do_slot(3)
+	ok(l.holder[3] == "", "Mit leerer Hand bleibt ein leerer Platz leer")
 	lb.refresh()
 	ok(lb.holder_of("T5") < 0, "T5 fehlt in den Halterungen")
 
-	# Freie Hand nimmt ein nicht eingeschwenktes Werkzeug heraus
-	await aim(p, lathe_stand, l._post_center())
-	ok(p._prompt.contains("T5") and p._prompt.contains("nehmen"), "Hinweis zum Herausnehmen: " + p._prompt)
-	click(p)
+	# Freie Hand nimmt ein Werkzeug aus einem beliebigen Platz heraus
+	ok(l.slot_action_label(2, p.held) == "In die Hand", "Platz 3 lässt sich herausnehmen")
+	td.do_slot(1)
 	ok(l.holder[1] == "" and p.held.get("id", "") == "T5", "T5 wieder in der Hand")
-	# Alle Plätze belegt: Tausch mit dem eingeschwenkten
+	# Tausch mit beliebigem Platz, auch dem eingeschwenkten
 	ok(l.mount_tool(1, "T4") and l.mount_tool(3, "T7"), "Alle Plätze belegt")
-	await aim(p, lathe_stand, l._post_center())
-	ok(p._prompt.contains("kommt in die Hand"), "Hinweis auf Tausch: " + p._prompt)
-	click(p)
+	td.do_slot(0)
 	ok(l.holder[0] == "T5" and p.held.get("id", "") == "T1" and str(l.tool()["id"]) == "T5", "T5 gegen T1 getauscht")
+	td.do_slot(3)
+	ok(l.holder[3] == "T1" and p.held.get("id", "") == "T7", "T1 gegen T7 im hinteren Platz getauscht")
+	td.do_slot(3)
+	ok(l.holder[3] == "T7" and p.held.get("id", "") == "T1", "Zurückgetauscht")
 	l.spindle_speed = 500.0
 	l.spindle_on = true
-	click(p)
+	td.do_slot(0)
 	ok(l.holder[0] == "T5" and p.held.get("id", "") == "T1", "Kein Tausch bei laufender Spindel")
+	ok(td._error.text != "", "Fenster zeigt, warum es nicht geht")
+	td.close()
+	ok(not td.visible and p.operating == null, "Fenster geschlossen")
 	l.spindle_on = false
 	l.spindle_speed = 0.0
 
@@ -181,6 +192,7 @@ func _initialize() -> void:
 	if t5 >= 0:
 		var tb: AABB = Build.bounds(lb.holders[t5].model)
 		ok(tb.position.y >= lb.TOP_Y - 0.001, "%s liegt auf der Platte, nicht darunter" % tid)
+		ok(lb.holders[t5].model.scale.is_equal_approx(Vector3.ONE), "%s liegt in Originalgröße auf der Werkbank" % tid)
 		var lstand: Vector3 = lb.to_global(Vector3(lb.holders[t5].at.x, 0, 0.75))
 		lstand.y = 0.05
 		await aim(p, lstand, lb.to_global(lb.holders[t5].at + Vector3(0, 0.035, 0)))

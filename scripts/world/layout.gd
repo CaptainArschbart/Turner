@@ -20,13 +20,14 @@ const SPECS := {
 	"saw": {"title": "Bandsäge mit Rollbahn", "price": 0, "area": Rect2(-2.6, -1.2, 5.2, 3.2), "foot": Rect2(-2.5, -0.7, 5.0, 1.5), "pos": Vector2(-7.0, -5.0)},
 	"mill": {"title": "Fräsmaschine", "price": 2400, "area": Rect2(-1.9, -1.6, 3.8, 4.7), "foot": Rect2(-1.1, -0.7, 2.2, 1.4), "pos": Vector2(6.85, -3.1)},
 	"cnc_lathe": {"title": "CNC-Drehmaschine", "price": 14000, "area": Rect2(-1.9, -1.4, 6.7, 4.9), "foot": Rect2(-1.45, -1.1, 6.1, 2.5)},
+	"cnc_mill": {"title": "CNC-Fräsmaschine", "price": 30000, "area": Rect2(-2.8, -1.5, 5.4, 4.9), "foot": Rect2(-2.6, -1.25, 4.95, 3.45)},     # = CncMill.FOOT (nicht verknüpft: Layout wird vor den Autoloads geladen)
 	"round_grinder": {"title": "Rundschleifmaschine", "price": 12000, "area": Rect2(-2.2, -1.8, 5.4, 5.2), "foot": Rect2(-2.0, -1.2, 5.0, 2.6)},
 	"flat_grinder": {"title": "Flachschleifmaschine", "price": 9000, "area": Rect2(-2.0, -1.7, 4.0, 4.3), "foot": Rect2(-1.5, -1.0, 3.0, 1.7)},
 	"drill": {"title": "Standbohrmaschine", "price": 1500, "area": Rect2(-1.4, -1.2, 3.0, 3.6), "foot": Rect2(-0.6, -0.7, 1.2, 1.3)},
 	"edm": {"title": "Erodiermaschine", "price": 25000, "area": Rect2(-2.2, -1.9, 4.4, 4.5), "foot": Rect2(-1.2, -1.1, 2.4, 2.2)},
 }
 ## Maschinen mit Werkzeugen auf der Werkbank
-const BENCH_MACHINES := ["lathe", "cnc_lathe", "mill", "drill", "flat_grinder", "round_grinder"]
+const BENCH_MACHINES := ["lathe", "cnc_lathe", "mill", "cnc_mill", "drill", "flat_grinder", "round_grinder"]
 const DEFAULT_BENCH := {"lathe": [0.6, 0.35, 2], "mill": [6.85, -0.95, 2]}
 ## Frei bleiben der Weg zum Rolltor und der Platz vor der Bürotür. x, z, Breite, Tiefe.
 const OBSTACLES := [
@@ -41,6 +42,7 @@ var crates: Array = []            # je {"size", "pos": Vector2, "rot", "bench": 
 var bins: Array = []              # je {"size", "pos": Vector2, "rot", "chips": ChipTray, "out": bool, "machine": Spänekiste unter dem Förderer dieser Maschine (fehlt sonst)}
 var shelves: Array = []           # je {"size", "pos": Vector2, "rot", "stack", "load"}, Holzregale und Ausstattung; stack: Paletten übereinander, load: Paletten auf der Gabel eines abgestellten Hubwagens
 var site: Node = null             # Gelände: in_workshop(rect)
+var goods: Array[Rect2] = []      # Lieferpaletten am Boden (Hof, Werkstatt, Lager): Stellplätze müssen frei davon bleiben
 
 
 ## Rechteck rect lokal, gedreht um rot Vierteldrehungen und verschoben nach pos.
@@ -254,7 +256,36 @@ func check_shelf(id: String, pos: Vector2, rot: int, moving := -1, load_n := 0, 
 	return ""
 
 
+## Fehlertext für eine Lieferpalette am Boden: Hof (innerhalb des Zauns), Werkstatt oder Lager, nicht in Maschinen,
+## Werkbänke, Regale, Paletten oder sonstige Stellplätze. Fläche: ext (lange Seite zuerst) um pos, gedreht um rot.
+func check_goods(pos: Vector2, rot: int, ext: Vector2) -> String:
+	var r := rect_at(Rect2(-ext * 0.5, ext), pos, rot)
+	if site:
+		if not site.in_workshop(r):
+			if site.in_lager(r):
+				if site.blocked_by_rack(r.grow(-0.001)):
+					return "Dort steht ein Lagerregal."
+			elif not site.in_yard(r):
+				return "Hier ist kein Platz: Lieferpaletten stehen im Hof, in der Werkstatt oder im Lager."
+	r = r.grow(-0.001)
+	for m in machines:
+		if r.intersects(foot_of(m)):
+			return "Dort steht schon etwas."
+	for b in benches:
+		if r.intersects(bench_area(b)):
+			return "Dort steht schon etwas."
+	for o in OBSTACLES:
+		if r.intersects(o):
+			return "Dort steht schon etwas."
+	if _blocked_by_stands(r, -1, -1, -1):
+		return "Dort steht schon etwas."
+	return ""
+
+
 func _blocked_by_stands(r: Rect2, skip_crate: int, skip_bin: int, skip_shelf := -1) -> bool:
+	for g in goods:
+		if r.intersects(g):
+			return true
 	for i in shelves.size():
 		if i != skip_shelf and r.intersects(shelf_rect(shelves[i]["size"], shelves[i]["pos"], shelves[i]["rot"], int(shelves[i].get("load", 0)), bool(shelves[i].get("cross", false)))):
 			return true
@@ -287,6 +318,8 @@ func to_state() -> Dictionary:
 	var sh := []
 	for s in shelves:
 		sh.append({"size": s["size"], "pos": [s["pos"].x, s["pos"].y], "rot": s["rot"], "stack": int(s.get("stack", 1)), "load": int(s.get("load", 0)), "cross": bool(s.get("cross", false))})
+		if str(s.get("goods", "")) != "":
+			sh.back()["goods"] = str(s["goods"])
 		if s.has("angle"):
 			sh.back()["angle"] = float(s["angle"])
 		if s.has("lift"):

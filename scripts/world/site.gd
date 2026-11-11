@@ -8,6 +8,7 @@ extends Node3D
 ##                           Hof X 12..34, Z -8..12
 
 const OUTDOOR_LAYER := 2          # Sonne und Himmel treffen nur diese Ebene, nicht das Halleninnere
+const GOODS_LAYER := 3            # Lieferpaletten: von Sonne und Hallenlicht beleuchtet, sie stehen auch drinnen
 const W_TILE := 4.0
 const L_TILE := Vector2(6.0, 7.6) # zwei Regalfächer je 3 m mit Stützen, dazu ein Quergang
 const RACK_SHIFT := 0.6           # Regal steht nach Norden versetzt, im Süden bleibt der Quergang frei
@@ -19,6 +20,7 @@ const BOARD_Y0 := 0.28            # Oberkante unterster Boden
 const BOARD_STEP := 1.1           # 1000 mm lichte Höhe plus Boden und Traverse
 const LAGER_X0 := 12.0
 const LAGER_Z := -8.0
+const PALLET_TOP := 0.22          # Ladefläche der Europalette (models: EUR-Pallet) über dem Boden
 const LAGER_H := 5.5
 const YARD_X1 := 34.0
 const YARD_Z1 := 12.0
@@ -462,6 +464,11 @@ func in_lager(r: Rect2) -> bool:
 	return true
 
 
+## Liegt die Fläche ganz im Hof, mit Abstand zu Zaun und Gebäudewänden?
+func in_yard(r: Rect2) -> bool:
+	return Rect2(LAGER_X0 + 0.4, LAGER_Z + 0.4, YARD_X1 - LAGER_X0 - 0.8, YARD_Z1 - LAGER_Z - 0.8).encloses(r)
+
+
 ## Überschneidet die Fläche ein Lagerregal?
 func blocked_by_rack(r: Rect2) -> bool:
 	for c in rack_cells:
@@ -885,9 +892,64 @@ func show_containers(list: Array) -> void:
 		hit.set_meta("interact", t)
 
 
-## Stücke mit gleichem Werkstoff und gleichen Maßen liegen auf einer Palette.
+## Höchste Ladung einer Lieferpalette über der Ladefläche, in m. Was nicht mehr draufpasst, kommt auf eine weitere Palette.
+const PALLET_MAX_LOAD := 1.0
+
+
+## Stücke mit gleichem Werkstoff und gleichen Maßen liegen auf einer Palette, bei zu viel Ladung auf
+## mehreren (Feld "pallet": 0, 1, 2 …). Jede Palette hat ihren eigenen Schlüssel.
 static func delivery_key(it: Dictionary) -> String:
+	var k := _sort_key(it)
+	var n := int(it.get("pallet", 0))
+	return k if n == 0 else "%s|#%d" % [k, n]
+
+
+## Schlüssel der Sorte, ohne Palettennummer.
+static func _sort_key(it: Dictionary) -> String:
 	return "%s|%s|%s|%s|%s|%s|%s" % [it["material"], it["kind"], it.get("d", 0.0), it.get("w", 0.0), it.get("h", 0.0), it.get("l", 0.0), it.get("key", "")]
+
+
+## Wie viele Stücke dieser Sorte auf eine Lieferpalette passen: so viele Lagen wie bis PALLET_MAX_LOAD
+## Ladehöhe, je Lage wie in add_goods nebeneinander und hintereinander. Mindestens ein Stück.
+static func pallet_capacity(it: Dictionary) -> int:
+	var round_bar := str(it["kind"]) == Materials.KIND_ROUND
+	var w := float(it["d"] if round_bar else it["w"]) * 0.001
+	var h := float(it["d"] if round_bar else it["h"]) * 0.001
+	var ext := delivery_extent([it])
+	var gap := 0.008
+	var per := maxi(int(ext.y / (w + gap)), 1) * maxi(int(ext.x / (_shown_length(it) + gap)), 1)
+	var layers := maxi(int((PALLET_MAX_LOAD + 0.0001) / (h + 0.002)), 1)
+	return per * layers
+
+
+## Lieferliste auf Paletten verteilen: Stücke ohne Palettennummer und solche auf einer übervollen Palette
+## kommen auf die erste Palette ihrer Sorte mit freiem Platz, sonst auf eine neue. Stücke, die schon richtig
+## liegen, bleiben, wo sie sind. Gibt true zurück, wenn sich etwas geändert hat.
+static func split_pallets(items: Array) -> bool:
+	var counts := {}      # Sorte -> {Palettennummer: Stückzahl}
+	var stray: Array = [] # Stücke, die neu verteilt werden
+	for it in items:
+		var s := _sort_key(it)
+		if not counts.has(s):
+			counts[s] = {}
+		var c: Dictionary = counts[s]
+		if not it.has("pallet"):
+			stray.append(it)
+			continue
+		var n := int(it["pallet"])
+		if int(c.get(n, 0)) >= pallet_capacity(it):
+			stray.append(it)
+			continue
+		c[n] = int(c.get(n, 0)) + 1
+	for it in stray:
+		var c: Dictionary = counts[_sort_key(it)]
+		var cap := pallet_capacity(it)
+		var n := 0
+		while int(c.get(n, 0)) >= cap:
+			n += 1
+		it["pallet"] = n
+		c[n] = int(c.get(n, 0)) + 1
+	return not stray.is_empty()
 
 
 ## Paletten aus der Lieferliste: je {"index": erstes Stück, "items": Stücke}.
@@ -908,53 +970,128 @@ static func delivery_pos(i: int) -> Vector3:
 	var col := i % 5
 	var row := floori(i / 5.0) % 5
 	var stack := floori(i / 25.0)
-	return Vector3(21.6 + col * 1.7, 0.12 + stack * 1.0, LAGER_Z + 2.6 + row * 3.4)
+	return Vector3(21.6 + col * 1.7, PALLET_TOP + stack * 1.0, LAGER_Z + 2.6 + row * 3.4)
 
 
-func show_deliveries(items: Array) -> void:
+## Länge (lange Seite, bei Drehung 0 längs X) und Breite einer Lieferpalette samt überstehender Ladung.
+static func delivery_extent(list: Array) -> Vector2:
+	var f := Shelf.foot("pallet")
+	return Vector2(maxf(maxf(f.x, f.y), _shown_length(list[0]) + 0.1), minf(f.x, f.y))
+
+
+## Bodenfläche einer Lieferpalette mit Mitte pos und Drehung rot (wie Shelf: Vierteldrehungen).
+static func delivery_rect(pos: Vector2, rot: int, ext: Vector2) -> Rect2:
+	return Layout.rect_at(Rect2(-ext * 0.5, ext), pos, rot)
+
+
+## Paletten der Lieferliste samt Lage. Je {"index", "items", "key", "extent", "pos": Vector3, "rot": int, "moved", "carried"}.
+## spots: delivery_key -> {"pos": Vector2, "rot": int, "carried": bool} für Paletten, die mit Stapler oder Hubwagen bewegt
+## wurden. Alle anderen stehen im Raster (Drehung 1: lange Seite längs Z) und überspringen belegte Plätze.
+static func place_deliveries(items: Array, spots: Dictionary = {}) -> Array:
+	var groups := delivery_groups(items)
+	var taken: Array[Rect2] = []
+	for g in groups:
+		var key := delivery_key(g["items"][0])
+		g["key"] = key
+		g["extent"] = delivery_extent(g["items"])
+		g["moved"] = spots.has(key)
+		g["carried"] = false
+		g["rot"] = 1
+		g["pos"] = delivery_pos(0)
+		if g["moved"]:
+			var sp: Dictionary = spots[key]
+			var p: Vector2 = sp["pos"]
+			g["rot"] = posmod(int(sp["rot"]), 4)
+			g["pos"] = Vector3(p.x, PALLET_TOP, p.y)
+			g["carried"] = bool(sp.get("carried", false))
+			if not g["carried"]:
+				taken.append(delivery_rect(p, g["rot"], g["extent"]))
+	var slot := 0
+	for g in groups:
+		if g["moved"]:
+			continue
+		var at := delivery_pos(slot)
+		while slot < 500:
+			at = delivery_pos(slot)
+			slot += 1
+			# Nur der Boden ist belegbar; die oberen Lagen des Rasters liegen auf den unteren Paletten
+			if at.y > PALLET_TOP + 0.01:
+				break
+			var r := delivery_rect(Vector2(at.x, at.z), 1, g["extent"])
+			var hit := false
+			for t in taken:
+				if r.intersects(t):
+					hit = true
+					break
+			if not hit:
+				break
+		g["pos"] = at
+	return groups
+
+
+func show_deliveries(items: Array, spots: Dictionary = {}) -> void:
 	for c in _deliveries.get_children():
 		_deliveries.remove_child(c)
 		c.free()
-	var groups := delivery_groups(items)
-	for g in groups.size():
+	for g in place_deliveries(items, spots):
+		if g["carried"]:
+			continue          # hängt gerade an Stapler oder Hubwagen
 		var node := Node3D.new()
-		node.position = delivery_pos(g)
+		node.position = g["pos"]
+		node.rotation.y = (int(g["rot"]) - 1) * PI / 2.0
 		_deliveries.add_child(node)
-		_pallet(node, groups[g]["items"], int(groups[g]["index"]))
+		_pallet(node, g["items"], int(g["index"]))
 
 
-## Palette mit allen Stücken einer Sorte, in Lagen gestapelt. index = erstes Stück in der Lieferliste.
-func _pallet(node: Node3D, list: Array, index: int) -> void:
+## Stücke einer Sorte in Lagen auf der Ladefläche (parent liegt auf ihr, Stücke längs Z). Gibt die Höhe der Ladung zurück.
+func add_goods(parent: Node3D, list: Array, layer := GOODS_LAYER) -> float:
 	var first: Dictionary = list[0]
-	var wood := Build.mat(Color(0.7, 0.58, 0.4), 0.9)
-	var runner := Build.mat(Color(0.58, 0.46, 0.3), 0.9)
 	var length := _shown_length(first)
 	var round_bar := str(first["kind"]) == Materials.KIND_ROUND
 	var w := float(first["d"] if round_bar else first["w"]) * 0.001
 	var h := float(first["d"] if round_bar else first["h"]) * 0.001
-	var pallet_w := 1.0
-	var pallet_l := maxf(length + 0.1, 0.8)
-	_out(Build.box(node, Vector3(pallet_w, 0.03, pallet_l), Vector3(0, -0.015, 0), wood))
-	for x in [-0.42, 0.0, 0.42]:
-		_out(Build.box(node, Vector3(0.1, 0.09, pallet_l), Vector3(x, -0.075, 0), runner))
+	var ext := delivery_extent(list)
+	var pallet_w := ext.y
+	var pallet_l := ext.x
 	var gap := 0.008
-	var cols := maxi(int(pallet_w / (w + gap)), 1)
-	var rows := maxi(int(pallet_l / (length + gap)), 1)
+	# Wenige Stücke liegen mittig statt am Rand der Palette
+	var cols := clampi(int(pallet_w / (w + gap)), 1, list.size())
+	var rows := clampi(int(pallet_l / (length + gap)), 1, ceili(list.size() / float(cols)))
 	var per := cols * rows
 	for i in list.size():
-		var layer := i / per
+		var layer_i := i / per
 		var k := i % per
 		var col := k % cols
 		var row := k / cols
-		var at := Vector3((col - (cols - 1) * 0.5) * (w + gap), layer * (h + 0.002), (row - (rows - 1) * 0.5) * (length + gap))
-		_add_item(node, list[i], at, OUTDOOR_LAYER)
+		var at := Vector3((col - (cols - 1) * 0.5) * (w + gap), layer_i * (h + 0.002), (row - (rows - 1) * 0.5) * (length + gap))
+		_add_item(parent, list[i], at, layer)
 	var total := (list.size() - 1) / per + 1
-	var top := total * (h + 0.002)
-	var hit := Build.collider(node, Vector3(pallet_w, top + 0.12, pallet_l), Vector3(0, (top - 0.12) * 0.5, 0))
+	return total * (h + 0.002)
+
+
+## Palette mit allen Stücken einer Sorte, in Lagen gestapelt. index = erstes Stück in der Lieferliste.
+func _pallet(node: Node3D, list: Array, index: int) -> void:
+	# Europalette aus dem Modell, lange Seite längs der Stücke (Z); node liegt auf der Ladefläche
+	var model := Props.make("pallet")
+	model.rotation.y = PI * 0.5
+	model.position.y = -PALLET_TOP
+	node.add_child(model)
+	for mi in model.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).layers = GOODS_LAYER
+	var top := add_goods(node, list)
+	var ext := delivery_extent(list)
 	var d := Delivery.new()
 	d.world = world
 	d.index = index
 	node.add_child(d)
+	# Zinken und Gabel kommen von allen Seiten unter die Palette: Klötze und Deckplatte wie bei der leeren Palette
+	var base := StaticBody3D.new()
+	base.position.y = -PALLET_TOP
+	base.rotation.y = PI * 0.5
+	node.add_child(base)
+	Shelf.pallet_shape(base, 1)
+	base.set_meta("interact", d)
+	var hit := Build.collider(node, Vector3(ext.y, top, ext.x), Vector3(0, top * 0.5, 0))
 	hit.set_meta("interact", d)
 
 

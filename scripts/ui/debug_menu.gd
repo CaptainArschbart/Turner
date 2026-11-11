@@ -11,6 +11,12 @@ var _status: Label
 var _toggles := {}                # Name -> Button, zeigen ihren Zustand
 var _pitch := 0.0
 var _fps: Label
+var _look_label: Label
+var _look := {}                   # beim Öffnen angeschautes Objekt, siehe world.debug_target
+var _look_msg := ""
+var _look_from := Vector3.ZERO    # Blickstrahl beim Öffnen, damit nach dem Entfernen neu gezielt werden kann
+var _look_to := Vector3.ZERO
+var _look_mask := 0
 
 ## Sprungziele: Name -> Position der Spielfigur, Blickrichtung (Yaw)
 const PLACES := {
@@ -99,6 +105,12 @@ func _ready() -> void:
 	var places := _column(cols, "Springen nach")
 	for p in PLACES:
 		places.add_child(UITheme.small_button(p, func(): _teleport(p), 200))
+	places.add_child(UITheme.section("Angeschaut"))
+	_look_label = UITheme.note("", 14)
+	_look_label.custom_minimum_size = Vector2(200, 0)
+	_look_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	places.add_child(_look_label)
+	places.add_child(UITheme.small_button("Entfernen", _remove_looked, 200))
 
 	v.add_child(UITheme.key_hint("^ / Esc  ·  schließen          Noclip: Bewegen wie gewohnt, Springen hoch, Ducken runter, Rennen schneller"))
 
@@ -143,6 +155,12 @@ func open() -> void:
 		return
 	visible = true
 	_pitch = world.player.pitch
+	var ray: RayCast3D = world.player.ray
+	_look_from = ray.global_position
+	_look_to = ray.to_global(ray.target_position)
+	_look_mask = ray.collision_mask
+	_look = world.debug_target(ray.get_collider() if ray.is_colliding() else null)
+	_look_msg = ""
 	world.player.start_operating(self, world.player.global_position, world.player.yaw)
 	_refresh()
 
@@ -177,6 +195,33 @@ func _refresh() -> void:
 	var speed := "Pause" if world.time_scale == 0.0 else "×%d" % int(world.time_scale)
 	_status.text = "%s    ·    Zeitraffer %s    ·    Kasse %d EUR    ·    Ansehen %d    ·    Skillpunkte frei %d" % [
 		world.clock_text(), speed, int(world.company.balance), int(world.company.reputation), world.company.skills.free_points()]
+	var now := str(_look["title"]) if not _look.is_empty() else "nichts im Blick"
+	_look_label.text = now if _look_msg == "" else "%s
+Jetzt: %s" % [_look_msg, now]
+
+
+## Das beim Öffnen angeschaute Objekt endgültig entfernen (nicht zurück ins Lager).
+func _remove_looked() -> void:
+	var err: String = world.debug_remove(_look)
+	if err != "":
+		_look_msg = err
+		return
+	_look_msg = "%s entfernt." % _look["title"]
+	_look = {}
+	# Gelöschte Körper verschwinden erst im nächsten Physikschritt: danach mit demselben Strahl neu zielen
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if visible and _look.is_empty():
+		_look = look_again()
+
+
+## Mit dem beim Öffnen gemerkten Blickstrahl erneut abfragen, was jetzt dort steht.
+func look_again() -> Dictionary:
+	var space: PhysicsDirectSpaceState3D = (world.player as Node3D).get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(_look_from, _look_to, _look_mask, [(world.player as CollisionObject3D).get_rid()])
+	q.collide_with_areas = world.player.ray.collide_with_areas
+	var hit: Dictionary = space.intersect_ray(q)
+	return world.debug_target(hit.get("collider") if not hit.is_empty() else null)
 
 
 func _set_hour(h: float) -> void:

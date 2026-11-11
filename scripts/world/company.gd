@@ -9,7 +9,7 @@ const STARTING_MACHINES := []
 var balance := 0
 var machines: Array = STARTING_MACHINES.duplicate()
 var skills := Skills.new()
-var tools := {"lathe": ToolStore.new(), "cnc_lathe": ToolStore.new(), "mill": ToolStore.new(), "drill": ToolStore.new(),
+var tools := {"lathe": ToolStore.new(), "cnc_lathe": ToolStore.new(), "mill": ToolStore.new(), "cnc_mill": ToolStore.new(), "drill": ToolStore.new(),
 	"flat_grinder": ToolStore.new(), "round_grinder": ToolStore.new()}
 var reputation := 50.0            # Ansehen 0..100
 var rep_log: Array = []           # je {"day", "change", "text"}
@@ -48,11 +48,12 @@ func change_reputation(amount: float, day: int, text: String) -> void:
 		rep_log.pop_front()
 
 
-## Gibt es eine Maschine für diese Auftragsart? Drehaufträge gehen auch auf der CNC-Drehmaschine.
+## Gibt es eine Maschine für diese Auftragsart? Drehaufträge gehen auch auf der CNC-Drehmaschine,
+## Fräsaufträge auch auf der CNC-Fräsmaschine.
 func owns_kind(kind: String) -> bool:
 	if kind == "ceramic":
 		return owns("flat_grinder") or owns("round_grinder")
-	return owns(kind) or (kind == "lathe" and owns("cnc_lathe"))
+	return owns(kind) or (kind == "lathe" and owns("cnc_lathe")) or (kind == "mill" and owns("cnc_mill"))
 
 
 func add_machine(machine: String) -> void:

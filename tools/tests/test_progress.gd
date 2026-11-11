@@ -236,7 +236,8 @@ func _initialize() -> void:
 	ok(w.unlock_skill("lathe_cnc") == "", "CNC freigeschaltet")
 	ok(w.buy_equipment("cnc_lathe") == "", "Jetzt kaufbar")
 	w.inventory.erase("cnc_lathe")
-	ok(w.unlock_skill("mill_cnc") != "", "CNC-Fräse gibt es noch nicht")
+	ok(w.buy_equipment("cnc_mill") != "", "CNC-Fräsmaschine vor dem Skill nicht kaufbar")
+	ok(w.unlock_skill("mill_cnc") == "", "CNC-Fräse lässt sich freischalten")
 	ok(w.unlock_skill("coolant_1") == "" and is_equal_approx(Materials.coolant_factor, 0.27), "Besseres Kühlmittel wirkt")
 	ok(Materials.heat_rate("S235", 2.0, true, 1.0) < Materials.heat_rate("S235", 2.0, false, 1.0), "Kühlung kühlt")
 	# Schneidstoff: erst Hartmetall, HSS nach dem Skill

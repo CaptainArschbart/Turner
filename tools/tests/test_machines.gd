@@ -163,7 +163,18 @@ func _initialize() -> void:
 			ok(w.bin_prompt(bi).contains("kran") and w.bin_prompt(bi).contains("Späneförderer"), "Hinweis am Behälter: " + w.bin_prompt(bi))
 			w.bin_click(bi)
 			ok(p.carry.is_empty(), "Lässt sich nicht aufheben")
-			ok(w.place_bin(bi, "", Vector2(6.0, 6.0), 0) == w.MACHINE_BIN_FIXED, "Steht fest unter dem Förderer")
+			# Baumodus: Die Kiste lässt sich wie jeder Behälter umstellen und rastet am Förderer wieder ein
+			var bfree := Vector2.INF
+			for cand in [Vector2(spot.x, spot.z - 3.5), Vector2(spot.x, spot.z + 3.5), Vector2(spot.x - 3.5, spot.z), Vector2(spot.x + 3.5, spot.z)]:
+				if bfree == Vector2.INF and w.layout.check_bin(cand, int(eb["rot"]), bi, str(eb["size"])) == "":
+					bfree = cand
+			ok(bfree != Vector2.INF and w.place_bin(bi, "", bfree, int(eb["rot"])) == "", "Im Baumodus umstellbar")
+			ok(bool(eb.get("away", false)) and c.chip_bin_away and eb["pos"] == bfree, "Steht beiseite, der Förderer hat keine Kiste")
+			ok(w.store_equipment("bin", "", bi) != "" and w.layout.bins.has(eb), "Gehört zur Maschine, nicht einlagerbar")
+			ok(w.place_bin(bi, "", Vector2(spot.x + 0.3, spot.z + 0.2), 1) == "", "Nahe dem Stellplatz abgestellt")
+			ok(not bool(eb.get("away", false)) and not c.chip_bin_away and eb["pos"].distance_to(Vector2(spot.x, spot.z)) < 0.01, "Rastet unter dem Förderer ein")
+			bi = w.layout.bins.find(eb)
+			ok(c.chip_bin_node == w.bin_nodes[bi], "Füllstand zeigt wieder an dieser Kiste")
 			c.tray.clear()
 			c.tray.add("baustahl", 3.0)
 			c.conveyor_on = true
@@ -246,8 +257,13 @@ func _initialize() -> void:
 	for i in 3:
 		await process_frame
 	ok(w.hud.lathe == c and w.hud._overlay.tabs != null, "HUD zeigt die CNC-Maschine")
+	# Tür steht weit rechts (langes Teil): Aussteigen vor der Tür, nicht vor dem Spindelkasten
+	c.door_t = 1.2 / c.DOOR_TRAVEL
+	c._door.position.x = 1.2
 	c.stop_operating()
 	await process_frame
+	var exit_local: Vector3 = c.to_local(p.global_position)
+	ok(absf(exit_local.x - (c.DOOR_CX + 1.2)) < 0.05 and exit_local.z > 0.9, "Aussteigen vor der Tür: %s" % str(exit_local))
 	ok(c.get_prompt().contains("E50"), "Hinweis nennt die E50")
 
 	# ---------------------------------------------------- Standbohrmaschine
@@ -792,7 +808,7 @@ func _initialize() -> void:
 	o2.tool_tab.select_machine("flat_grinder")
 	ok(o2.tool_tab.category_buttons[0].text == "Korund" and o2.tool_tab.category_buttons[1].text == "CBN" and o2.tool_tab.category_buttons[2].text == "Diamant", "Scheiben nach Schleifmittel: " + o2.tool_tab.category_buttons[0].text)
 	o2.tool_tab.select_machine("lathe")
-	ok(o2.tool_tab.category_buttons.size() == 4 and o2.tool_tab.rows["T1"]["box"].visible and not o2.tool_tab.rows["T6"]["box"].visible, "Drehwerkzeuge nach Arbeit")
+	ok(o2.tool_tab.category_buttons.size() == 6 and o2.tool_tab.rows["T1"]["box"].visible and not o2.tool_tab.rows["T6"]["box"].visible, "Drehwerkzeuge nach Arbeit")
 	o2.tool_tab.select_machine("cnc_lathe")
 	ok(o2.tool_tab.rows.has("T1"), "Werkzeugtab: CNC-Drehmaschine")
 	ok(w.tool_price("drill", "B10", "hss") == 6, "Preis HSS-Bohrer")

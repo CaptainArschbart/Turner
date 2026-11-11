@@ -2,7 +2,7 @@ class_name BuildMenu
 extends CanvasLayer
 ## Baumodus auf der Taste B: Man läuft frei herum. Anvisieren und E nimmt, was schon steht, die Zifferntasten
 ## nehmen Gekauftes aus der Liste. Mit dem Teil in der Hand folgt die Vorschau dem Blick: Linksklick stellt
-## ab, R dreht, Rechtsklick oder Esc legt es zurück. B beendet den Baumodus.
+## ab, R dreht, Rechtsklick oder Esc legt es zurück, Q lagert es ein (zurück in die Liste). B beendet den Baumodus.
 
 const SNAP := 0.25
 const REACH := 15.0
@@ -158,10 +158,8 @@ func start(what: String, id: String, moving := -1, big_bench := false) -> void:
 	if what == "bench" and id != "" and world.layout.crates_of(id) > 0:
 		world.hud.show_message("Erst die Kisten neben dieser Werkbank umstellen.", Color(1, 0.75, 0.2))
 		return
-	if what == "bin" and moving >= 0 and world.layout.bins[moving].has("machine"):
-		world.hud.show_message(world.MACHINE_BIN_FIXED, Color(1, 0.75, 0.2))
-		return
-	if what == "bin" and moving >= 0 and world.layout.bins[moving]["out"]:
+	if what == "bin" and moving >= 0 and (world.layout.bins[moving]["out"] or bool(world.layout.bins[moving].get("hooked", false)) \
+			or bool(world.layout.bins[moving].get("fork", false))):
 		world.hud.show_message("Erst den Behälter abstellen.", Color(1, 0.75, 0.2))
 		return
 	if not active:
@@ -208,6 +206,33 @@ func _restore_held() -> void:
 	if is_instance_valid(_held_node):
 		_held_node.visible = true
 	_held_node = null
+
+
+## Steht das Teil in der Hand schon in der Werkstatt (umstellen) und nicht frisch aus der Liste?
+func _is_moving() -> bool:
+	match kind:
+		"machine":
+			return world.layout.machines.has(item)
+		"bench":
+			return item != ""
+	return move_index >= 0
+
+
+## Q: Das Teil in der Hand zurück in die Liste Nicht aufgestellt legen. Frisch aus der Liste genommen
+## liegt es dort schon, dann wird es nur aus der Hand gelegt.
+func store() -> bool:
+	if not placing:
+		return false
+	if _is_moving():
+		var title: String = world.equipment_title(item) if kind != "bench" else ("Große Werkbank" if big else "Werkbank")
+		var err: String = world.store_equipment(kind, item, move_index)
+		if err != "":
+			world.hud.show_message(err, Color(1, 0.45, 0.35))
+			return false
+		world.hud.show_message("%s eingelagert, wartet unter Nicht aufgestellt." % title, Color(0.7, 0.95, 1.0))
+	cancel()
+	_refresh_list()
+	return true
 
 
 ## Platz bestätigen. Bleibt bei einem Fehler in der Vorschau.
@@ -296,7 +321,12 @@ func _update_ghost() -> void:
 			h = float(Crate.SIZES[item]["h"]) * 0.001 + 0.06
 			what = world.equipment_title(item)
 		"bin":
-			error = world.layout.check_bin(ghost_pos, ghost_rot, move_index, item)
+			# Spänekiste der E50 nahe ihrem Platz: rastet unter dem Förderer ein
+			var snap: Dictionary = world.machine_bin_snap(move_index, ghost_pos)
+			if not snap.is_empty():
+				ghost_pos = snap["pos"]
+				ghost_rot = int(snap["rot"])
+			error = "" if not snap.is_empty() else world.layout.check_bin(ghost_pos, ghost_rot, move_index, item)
 			area = Layout.bin_rect(ghost_pos, ghost_rot, item)
 			foot = area
 			h = ChipBin.height(item)
@@ -330,6 +360,8 @@ func _update_ghost() -> void:
 	var keys := "Linksklick abstellen   |   Rechtsklick oder Esc zurücklegen"
 	if kind != "rack":
 		keys = "Linksklick abstellen   |   R drehen   |   Rechtsklick oder Esc zurücklegen"
+	if kind != "rack" and kind != "machine":
+		keys += "   |   %s einlagern" % Settings.binding_text("drop")
 	_hint.text = "%s: %s\n%s" % [what, "Platz ist frei" if error == "" else error, keys]
 	_hint.add_theme_color_override("font_color", Color(0.7, 1.0, 0.7) if error == "" else Color(1.0, 0.6, 0.5))
 
@@ -394,6 +426,9 @@ func _input(event: InputEvent) -> void:
 		elif event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_R:
 			get_viewport().set_input_as_handled()
 			ghost_rot = posmod(ghost_rot + 1, 4)
+		elif event.is_action_pressed("drop") and not event.is_echo():
+			get_viewport().set_input_as_handled()
+			store()
 		elif event.is_action_pressed("pause"):
 			get_viewport().set_input_as_handled()
 			cancel()
