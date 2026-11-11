@@ -3031,6 +3031,21 @@ func crane_bin_height(i: int) -> float:
 	return ChipBin.height(str(layout.bins[i]["size"])) if i >= 0 and i < layout.bins.size() else 0.0
 
 
+## Anschlagpunkte an den vier Kranösen des Behälters i, von der Mitte seiner Unterkante aus und so gedreht,
+## wie er steht.
+func crane_bin_lugs(i: int) -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	if i < 0 or i >= layout.bins.size():
+		return out
+	var b: Dictionary = layout.bins[i]
+	var turn := Basis(Vector3.UP, int(b["rot"]) * PI / 2.0)
+	if i < bin_nodes.size() and is_instance_valid(bin_nodes[i]):
+		turn = bin_nodes[i].global_transform.basis.orthonormalized()
+	for p in ChipBin.lugs(str(b["size"])):
+		out.append(turn * p)
+	return out
+
+
 func crane_hook(i: int) -> void:
 	layout.bins[i]["hooked"] = true
 	_sync_machine_bins()
@@ -3601,6 +3616,31 @@ func _put_machine(id: String) -> void:
 	n.scale = Vector3.ONE * (Layout.MACHINE_SCALE if Layout.SCALED.has(id) else 1.0)
 	n.position = Vector3(at["pos"].x, 0, at["pos"].y)
 	n.rotation.y = int(at["rot"]) * PI / 2.0
+	_solidify(n)
+
+
+## Teile einer Maschine, die sich drehen oder laufend neu entstehen: ohne genaue Kollision
+const SOLID_SKIP := ["spindle_pivot", "spindle", "_block", "_tool_node", "_chip_heap", "_chips", "_stock_node", "chips"]
+
+## Genaue Kollision für lose Gegenstände an Maschine n (einmal, wenn sie steht): Sie fallen aufs Bett, den
+## Tisch oder in die Spänewanne statt auf die Hülle der Maschine.
+func _solidify(n: Node3D) -> void:
+	if n.has_meta("solid_done"):
+		return
+	var skip: Array = []
+	for key in SOLID_SKIP:
+		skip.append(n.get(key))
+	var nodes = n.get("tool_nodes")
+	if nodes is Array:
+		skip.append_array(nodes)
+	var mdl = n.get("model")
+	if mdl is Object and mdl.get("_post_root") is Node:
+		skip.append(mdl.get("_post_root"))              # Werkzeugkopf: dreht, Halter kommen und gehen
+	for s in skip:
+		if s is Node:
+			(s as Node).set_meta(Solid.SKIP_META, true)
+	Solid.add(n)
+	n.set_meta("solid_done", true)
 
 
 ## Werkbank aufstellen oder umstellen. moving = Maschine der umgestellten Werkbank, sonst leer.

@@ -8,60 +8,94 @@ extends RefCounted
 
 const ENV_RES := 0.05
 
+## Werkzeuge mit ihrer Plattenform (shape):
+##   ["rhombus", Hauptschneide °, Nebenschneide °, Kantenlänge mm, gespiegelt]  Wendeplatte, Spitze unten
+##   ["blade", Breite mm, Länge mm]                                             Stechplatte
+##   ["radius", Radius mm]                                                      Vollradius-Platte
+## Die Kantenlänge ist das Nennmaß. An der Maschine ist die Platte so groß, wie man sie dort sieht
+## (sized mit dem Maßstab der Maschine), Winkel und Eckenradius bleiben dabei gleich. Stech- und
+## Radiusplatte behalten ihre Maße, weil Einstichbreite und Radius zum Auftrag gehören.
+const SPECS := [
+	{"id": "T1", "sl": 3, "ext": 0.0, "name": "Schruppmeißel rechts", "short": "Schrupp R",
+		"desc": "CNMG 80°, Einstellwinkel 95°, r 0,8 - Längsdrehen Richtung Futter, Plandrehen",
+		"shape": ["rhombus", 85.0, 5.0, 12.0, false], "nose": 0.8, "ref": "left",
+		"max_dz": 4.0, "max_dx": 4.0, "feed_dir": -1, "color": Color(0.85, 0.68, 0.25)},
+	{"id": "T2", "sl": 4, "ext": 4.0, "name": "Schruppmeißel links", "short": "Schrupp L",
+		"desc": "CNMG 80°, links, Einstellwinkel 95°, r 0,8 - Längsdrehen vom Futter weg, Rückwärtsplanen",
+		"shape": ["rhombus", 85.0, 5.0, 12.0, true], "nose": 0.8, "ref": "right",
+		"max_dz": 4.0, "max_dx": 4.0, "feed_dir": 1, "color": Color(0.85, 0.68, 0.25)},
+	{"id": "T3", "sl": 3, "ext": 0.0, "name": "Schlichtmeißel 55°", "short": "Schlicht 55°",
+		"desc": "DNMG 55°, Einstellwinkel 93°, r 0,4 - Schlichten und Kopierdrehen (Freiwinkel 32°)",
+		"shape": ["rhombus", 87.0, 32.0, 11.0, false], "nose": 0.4, "ref": "left",
+		"max_dz": 1.5, "max_dx": 1.5, "feed_dir": -1, "color": Color(0.75, 0.75, 0.8)},
+	{"id": "T4", "sl": 3, "ext": 6.5, "name": "Kopiermeißel 35°", "short": "Kopier 35°",
+		"desc": "VNMG 35°, Einstellwinkel 93°, r 0,4 - Hinterschnitte, steile Konturen (Freiwinkel 52°)",
+		"shape": ["rhombus", 87.0, 52.0, 11.0, false], "nose": 0.4, "ref": "left",
+		"max_dz": 1.0, "max_dx": 1.0, "feed_dir": -1, "color": Color(0.35, 0.35, 0.4)},
+	{"id": "T5", "sl": 8, "ext": 0.0, "name": "Fasenmeißel 45°", "short": "Fase 45°",
+		"desc": "SNMG quadratisch, 45° angestellt, r 0,8 - Fasen links und rechts über die ganze Schneidkante, Längs- und Plandrehen",
+		"shape": ["rhombus", 135.0, 45.0, 12.0, false], "nose": 0.8, "ref": "center",
+		"max_dz": 3.0, "max_dx": 3.0, "feed_dir": -1, "color": Color(0.85, 0.68, 0.25)},
+	{"id": "T6", "sl": 3, "ext": 0.0, "name": "Stechmeißel 4 mm", "short": "Stech 4",
+		"desc": "Stechschwert mit Einstech-/Abstechplatte 4 mm, r 0,2 - nur radial einstechen, seitlich max. 0,3 mm",
+		"shape": ["blade", 4.0, 22.0], "nose": 0.2, "ref": "left",
+		"max_dz": 0.3, "max_dx": 4.0, "feed_dir": -1, "color": Color(0.3, 0.32, 0.36)},
+	{"id": "T7", "sl": 8, "ext": 3.5, "name": "Radiusmeißel R3", "short": "Radius R3",
+		"desc": "Vollradius-Platte R3 - Radiusnuten, Hohlkehlen, sehr gute Oberfläche",
+		"shape": ["radius", 3.0], "nose": 3.0, "ref": "center",
+		"max_dz": 2.0, "max_dx": 2.0, "feed_dir": -1, "color": Color(0.85, 0.68, 0.25)},
+]
+
 static var _tools: Array = []
+static var _sized := {}      # "T1@2.1000" -> Werkzeug mit Platte in diesem Maßstab
 
 
+## Die Werkzeuge im Nennmaß (für Listen, Namen und den Werkzeughandel).
 static func all() -> Array:
 	if _tools.is_empty():
-		_tools = [
-			_finalize({
-				"id": "T1", "sl": 3, "ext": 0.0, "name": "Schruppmeißel rechts", "short": "Schrupp R",
-				"desc": "CNMG 80°, Einstellwinkel 95°, r 0,8 - Längsdrehen Richtung Futter, Plandrehen",
-				"poly": round_corner(rhombus(85.0, 5.0, 12.0), 0, 0.8), "nose": 0.8, "ref": "left",
-				"max_dz": 4.0, "max_dx": 4.0, "feed_dir": -1, "color": Color(0.85, 0.68, 0.25),
-			}),
-			_finalize({
-				"id": "T2", "sl": 4, "ext": 4.0, "name": "Schruppmeißel links", "short": "Schrupp L",
-				"desc": "CNMG 80°, links, Einstellwinkel 95°, r 0,8 - Längsdrehen vom Futter weg, Rückwärtsplanen",
-				"poly": mirror(round_corner(rhombus(85.0, 5.0, 12.0), 0, 0.8)), "nose": 0.8, "ref": "right",
-				"max_dz": 4.0, "max_dx": 4.0, "feed_dir": 1, "color": Color(0.85, 0.68, 0.25),
-			}),
-			_finalize({
-				"id": "T3", "sl": 3, "ext": 0.0, "name": "Schlichtmeißel 55°", "short": "Schlicht 55°",
-				"desc": "DNMG 55°, Einstellwinkel 93°, r 0,4 - Schlichten und Kopierdrehen (Freiwinkel 32°)",
-				"poly": round_corner(rhombus(87.0, 32.0, 11.0), 0, 0.4), "nose": 0.4, "ref": "left",
-				"max_dz": 1.5, "max_dx": 1.5, "feed_dir": -1, "color": Color(0.75, 0.75, 0.8),
-			}),
-			_finalize({
-				"id": "T4", "sl": 3, "ext": 6.5, "name": "Kopiermeißel 35°", "short": "Kopier 35°",
-				"desc": "VNMG 35°, Einstellwinkel 93°, r 0,4 - Hinterschnitte, steile Konturen (Freiwinkel 52°)",
-				"poly": round_corner(rhombus(87.0, 52.0, 11.0), 0, 0.4), "nose": 0.4, "ref": "left",
-				"max_dz": 1.0, "max_dx": 1.0, "feed_dir": -1, "color": Color(0.35, 0.35, 0.4),
-			}),
-			_finalize({
-				"id": "T5", "sl": 8, "ext": 0.0, "name": "Fasenmeißel 45°", "short": "Fase 45°",
-				"desc": "SNMG quadratisch, 45° angestellt, r 0,8 - Fasen links und rechts, Längs- und Plandrehen",
-				"poly": round_corner(rhombus(135.0, 45.0, 12.0), 0, 0.8), "nose": 0.8, "ref": "center",
-				"max_dz": 3.0, "max_dx": 3.0, "feed_dir": -1, "color": Color(0.85, 0.68, 0.25),
-			}),
-			_finalize({
-				"id": "T6", "sl": 3, "ext": 0.0, "name": "Stechmeißel 4 mm", "short": "Stech 4",
-				"desc": "Stechschwert mit Einstech-/Abstechplatte 4 mm, r 0,2 - nur radial einstechen, seitlich max. 0,3 mm",
-				"poly": round_corner(round_corner(PackedVector2Array([Vector2(0, 0), Vector2(4, 0), Vector2(4, 22), Vector2(0, 22)]), 1, 0.2), 0, 0.2),
-				"nose": 0.2, "ref": "left", "max_dz": 0.3, "max_dx": 4.0, "feed_dir": -1, "color": Color(0.3, 0.32, 0.36),
-			}),
-			_finalize({
-				"id": "T7", "sl": 8, "ext": 3.5, "name": "Radiusmeißel R3", "short": "Radius R3",
-				"desc": "Vollradius-Platte R3 - Radiusnuten, Hohlkehlen, sehr gute Oberfläche",
-				"poly": _radius_poly(3.0), "nose": 3.0, "ref": "center",
-				"max_dz": 2.0, "max_dx": 2.0, "feed_dir": -1, "color": Color(0.85, 0.68, 0.25),
-			}),
-		]
+		for sp in SPECS:
+			_tools.append(sized(str(sp["id"]), 1.0))
 	return _tools
 
 
+## Werkzeug id mit einer um k vergrößerten Platte. Stech- und Radiusplatte bleiben im Nennmaß.
+static func sized(id: String, k: float) -> Dictionary:
+	var i := index_of(id)
+	if i < 0:
+		return {}
+	var sp: Dictionary = SPECS[i]
+	if not scalable(id):
+		k = 1.0
+	var key := "%s@%.4f" % [id, k]
+	if not _sized.has(key):
+		var t: Dictionary = sp.duplicate(true)
+		t["poly"] = shape_poly(sp["shape"], float(sp["nose"]), k)
+		t["scale"] = k
+		_finalize(t)
+		_sized[key] = t
+	return _sized[key]
+
+
+## false für Platten, deren Maß zum Auftrag gehört (Einstichbreite, Radius).
+static func scalable(id: String) -> bool:
+	var i := index_of(id)
+	return i >= 0 and str(SPECS[i]["shape"][0]) == "rhombus"
+
+
+static func shape_poly(shape: Array, nose: float, k := 1.0) -> PackedVector2Array:
+	match str(shape[0]):
+		"rhombus":
+			var p := round_corner(rhombus(float(shape[1]), float(shape[2]), float(shape[3]) * k), 0, nose)
+			return mirror(p) if bool(shape[4]) else p
+		"blade":
+			var w := float(shape[1])
+			var h := float(shape[2])
+			return round_corner(round_corner(PackedVector2Array([Vector2(0, 0), Vector2(w, 0), Vector2(w, h), Vector2(0, h)]), 1, nose), 0, nose)
+	return _radius_poly(float(shape[1]))
+
+
 static func count() -> int:
-	return all().size()
+	return SPECS.size()
 
 
 static func get_tool(i: int) -> Dictionary:
@@ -70,8 +104,8 @@ static func get_tool(i: int) -> Dictionary:
 
 ## Index des Werkzeugs mit dieser ID, -1 wenn unbekannt.
 static func index_of(id: String) -> int:
-	for i in count():
-		if str(all()[i]["id"]) == id:
+	for i in SPECS.size():
+		if str(SPECS[i]["id"]) == id:
 			return i
 	return -1
 
@@ -113,6 +147,37 @@ static func round_corner(poly: PackedVector2Array, k: int, r: float, n := 8) -> 
 		else:
 			out.append(poly[i])
 	return out
+
+
+## Flächenschwerpunkt des Polygons.
+static func centroid(poly: PackedVector2Array) -> Vector2:
+	var a := 0.0
+	var c := Vector2.ZERO
+	for i in poly.size():
+		var p := poly[i]
+		var q := poly[(i + 1) % poly.size()]
+		var w := p.cross(q)
+		a += w
+		c += (p + q) * w
+	return c / (3.0 * a) if absf(a) > 0.000001 else (poly[0] if poly.size() > 0 else Vector2.ZERO)
+
+
+## Kleinster Abstand vom Schwerpunkt zu einer Kante (Radius des größten Kreises um die Plattenmitte).
+static func inradius(poly: PackedVector2Array) -> float:
+	var c := centroid(poly)
+	var best := INF
+	for i in poly.size():
+		var p := poly[i]
+		var q := poly[(i + 1) % poly.size()]
+		best = minf(best, c.distance_to(Geometry2D.get_closest_point_to_segment(c, p, q)))
+	return best if best < INF else 0.0
+
+
+## Höhe der Schneidkante: so hoch reicht die schneidende Kontur an ihrem niedrigeren Ende über die Spitze.
+## Beim Fasenmeißel ist das die größte Fase, die er mit der ganzen Kante schneidet.
+static func edge_height(t: Dictionary) -> float:
+	var env: PackedFloat32Array = t["env"]
+	return minf(env[0], env[env.size() - 1]) if env.size() > 0 else 0.0
 
 
 static func _radius_poly(r: float) -> PackedVector2Array:
@@ -187,9 +252,19 @@ static func env_min(t: Dictionary, lo: float, hi: float) -> float:
 	return m
 
 
-## Extrudiert das Plattenpolygon zu einem Mesh (x = dz, z = dx, Dicke in y).
-static func extrude(poly: PackedVector2Array, y0: float, y1: float) -> ArrayMesh:
+## Extrudiert das Plattenpolygon zu einem Mesh (x = dz, z = dx, Dicke in y). relief: Die Unterseite ist
+## um diesen Anteil zur Plattenmitte hin kleiner (Freiwinkel der Platte), die Oberseite bleibt das Polygon.
+static func extrude(poly: PackedVector2Array, y0: float, y1: float, relief := 0.0) -> ArrayMesh:
 	var s := 0.001
+	var low := poly
+	if relief > 0.0:
+		var c := Vector2.ZERO
+		for p in poly:
+			c += p
+		c /= maxf(poly.size(), 1)
+		low = PackedVector2Array()
+		for p in poly:
+			low.append(c + (p - c) * (1.0 - relief))
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var idx := Geometry2D.triangulate_polygon(poly)
@@ -199,18 +274,19 @@ static func extrude(poly: PackedVector2Array, y0: float, y1: float) -> ArrayMesh
 			st.set_normal(Vector3.UP)
 			st.add_vertex(Vector3(p.x * s, y1, p.y * s))
 		for j in [2, 1, 0]:
-			var p := poly[idx[i + j]]
+			var p := low[idx[i + j]]
 			st.set_normal(Vector3.DOWN)
 			st.add_vertex(Vector3(p.x * s, y0, p.y * s))
 	for e in poly.size():
-		var a := poly[e]
-		var b := poly[(e + 1) % poly.size()]
-		var d := (b - a).normalized()
-		var nrm := Vector3(d.y, 0, -d.x)
-		var va0 := Vector3(a.x * s, y0, a.y * s)
-		var va1 := Vector3(a.x * s, y1, a.y * s)
-		var vb0 := Vector3(b.x * s, y0, b.y * s)
-		var vb1 := Vector3(b.x * s, y1, b.y * s)
+		var k := (e + 1) % poly.size()
+		var va0 := Vector3(low[e].x * s, y0, low[e].y * s)
+		var va1 := Vector3(poly[e].x * s, y1, poly[e].y * s)
+		var vb0 := Vector3(low[k].x * s, y0, low[k].y * s)
+		var vb1 := Vector3(poly[k].x * s, y1, poly[k].y * s)
+		var nrm := (vb0 - va0).cross(va1 - va0).normalized()
+		if nrm == Vector3.ZERO:
+			var d := (poly[k] - poly[e]).normalized()
+			nrm = Vector3(d.y, 0, -d.x)
 		for v in [va0, vb0, vb1, va0, vb1, va1]:
 			st.set_normal(nrm)
 			st.add_vertex(v)

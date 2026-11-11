@@ -404,6 +404,33 @@ func set_build_mode(on: bool) -> void:
 	_focus = null
 
 
+## Loser Gegenstand, den der Blick hinter der Hülle hull trifft, bevor eine sichtbare Fläche ihn verdeckt.
+## In offene Behälter (Hülle mit "reach_in") greift man hinein: Dort zählt auch, was hinter der Wand liegt,
+## solange es im Behälter liegt. Sonst wäre ein Teil im hohen Spänebehälter für immer weg.
+func _item_behind_hull(hull: Node) -> Object:
+	var reach_in := hull.has_meta("reach_in")
+	var q := PhysicsRayQueryParameters3D.create(ray.global_position, ray.to_global(ray.target_position),
+		DroppedItem.LAYER if reach_in else DroppedItem.LAYER | Solid.DETAIL_LAYER, [get_rid()])
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty() or not hit["collider"] is DroppedItem or not _alive(hit["collider"]):
+		return null
+	if reach_in and not _in_box(hull, (hit["collider"] as Node3D).global_position):
+		return null
+	return hit["collider"]
+
+
+## Liegt der Punkt at im Quader des Körpers body?
+static func _in_box(body: Node, at: Vector3) -> bool:
+	for c in body.get_children():
+		var cs := c as CollisionShape3D
+		if cs and cs.shape is BoxShape3D:
+			var q := cs.global_transform.affine_inverse() * at
+			var half := (cs.shape as BoxShape3D).size * 0.5
+			if absf(q.x) <= half.x and absf(q.y) <= half.y and absf(q.z) <= half.z:
+				return true
+	return false
+
+
 func _update_focus() -> void:
 	if _focus != null and not _alive(_focus):
 		_focus = null
@@ -417,6 +444,12 @@ func _update_focus() -> void:
 	# aufgestellt) meldet er noch den alten, schon gelöschten Körper. Solche Treffer zählen nicht.
 	if ray.is_colliding() and _alive(ray.get_collider()):
 		var c := ray.get_collider()
+		# Hüllen von Maschinen und Behältern sind für lose Gegenstände durchlässig. Liegt dahinter sichtbar
+		# einer (in der Spänewanne, im Spänebehälter), geht er vor.
+		if c is Node and (c as Node).is_in_group(Solid.HULL_GROUP):
+			var inside := _item_behind_hull(c as Node)
+			if inside != null:
+				c = inside
 		if c.has_meta("interact") and _alive(c.get_meta("interact")):
 			target = c.get_meta("interact")
 			# Blick aufs eingespannte Teil: Das Teil geht vor der Werkzeugaufnahme

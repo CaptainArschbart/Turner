@@ -3,6 +3,9 @@ extends RigidBody3D
 ## Fallen gelassener Gegenstand: Material, Teile, Zeichnungen, Spänebehälter oder ein Werkzeug. Echter
 ## Physikkörper: fällt, kippt, Rundmaterial rollt, bleibt dann liegen und lässt sich mit freien Händen wieder
 ## aufheben. Die Spielfigur läuft hindurch, schiebt es dabei aber an.
+## Die Kollisionsform folgt dem Modell (äußerste Punkte in 26 Richtungen), Rundes ist ein Vieleck-Prisma.
+## An Maschinen und Behältern stößt der Gegenstand an die sichtbaren Flächen (Solid), nicht an ihre Hüllen:
+## Er landet auf dem Bett, in der Spänewanne oder im Spänebehälter.
 ## item ist das, was die Spielfigur getragen hat, ein Werkzeug als {"kind": "tool", "machine", "id", "name"}.
 
 const LAYER := 1 << 4          # Physik-Ebene: der Blick trifft es, die Spielfigur läuft hindurch
@@ -67,7 +70,9 @@ static func tool_dropped(tree: SceneTree, machine_id: String, id: String) -> boo
 func _ready() -> void:
 	add_to_group(GROUP)
 	collision_layer = LAYER
-	collision_mask = 1 | LAYER        # Welt, Spielfigur und andere liegende Dinge
+	collision_mask = 1 | LAYER | Solid.DETAIL_LAYER   # Welt, Spielfigur, andere liegende Dinge, sichtbare Flächen
+	for h in get_tree().get_nodes_in_group(Solid.HULL_GROUP):
+		add_collision_exception_with(h)
 	continuous_cd = true
 	can_sleep = true
 	set_meta("interact", self)
@@ -109,10 +114,22 @@ func _ready() -> void:
 		cs.shape = poly
 		volume = PI * rad * rad * size.x
 	else:
-		var sh := BoxShape3D.new()
-		sh.size = size + Vector3.ONE * SKIN * 2.0
-		cs.shape = sh
 		volume = size.x * size.y * size.z * (0.35 if is_tool() else 1.0)
+		var pts := PackedVector3Array()
+		if minf(size.x, minf(size.y, size.z)) >= 0.012:
+			pts = Solid.hull_points(model, global_transform)
+		if pts.size() >= 6:
+			# Form nach dem Modell, um SKIN nach außen gesetzt
+			for i in pts.size():
+				pts[i] += pts[i].normalized() * SKIN
+			var hull := ConvexPolygonShape3D.new()
+			hull.points = pts
+			cs.shape = hull
+		else:
+			# Flaches (Zeichnung) und Leeres: Quader
+			var sh := BoxShape3D.new()
+			sh.size = size + Vector3.ONE * SKIN * 2.0
+			cs.shape = sh
 	add_child(cs)
 
 	var pm := PhysicsMaterial.new()

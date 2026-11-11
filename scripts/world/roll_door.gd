@@ -7,12 +7,14 @@ signal changed
 const WIDTH := 4.5
 const HEIGHT := 4.5
 const SPEED := 0.45      # Anteil je Sekunde
+const ACCEL := 0.9       # Anteil je s²: Der Antrieb fährt sanft an und bremst vor dem Ende ab
 const SLATS := 22
 const PASS_AT := 0.6     # ab hier passt die Spielfigur durch
 
 var title := "Rolltor"
 var open_t := 0.0
 var target := 0.0
+var _speed := 0.0
 var _curtain: Node3D
 var _slats: Array[MeshInstance3D] = []
 var _collision: CollisionShape3D
@@ -100,17 +102,24 @@ func toggle() -> void:
 
 
 func set_open(on: bool, instant := false) -> void:
+	if not is_equal_approx(target, 1.0 if on else 0.0):
+		_speed = 0.0                 # Richtungswechsel: Der Antrieb hält an und fährt neu an
 	target = 1.0 if on else 0.0
 	if instant:
 		open_t = target
+		_speed = 0.0
 		_apply()
 	changed.emit()
 
 
 func _process(delta: float) -> void:
 	if not is_equal_approx(open_t, target):
-		open_t = move_toward(open_t, target, SPEED * delta)
+		var rest := absf(target - open_t)
+		_speed = minf(minf(_speed + ACCEL * delta, SPEED), sqrt(2.0 * ACCEL * rest) + 0.03)
+		open_t = move_toward(open_t, target, _speed * delta)
 		_apply()
+	else:
+		_speed = 0.0
 
 
 func _apply() -> void:
@@ -121,7 +130,8 @@ func _apply() -> void:
 	var bottom := HEIGHT - h
 	for m in _slats:
 		m.visible = m.position.y > bottom
-	# Beim Schließen sofort wieder fest, beim Öffnen erst, wenn es hoch genug ist
-	_collision.disabled = open_t >= PASS_AT and is_opening() or open_t >= 0.999
+	# Beim Schließen sofort wieder fest (auch wenn das Tor erst anfährt), beim Öffnen erst, wenn es hoch
+	# genug ist
+	_collision.disabled = open_t >= PASS_AT and is_opening()
 	for l in _lamps:
 		l.material_override = _lamp_open if open_t >= 0.999 else _lamp_closed

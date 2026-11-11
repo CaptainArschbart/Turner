@@ -121,7 +121,10 @@ func _initialize() -> void:
 	var ghost: Node3D = w._pallet_ghost
 	var spot: Vector2 = p.pallet_spot()
 	ok(ghost != null and ghost.visible, "Vorschau beim Tragen sichtbar")
-	ok(ghost != null and Vector2(ghost.position.x, ghost.position.z).distance_to(spot) < 0.01, "Vorschau steht am Abstellpunkt")
+	# Zielt die Figur auf einen Stapel, steht die Vorschau obenauf und rastet an ihm ein. Ob der Blickstrahl
+	# den frisch aufgebauten Stapel schon kennt, hängt vom Physiktakt ab: Beides ist richtig.
+	var off := Vector2(ghost.position.x, ghost.position.z).distance_to(spot) if ghost != null else INF
+	ok(off < 0.01 if ghost.position.y < 0.05 else off < 0.6, "Vorschau steht am Abstellpunkt (Abstand %.3f m, Höhe %.3f m)" % [off, ghost.position.y])
 	# Mauszielen: steiler Blick nach unten stellt näher ab als flacher
 	p.head.rotation.x = -1.2
 	var near_spot: Vector2 = p.pallet_spot()

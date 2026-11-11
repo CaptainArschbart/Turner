@@ -6,6 +6,7 @@ extends RefCounted
 const W := 24.0
 const D := 16.0
 const H := 6.5
+const LAMP_Y := 5.95     # Unterkante der Hallenleuchten: knapp über dem Hallenkran (Oberkante 5,91)
 const DOOR_Z := 3.4      # Mitte des Rolltors in der Ostwand, in der Flucht des markierten Wegs
 const OFFICE_DOOR_X := 7.0   # Scharnier der Bürotür in der Südwand
 const OFFICE_X := Vector2(5.4, 11.6)   # Büroanbau von x bis x
@@ -118,7 +119,7 @@ static func build(root: Node3D) -> Dictionary:
 		for z in [-5.0, 0.0, 5.0]:
 			var lamp := Props.make("ceiling_lamp")
 			lamp_h = Props.bounds(lamp).size.y
-			lamp.position = Vector3(x, H - lamp_h, z)          # Seile enden an der Decke
+			lamp.position = Vector3(x, LAMP_Y, z)              # über dem Kran, die Seile verschwinden in der Decke
 			root.add_child(lamp)
 			for mi in lamp.find_children("*", "MeshInstance3D", true, false):
 				for s in (mi as MeshInstance3D).mesh.get_surface_count():
@@ -723,12 +724,15 @@ static func _wall_details(root: Node3D) -> void:
 	for sx in [-6.0, 0.0, 6.0]:
 		Build.box(root, Vector3(0.22, 0.28, 0.08), Vector3(sx + 1.3, 1.45, north + 0.05), blue)
 		Build.box(root, Vector3(0.16, 0.08, 0.02), Vector3(sx + 1.3, 1.5, north + 0.1), dark)
-	# Lüftungskanal unter der Decke
+	# Lüftungskanal auf Wandkonsolen zwischen den Fenstern. Von der Decke kann er nicht hängen: Dort fährt
+	# die Kranbrücke.
 	Build.cyl(root, 0.26, W - 1.0, Vector3(0, 4.7, north + 1.35), steel, Build.AXIS_X, false, 20)
+	for cx in [-9.0, -3.0, 3.0, 9.0]:
+		Build.box(root, Vector3(0.05, 0.05, 1.62), Vector3(cx, 4.412, north + 0.81), dark)
+		Build.box(root, Vector3(0.04, 0.04, 1.15), Vector3(cx, 4.07, north + 0.475), dark, false, Vector3(-0.593, 0, 0))
+		Build.cyl(root, 0.27, 0.04, Vector3(cx, 4.7, north + 1.35), dark, Build.AXIS_X, false, 20)
 	var vx := -9.0
 	while vx < 10.0:
-		Build.box(root, Vector3(0.03, 1.0, 0.03), Vector3(vx, 5.45, north + 1.35), dark)
-		Build.cyl(root, 0.27, 0.04, Vector3(vx, 4.7, north + 1.35), dark, Build.AXIS_X, false, 20)
 		Build.box(root, Vector3(0.5, 0.03, 0.3), Vector3(vx + 1.5, 4.43, north + 1.35), grey)
 		vx += 4.5
 	# Schild an der Nordwand zwischen Schaltschrank und Steckdosen

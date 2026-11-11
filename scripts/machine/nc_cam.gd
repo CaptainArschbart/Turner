@@ -1092,7 +1092,7 @@ static func simulate(prog: Dictionary, lathe) -> Dictionary:
 			continue
 		if lathe.holder.find(tid) < 0:
 			errs.append("Satz %d: %s ist nicht im Werkzeughalter bestückt." % [bi + 1, tid])
-		var t := LatheTools.get_tool(ti)
+		var t: Dictionary = lathe.tool_by_id(tid)      # Platte in der Größe dieser Maschine
 		if tid != cur_t:
 			var wp := Vector2(float(hd["zt"]) + zoff, float(hd["xt"]) * 0.5)
 			time += pos.distance_to(wp) / RAPID + 4.0

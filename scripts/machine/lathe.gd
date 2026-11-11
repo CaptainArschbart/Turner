@@ -5,6 +5,8 @@ extends Node3D
 ## Das Werkstück ist ein Radiusprofil (mm, Auflösung SEG). Das aktive Werkzeug ist ein
 ## Plattenpolygon (siehe LatheTools); alles Material oberhalb seiner unteren Hüllkurve wird
 ## abgetragen. Dadurch schneiden auch schräge Schneiden (Fasen, Kopierdrehen, Radien).
+## Die Platte ist genau so groß, wie man sie am Halter sieht (_size_tools): Was die sichtbare Schneide
+## überstreicht, ist weg, und nur das.
 ## Lokales Koordinatensystem: Spindelachse = +X, Bediener steht auf +Z-Seite.
 ## Maschinen-Z (DRO) = Abstand von der Backen-Stirnfläche, Maschinen-X = Durchmesser.
 
@@ -73,6 +75,7 @@ var rz := PackedFloat32Array()   # Rautiefe je Segment in µm
 var tool_z := 200.0
 var tool_x := 45.0
 var tool_idx := 0
+var _cut_tools: Array = []        # Werkzeuge dieser Maschine: wie LatheTools, Platten in sichtbarer Größe
 var holder: Array = ["T1", "", "T3", ""]   # Werkzeug-ID je Halterplatz
 var active_slot := 0
 var rpm_set := 800.0          # Solldrehzahl /min (ohne konstante Schnittgeschwindigkeit)
@@ -333,7 +336,36 @@ func _ready() -> void:
 
 
 func tool() -> Dictionary:
-	return LatheTools.get_tool(tool_idx)
+	return tool_at(tool_idx)
+
+
+## Werkzeug Nummer i (wie in LatheTools) mit der Platte dieser Maschine.
+func tool_at(i: int) -> Dictionary:
+	i = clampi(i, 0, LatheTools.count() - 1)
+	return _cut_tools[i] if i < _cut_tools.size() else LatheTools.get_tool(i)
+
+
+func tool_by_id(id: String) -> Dictionary:
+	return tool_at(maxi(LatheTools.index_of(id), 0))
+
+
+## Platten in der Größe dieser Maschine anlegen. Werkzeuge mit eigenem Halter im Modell bekommen die
+## Größe ihrer Modellplatte, die ohne (T2, T4) die des verwandten Werkzeugs, ohne Modell gilt der
+## Werkzeugmaßstab. Stech- und Radiusplatte bleiben im Nennmaß (LatheTools.sized).
+func _size_tools() -> void:
+	_cut_tools.clear()
+	var like := {"T2": "T1", "T4": "T3"}
+	for sp in LatheTools.SPECS:
+		var id := str(sp["id"])
+		var k := TOOL_K
+		if model:
+			var src := id if model.has_tool(id) else str(like.get(id, ""))
+			if src != "" and model.has_tool(src):
+				k = model.insert_scale(src)
+		var t := LatheTools.sized(id, k)
+		_cut_tools.append(t)
+		if model:
+			model.fit_insert(id, t)
 
 
 func _rpm_dial() -> Array:
@@ -1221,8 +1253,10 @@ func _build() -> void:
 		Build.box(cross_slide, Vector3(0.07, 0.06, 0.06), Vector3(0.006, 1.135, 0.185), post_m)
 		Build.cyl(cross_slide, 0.01, 0.03, Vector3(0.006, 1.18, 0.185), chrome)
 		Build.cyl(cross_slide, 0.004, 0.07, Vector3(0.006, 1.19, 0.22), dark, Build.AXIS_Z)
+	_size_tools()
 	for i in LatheTools.count():
-		var tn := _build_tool_visual(LatheTools.get_tool(i))
+		var t := tool_at(i)
+		var tn := _build_tool_visual(t, model != null and model.has_tool(str(t["id"])))
 		cross_slide.add_child(tn)
 		tool_nodes.append(tn)
 	hw_x = Node3D.new()
@@ -1946,21 +1980,32 @@ func toggle_panel_view() -> void:
 	set_view("panel")
 
 
-func _build_tool_visual(t: Dictionary) -> Node3D:
+## Sichtbares Werkzeug: Die Platte ist genau das Polygon, mit dem gerechnet wird (Oberseite auf Spitzenhöhe).
+## insert_only: Halter und Schaft kommen aus dem Modell, hier entsteht nur die Platte.
+func _build_tool_visual(t: Dictionary, insert_only := false) -> Node3D:
 	var n := Node3D.new()
 	n.visible = false
-	# Darstellung um die Schneide vergrößert wie der Modell-Werkzeugkopf (TOOL_K)
-	var poly := PackedVector2Array()
-	for p in t["poly"]:
-		poly.append(p * TOOL_K)
-	var insert := MeshInstance3D.new()
-	insert.mesh = LatheTools.extrude(poly, AXIS_H - 0.0045 * TOOL_K, AXIS_H)
-	insert.material_override = Build.mat(t["color"], 0.3, 1.0)
-	n.add_child(insert)
+	var poly: PackedVector2Array = t["poly"]
+	var plate := LatheTools.scalable(str(t["id"]))
+	var thick := 0.00476 * float(t.get("scale", 1.0)) if plate else 0.0045 * TOOL_K
+	if plate or not insert_only:
+		var insert := MeshInstance3D.new()
+		insert.name = "Platte"
+		insert.mesh = LatheTools.extrude(poly, AXIS_H - thick, AXIS_H, 0.07 if plate else 0.0)
+		insert.material_override = Build.mat(t["color"], 0.3, 1.0)
+		n.add_child(insert)
+	if plate:
+		# Spannschraube in der Plattenmitte, versenkt
+		var c := LatheTools.centroid(poly) * 0.001
+		var r := 0.0003 * LatheTools.inradius(poly)
+		Build.cyl(n, r, 0.0004, Vector3(c.x, AXIS_H - 0.0001, c.y), Build.mat(Color(0.06, 0.06, 0.07), 0.7), Build.AXIS_Y, false, 16)
+		Build.cyl(n, r * 0.62, 0.0004, Vector3(c.x, AXIS_H, c.y), Build.mat(Color(0.5, 0.52, 0.55), 0.35, 0.9), Build.AXIS_Y, false, 6)
+	if insert_only:
+		return n
 	# Klemmhalter-Schaft bis in den Schnellwechselhalter
-	var zmin: float = float(t["zmin"]) * TOOL_K
-	var zmax: float = float(t["zmax"]) * TOOL_K
-	var top: float = float(t["top"]) * TOOL_K
+	var zmin: float = float(t["zmin"])
+	var zmax: float = float(t["zmax"])
+	var top: float = float(t["top"])
 	var ext: float = float(t["ext"]) * TOOL_K
 	var w := clampf(zmax - zmin, 3.0 * TOOL_K, 12.0 * TOOL_K)
 	var zc := (zmin + zmax) * 0.5
@@ -1977,7 +2022,7 @@ func _build_tool_visual(t: Dictionary) -> Node3D:
 			var sw := sp.y - sp.x
 			var sx := (sp.x + sp.y) * 0.5 * 0.001
 			var y0 := AXIS_H + sb.position.y * 0.001
-			var seat := AXIS_H - 0.0045 * TOOL_K
+			var seat := AXIS_H - thick
 			var front := minf(top + 2.0 * TOOL_K, sb.end.z - 5.0 * TOOL_K)
 			Build.box(n, Vector3(sw * 0.001, seat - y0, (front - start) * 0.001),
 				Vector3(sx, (y0 + seat) * 0.5, (start + front) * 0.5 * 0.001), holder)
@@ -1988,7 +2033,7 @@ func _build_tool_visual(t: Dictionary) -> Node3D:
 			n.add_child(hn)
 	if hn == null:
 		var length := (model.shank_end_mm if model else 175.0) + ext - start
-		Build.box(n, Vector3(w * 0.001, 0.012 * TOOL_K, length * 0.001), Vector3(zc * 0.001, AXIS_H - 0.0105 * TOOL_K, (start + length * 0.5) * 0.001), holder)
+		Build.box(n, Vector3(w * 0.001, 0.012 * TOOL_K, length * 0.001), Vector3(zc * 0.001, AXIS_H - thick - 0.006 * TOOL_K, (start + length * 0.5) * 0.001), holder)
 	# Spannpratze über der Platte
 	if t["id"] != "T6":
 		Build.box(n, Vector3(w * 0.0008, 0.004 * TOOL_K, 0.006 * TOOL_K), Vector3(zc * 0.001, AXIS_H + 0.002 * TOOL_K, (top * 0.7) * 0.001), holder)
@@ -2116,14 +2161,14 @@ func mount_tool(slot: int, id: String) -> bool:
 		if id == "":
 			_info("Platz %d geleert." % (slot + 1))
 		else:
-			var t := LatheTools.get_tool(LatheTools.index_of(id))
+			var t := tool_at(LatheTools.index_of(id))
 			_info("%s %s in Platz %d eingespannt." % [id, t["name"], slot + 1])
 	return true
 
 
 ## Alter Weg (Spielstände, Tests): Werkzeug i einschwenken, notfalls in den aktiven Platz einspannen.
 func select_tool(i: int, silent := false) -> void:
-	var id := str(LatheTools.get_tool(posmod(i, LatheTools.count()))["id"])
+	var id := str(tool_at(posmod(i, LatheTools.count()))["id"])
 	var s := holder.find(id)
 	if s >= 0:
 		index_slot(s, silent)
@@ -2144,7 +2189,7 @@ func _apply_holder(announce := false, animate := false, keep_post := false) -> v
 	# Mit Werkzeugbestand kann der Halter auch ganz leer sein
 	if str(holder[active_slot]) == "" and tool_stock == null:
 		for k in LatheTools.count():
-			var free_id := str(LatheTools.get_tool(k)["id"])
+			var free_id := str(tool_at(k)["id"])
 			if holder.find(free_id) < 0:
 				holder[active_slot] = free_id
 				break
@@ -2153,8 +2198,9 @@ func _apply_holder(announce := false, animate := false, keep_post := false) -> v
 	if model:
 		model.set_layout(holder, active_slot, AXIS_H, _zc(t))
 	for k in tool_nodes.size():
-		var id := str(LatheTools.get_tool(k)["id"])
-		tool_nodes[k].visible = holder.find(id) >= 0 and not (model != null and model.has_tool(id))
+		var id := str(tool_at(k)["id"])
+		# Modellwerkzeuge: Der Knoten trägt nur die Platte (Stechmeißel: nichts, Platte aus dem Modell)
+		tool_nodes[k].visible = holder.find(id) >= 0 and tool_nodes[k].get_child_count() > 0
 	if keep_post:
 		# Schlitten (Bezugspunkt F) bleibt stehen; die Schneide liegt jetzt um die
 		# Korrekturdifferenz woanders
@@ -2348,7 +2394,7 @@ func machine_pos() -> Vector2:
 
 ## Drehachse des Halterkopfs im Planschlitten (m): feste Lage, für jedes Werkzeug gleich.
 func _head_pos() -> Vector3:
-	return _post_pos(LatheTools.get_tool(maxi(LatheTools.index_of("T1"), 0)))
+	return _post_pos(tool_at(maxi(LatheTools.index_of("T1"), 0)))
 
 
 ## Schlitten aus der Schneidenposition stellen: Schlitten = Schneide - Korrektur des aktiven
@@ -2380,7 +2426,7 @@ func _pose(angle: float, pc: Vector3, lever: float) -> void:
 		model.set_pose(angle, pc, lever)
 	var lift := lever * LatheModel.LIFT
 	for k in tool_nodes.size():
-		var tk := LatheTools.get_tool(k)
+		var tk := tool_at(k)
 		var s := holder.find(str(tk["id"]))
 		if s < 0:
 			continue
@@ -2420,8 +2466,8 @@ func _step_index_anim(delta: float) -> void:
 ## bündig mit der Platte ab, Linksmeißel zur Reitstockseite, mittige Platten sitzen mittig.
 func _shank_span(t: Dictionary) -> Vector2:
 	var w := model.shank_box.size.x if model and model.shank_box.size.x > 1.0 else 20.0 * TOOL_K
-	var zmin: float = float(t["zmin"]) * TOOL_K
-	var zmax: float = float(t["zmax"]) * TOOL_K
+	var zmin: float = float(t["zmin"])
+	var zmax: float = float(t["zmax"])
 	w = maxf(w, zmax - zmin)
 	match str(t["ref"]):
 		"right":
@@ -2450,16 +2496,16 @@ func _post_pos(t: Dictionary) -> Vector3:
 ## Schneidenecke bei (z, x) steht. Gedreht wird um die Kopfachse F; deren Lage zur jeweiligen
 ## Schneide folgt aus der Werkzeugkorrektur (POST_C gilt für das Bezugswerkzeug T1).
 func slot_rect(id: String, slot: int, active: int, z: float, x: float, active_id := "") -> Rect2:
-	var t := LatheTools.get_tool(maxi(LatheTools.index_of(id), 0))
+	var t := tool_at(maxi(LatheTools.index_of(id), 0))
 	if active_id == "":
 		active_id = str(holder[posmod(active, SLOTS)])
-	var ta := LatheTools.get_tool(maxi(LatheTools.index_of(active_id), 0))
-	var ref := tool_offset(LatheTools.get_tool(maxi(LatheTools.index_of("T1"), 0)))
+	var ta := tool_at(maxi(LatheTools.index_of(active_id), 0))
+	var ref := tool_offset(tool_at(maxi(LatheTools.index_of("T1"), 0)))
 	var pa := POST_C * TOOL_K - (tool_offset(ta) - ref)   # Kopfachse relativ zur aktiven Schneide
 	var ps := POST_C * TOOL_K - (tool_offset(t) - ref)    # Kopfachse relativ zur Schneide in Platz slot
 	var sp := _shank_span(t)
-	var a0 := minf(minf(float(t["zmin"]) * TOOL_K, sp.x), -2.0)
-	var a1 := maxf(maxf(float(t["zmax"]) * TOOL_K, sp.y), HOLDER_W * TOOL_K)
+	var a0 := minf(minf(float(t["zmin"]), sp.x), -2.0)
+	var a1 := maxf(maxf(float(t["zmax"]), sp.y), HOLDER_W * TOOL_K)
 	var phi := (active - slot) * PI * 0.5
 	var c := roundf(cos(phi))
 	var s := roundf(sin(phi))
@@ -2533,13 +2579,13 @@ var tool_mount: ToolMount
 func tool_list() -> Array:
 	var list := []
 	for i in LatheTools.count():
-		var t := LatheTools.get_tool(i)
+		var t := tool_at(i)
 		list.append({"id": t["id"], "name": "%s %s" % [t["id"], t["short"]]})
 	return list
 
 
 func tool_name(id: String) -> String:
-	var t := LatheTools.get_tool(maxi(LatheTools.index_of(id), 0))
+	var t := tool_at(maxi(LatheTools.index_of(id), 0))
 	return "%s %s" % [t["id"], t["name"]]
 
 
@@ -2548,7 +2594,7 @@ func has_tool(id: String) -> bool:
 
 
 func make_tool_model(id: String) -> Node3D:
-	var n := _build_tool_visual(LatheTools.get_tool(maxi(LatheTools.index_of(id), 0)))
+	var n := _build_tool_visual(tool_at(maxi(LatheTools.index_of(id), 0)))
 	n.visible = true
 	return n
 
@@ -2908,6 +2954,8 @@ func _step_tool(sz: float, sx: float, rapid: bool, speed: float) -> bool:
 			_crash("Kollision im Eilgang! NOT-HALT ausgelöst.")
 			return false
 		var side := absf(sz) > absf(sx)
+		# depth zählt ab der Oberkante der Schneide: Unter der ganzen sichtbaren Kante wird geschnitten,
+		# begrenzt ist nur, wie weit das Material darüber hinaus an der Plattenecke ansteht.
 		var limit: float = (t["max_dz"] if side else t["max_dx"]) * float(Materials.group_of(material)["ap"])
 		# Schlichtzug der Zyklensteuerung: fährt längs ins dünne Planaufmaß vor einer Schulter
 		# (Spanbreite = Schulterhöhe, Spandicke = Vorschub) - das schafft die Schlichtplatte
@@ -4456,6 +4504,6 @@ func _fill_audio() -> void:
 ## Schneidenkoordinaten (Z, X), wenn Werkzeug id eingeschwenkt wird und der Halterkopf dabei
 ## an seinem Platz bleibt.
 func _coord_after(id: String) -> Vector2:
-	var tn := LatheTools.get_tool(maxi(LatheTools.index_of(id), 0))
+	var tn := tool_at(maxi(LatheTools.index_of(id), 0))
 	var d := tool_offset(tn) - tool_offset(tool())
 	return Vector2(clampf(tool_z + d.x, z_min(), Z_MAX), clampf(tool_x + d.y, X_MIN, X_MAX))

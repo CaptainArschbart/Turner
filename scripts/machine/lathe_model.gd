@@ -285,7 +285,8 @@ func build(spindle_pivot: Node3D, cross_slide: Node3D, tailstock: Node3D, axis_h
 				while sh.get_parent() != null and sh.get_parent() != h:
 					sh = sh.get_parent()
 				_holders[id] = {"node": h, "rot": rot, "tip": _tip(ins, rot, str(d.get("ref", "chuck"))), "xf": h.transform,
-					"shank": str(sh.name) if sh.get_parent() == h else ""}
+					"shank": str(sh.name) if sh.get_parent() == h else "", "insert": ins}
+				_holders[id]["size"] = _insert_size(ins, rot, _holders[id]["tip"])
 				_max_tip_y = maxf(_max_tip_y, float((_holders[id]["tip"] as Vector3).y))
 		var h1 := _post.find_child(_pick(_post, TOOLS["T1"]["holder"]), true, false) as MeshInstance3D
 		if h1:
@@ -690,6 +691,58 @@ func _normalize(root: Node3D) -> void:
 
 func has_tool(id: String) -> bool:
 	return _holders.has(id)
+
+
+## Größe der Platte im Modell (mm, von oben gesehen: axial, radial) in Arbeitslage.
+func _insert_size(ins: MeshInstance3D, rot: float, tip: Vector3) -> Vector2:
+	var b := Basis(Vector3.UP, rot)
+	var lo := Vector2(INF, INF)
+	var hi := -lo
+	for v in _verts(ins, _post):
+		var g := _rt * (b * v - tip) * 1000.0
+		lo = lo.min(Vector2(g.x, g.z))
+		hi = hi.max(Vector2(g.x, g.z))
+	return hi - lo
+
+
+## Maßstab, in dem die Nennplatte von Werkzeug id so groß ist wie die Platte im Modell. 0 ohne Modellhalter.
+func insert_scale(id: String) -> float:
+	if not _holders.has(id):
+		return 0.0
+	var t := LatheTools.sized(id, 1.0)
+	var size: Vector2 = _holders[id]["size"]
+	return (size.x + size.y) / maxf(float(t["zmax"]) - float(t["zmin"]) + float(t["top"]), 0.001)
+
+
+## Sichtbare Platte und gerechnete Schneide t zur Deckung bringen. Wendeplatten zeichnet die Maschine
+## selbst aus der Schneidenkontur, die Platte des Modells wird dafür ausgeblendet. Die Stechplatte bleibt
+## aus dem Modell, das Schwert mit der Platte wird axial auf die Stechbreite gestaucht (um die Schneidenecke).
+func fit_insert(id: String, t: Dictionary) -> void:
+	if not _holders.has(id):
+		return
+	var h: Dictionary = _holders[id]
+	var ins := h["insert"] as MeshInstance3D
+	if LatheTools.scalable(id):
+		ins.visible = false
+		return
+	var size: Vector2 = h["size"]
+	var want := float(t["zmax"]) - float(t["zmin"])
+	if size.x < 0.01 or absf(size.x - want) < 0.01:
+		return
+	var hn := h["node"] as Node3D
+	var target: Node3D = ins
+	if ins.get_parent() != hn and ins.get_parent().get_parent() != hn:
+		target = ins.get_parent() as Node3D          # Schwert, das die Platte trägt (nicht der Blockhalter)
+	var up := Transform3D.IDENTITY                   # Lage des Elternknotens im Halter
+	if target.get_parent() != hn:
+		up = _rel(target.get_parent() as Node3D, hn)
+	# Arbeitslage im Kopf: erst der Halter, dann um rot gedreht. Axial ist dort die Modellachse z.
+	var m := Transform3D(Basis(Vector3.UP, float(h["rot"])), Vector3.ZERO) * (h["xf"] as Transform3D) * up
+	var tip: Vector3 = h["tip"]
+	var squeeze := Transform3D(Basis.IDENTITY, tip) * Transform3D(Basis.from_scale(Vector3(1, 1, want / size.x)), Vector3.ZERO) \
+		* Transform3D(Basis.IDENTITY, -tip)
+	target.transform = m.affine_inverse() * squeeze * m * target.transform
+	h["size"] = Vector2(want, size.y)
 
 
 ## Vierfach-Werkzeughalter bestücken und indexieren. slots = Werkzeug-ID je Platz ("" = leer),
